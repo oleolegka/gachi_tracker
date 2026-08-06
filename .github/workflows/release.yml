@@ -82,7 +82,10 @@ jobs:
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
           echo "APK: $APK ($(du -h "$APK" | cut -f1))"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK"
+          # Runners carry several build-tools versions, so pick exactly one apksigner:
+          # a glob would expand to every version and turn the extras into arguments.
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs "$APK"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Remove the key
