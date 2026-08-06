@@ -4,19 +4,36 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * The local database (SQLite via Room). The schema repeats the server one (`bot/db.py`):
- * append-only journal + catalog + aliases + slots.
+ * append-only journal + catalog + aliases + slots, plus the local-only program tables
+ * added in version 2.
  *
  * There is NO encryption (SQLCipher) here yet, unlike on the server: on the phone the
  * database sits in the app's internal storage, and the key would have to be kept right
  * next to it anyway. If it is ever needed, that is a separate step (SQLCipher for
  * Android, or a Keystore-wrapped key).
+ *
+ * ── Migrations are written by hand, and fallback is NOT enabled ─────────────────
+ * `fallbackToDestructiveMigration` would turn a schema mistake into a wiped training
+ * journal on a stranger's phone. The journal is the entire point of the app and there is
+ * no backup yet, so a failed migration must crash loudly and be fixed, never "recover" by
+ * deleting years of history. Every version bump gets a [Migration] and a test.
  */
 @Database(
-    entities = [EventEntity::class, ExerciseEntity::class, AliasEntity::class, SlotEntity::class],
-    version = 1,
+    entities = [
+        EventEntity::class,
+        ExerciseEntity::class,
+        AliasEntity::class,
+        SlotEntity::class,
+        ProgramEntity::class,
+        ProgramGroupEntity::class,
+        ProgramBlockEntity::class,
+    ],
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -24,15 +41,81 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun exercises(): ExerciseDao
     abstract fun aliases(): AliasDao
     abstract fun slots(): SlotDao
+    abstract fun programs(): ProgramDao
 
     companion object {
         @Volatile
         private var instance: AppDatabase? = null
 
+        /**
+         * Version 1 -> 2: the interval timer's programs.
+         *
+         * Purely additive — three new tables and their indices, nothing existing is
+         * touched. The journal, the catalog, the aliases and the slots come through
+         * untouched, which is what the migration test checks by writing rows before the
+         * upgrade and reading them back after it.
+         *
+         * The DDL is spelled out rather than generated because Room validates the result
+         * against the entity definitions on the next open: if a column type or an index
+         * name here drifts from [ProgramEntity] and friends, the app fails to open the
+         * database instead of running on a subtly wrong schema.
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `programs` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`prepare_sec` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_programs_space_id_id` " +
+                        "ON `programs` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `program_groups` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`program_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`repeats` INTEGER NOT NULL, " +
+                        "`rest_between_repeats_sec` INTEGER NOT NULL, " +
+                        "`rest_after_sec` INTEGER NOT NULL, " +
+                        "FOREIGN KEY(`program_id`) REFERENCES `programs`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_program_groups_program_id` " +
+                        "ON `program_groups` (`program_id`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `program_blocks` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`group_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`work_sec` INTEGER NOT NULL, " +
+                        "`rest_sec` INTEGER NOT NULL, " +
+                        "`repeats` INTEGER NOT NULL, " +
+                        "FOREIGN KEY(`group_id`) REFERENCES `program_groups`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_program_blocks_group_id` " +
+                        "ON `program_blocks` (`group_id`)"
+                )
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "gachimuchi.db",
-            ).build().also { instance = it }
+            ).addMigrations(*MIGRATIONS).build().also { instance = it }
         }
     }
 }

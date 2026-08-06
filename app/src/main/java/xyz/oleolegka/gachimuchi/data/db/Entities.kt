@@ -87,6 +87,88 @@ data class AliasEntity(
     val blocked: Boolean = false,
 )
 
+/**
+ * An interval program (schema version 2).
+ *
+ * Programs are reference data, like the catalog and the slots, and are NOT part of the
+ * journal: they are edited and deleted freely, and running one records nothing.
+ *
+ * The three tables mirror the domain shape one for one (program -> group -> block, see
+ * domain/Program.kt) instead of storing a serialised blob in a single column. The reason
+ * is that the editor changes one block at a time, and a blob turns every such edit into a
+ * read-modify-write of the whole program. The price is two joins to load one program,
+ * which at this scale is nothing.
+ *
+ * The server has no equivalent of these tables yet — unlike the rest of the schema, they
+ * are local-only for now, and syncing programs is a later decision.
+ */
+@Entity(
+    tableName = "programs",
+    indices = [Index(value = ["space_id", "id"])],
+)
+data class ProgramEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @androidx.room.ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    /** Lead-in before the first work step, in seconds; 0 means start straight away. */
+    @androidx.room.ColumnInfo(name = "prepare_sec") val prepareSec: Int,
+    val position: Int = 0,
+    @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
+)
+
+/**
+ * A group of blocks, repeated as a unit. [position] fixes the order inside the program —
+ * the row id would not survive a block being deleted and re-added in a different place.
+ *
+ * ON DELETE CASCADE is declared so that deleting a program cannot leave orphan groups
+ * behind. Room needs foreign keys switched on at the connection level for that to bite,
+ * which [AppDatabase] does.
+ */
+@Entity(
+    tableName = "program_groups",
+    indices = [Index(value = ["program_id"])],
+    foreignKeys = [
+        androidx.room.ForeignKey(
+            entity = ProgramEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["program_id"],
+            onDelete = androidx.room.ForeignKey.CASCADE,
+        )
+    ],
+)
+data class ProgramGroupEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @androidx.room.ColumnInfo(name = "program_id") val programId: Long,
+    val name: String,
+    val position: Int,
+    val repeats: Int,
+    @androidx.room.ColumnInfo(name = "rest_between_repeats_sec") val restBetweenRepeatsSec: Int,
+    @androidx.room.ColumnInfo(name = "rest_after_sec") val restAfterSec: Int,
+)
+
+/** One timed effort with the pause that follows it, repeated [repeats] times. */
+@Entity(
+    tableName = "program_blocks",
+    indices = [Index(value = ["group_id"])],
+    foreignKeys = [
+        androidx.room.ForeignKey(
+            entity = ProgramGroupEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["group_id"],
+            onDelete = androidx.room.ForeignKey.CASCADE,
+        )
+    ],
+)
+data class ProgramBlockEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @androidx.room.ColumnInfo(name = "group_id") val groupId: Long,
+    val name: String,
+    val position: Int,
+    @androidx.room.ColumnInfo(name = "work_sec") val workSec: Int,
+    @androidx.room.ColumnInfo(name = "rest_sec") val restSec: Int,
+    val repeats: Int,
+)
+
 /** A master slot of the planning calendar (§12-B). Occurrences are computed, not stored. */
 @Entity(
     tableName = "slots",

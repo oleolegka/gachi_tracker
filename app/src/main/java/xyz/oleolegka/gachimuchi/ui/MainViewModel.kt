@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
+import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.seed.DemoSeed
@@ -19,7 +20,18 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.TimerSettings
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.lastHoldSet
+import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.resolveRestSec
+import xyz.oleolegka.gachimuchi.domain.restProgram
+import xyz.oleolegka.gachimuchi.domain.restSourceLabel
+import xyz.oleolegka.gachimuchi.domain.startsRest
+import xyz.oleolegka.gachimuchi.timer.SpeechStatus
+import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
 
 /**
@@ -48,7 +60,11 @@ data class UiState(
         aliases.filter { it.value == exerciseId && !it.blocked }.map { it.key }
 }
 
-class MainViewModel(private val repo: ActivityRepository) : ViewModel() {
+class MainViewModel(
+    private val repo: ActivityRepository,
+    private val programRepo: ProgramRepository,
+    private val timer: TimerController,
+) : ViewModel() {
 
     private val seeding = MutableStateFlow(false)
 
@@ -83,9 +99,25 @@ class MainViewModel(private val repo: ActivityRepository) : ViewModel() {
         }
     }
 
-    /** Appends a set to the journal. One event = one set; nothing is ever updated. */
+    /**
+     * Appends a set to the journal. One event = one set; nothing is ever updated.
+     *
+     * This is also where the rest timer starts, because recording a set is the moment the
+     * rest begins — asking the user to then press a second button would mean the countdown
+     * always starts a few seconds late, and those seconds are the whole point of measuring
+     * it. Only set-based forms trigger it (see [startsRest]); a weigh-in does not.
+     *
+     * The duration is resolved AFTER the write, so the gap that has just been measured
+     * (the pause before this very set) is part of what the offer is based on.
+     */
     fun addSet(form: ActivityForm) {
-        viewModelScope.launch { repo.record(form) }
+        viewModelScope.launch {
+            repo.record(form)
+            val settings = timer.settings.value
+            if (timer.enabled.value && settings.autoStartRest && startsRest(form)) {
+                startRest(form.exerciseId)
+            }
+        }
     }
 
     /** Cancels a set by appending a reversing event — the set itself stays in the history. */
@@ -135,8 +167,106 @@ class MainViewModel(private val repo: ActivityRepository) : ViewModel() {
         }
     }
 
-    class Factory(private val repo: ActivityRepository) : ViewModelProvider.Factory {
+    // --- the workout timer -------------------------------------------------------------
+    //
+    // The ViewModel owns none of the timer's state: a run has to keep going when no
+    // ViewModel exists (the app closed, the process killed and rebuilt by the alarm), so
+    // it lives in the process-wide TimerController and this class only forwards.
+
+    val timerRun: StateFlow<RunSnapshot?> = timer.run
+    val timerSettings: StateFlow<TimerSettings> = timer.settings
+    val timerEnabled: StateFlow<Boolean> = timer.enabled
+    val speechStatus: StateFlow<SpeechStatus> = timer.speaker.status
+
+    val programs: StateFlow<List<WorkoutProgram>> = programRepo.programs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun enableTimer() = timer.setEnabled(true)
+
+    /**
+     * Probes for a speech engine. Called when the timer screen appears rather than when
+     * the announcement switch is touched: the switch has to be able to say "no engine on
+     * this device" BEFORE it is touched, which on a phone without Google services is the
+     * usual answer.
+     */
+    fun prepareSpeech() = timer.prepareSpeech()
+
+    fun disableTimer() = timer.setEnabled(false)
+
+    fun updateTimerSettings(settings: TimerSettings) = timer.updateSettings(settings)
+
+    /** How long a rest for this exercise would be, and whether that came from history. */
+    fun restSecFor(exerciseId: Long?): Int =
+        resolveRestSec(timerSettings.value, state.value.events, exerciseId)
+
+    fun restSourceFor(exerciseId: Long?): String =
+        restSourceLabel(timerSettings.value, state.value.events, exerciseId)
+
+    /** Starts a single pause. Its length comes from the settings and from the journal. */
+    fun startRest(exerciseId: Long?) {
+        viewModelScope.launch {
+            val events = repo.allEvents()
+            val seconds = resolveRestSec(timerSettings.value, events, exerciseId)
+            timer.start(restProgram(seconds), exerciseId)
+        }
+    }
+
+    /**
+     * The one-tap program for a hangboard exercise: its work:rest protocol is already on
+     * the catalog row, the rep count comes from the last set of it that was logged, the set
+     * count from the settings, and the pause between sets from what was actually rested.
+     * Nothing is asked, because nothing is unknown.
+     */
+    fun startProgramForExercise(exercise: ExerciseRef) {
+        viewModelScope.launch {
+            val events = repo.allEvents()
+            val settings = timerSettings.value
+            val reps = lastHoldSet(events, exercise.id)?.reps ?: DEFAULT_HOLD_REPS
+            val program = programFromExercise(
+                exercise = exercise,
+                reps = reps,
+                sets = settings.defaultSets,
+                restBetweenSetsSec = resolveRestSec(settings, events, exercise.id),
+                prepareSec = settings.prepareSec,
+            ) ?: return@launch
+            timer.start(program, exercise.id)
+        }
+    }
+
+    fun runProgram(program: WorkoutProgram) = timer.start(program)
+
+    fun pauseTimer() = timer.pause()
+    fun resumeTimer() = timer.resume()
+    fun skipStep() = timer.skip()
+    fun previousStep() = timer.previous()
+    fun nudgeTimer(deltaSec: Int) = timer.nudge(deltaSec)
+    fun stopTimer() = timer.stop()
+
+    fun saveProgram(program: WorkoutProgram) {
+        viewModelScope.launch { programRepo.save(program) }
+    }
+
+    fun deleteProgram(id: Long) {
+        viewModelScope.launch { programRepo.delete(id) }
+    }
+
+    /** Writes the starter programs on first launch, alongside the demo history. */
+    fun seedProgramsIfEmpty() {
+        viewModelScope.launch { runCatching { programRepo.seedStartersIfEmpty() } }
+    }
+
+    class Factory(
+        private val repo: ActivityRepository,
+        private val programRepo: ProgramRepository,
+        private val timer: TimerController,
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(repo) as T
+        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+            MainViewModel(repo, programRepo, timer) as T
+    }
+
+    private companion object {
+        /** Reps in a hangboard set when the journal has no previous one to copy. */
+        const val DEFAULT_HOLD_REPS = 6
     }
 }

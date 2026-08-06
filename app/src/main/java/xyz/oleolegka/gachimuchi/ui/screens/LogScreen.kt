@@ -64,6 +64,9 @@ import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.tickOf
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
+import xyz.oleolegka.gachimuchi.ui.components.TimerActions
+import xyz.oleolegka.gachimuchi.ui.components.TimerBar
+import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.fmtDay
 import xyz.oleolegka.gachimuchi.ui.fmtRest
 import xyz.oleolegka.gachimuchi.ui.summaryLine
@@ -101,6 +104,10 @@ fun LogScreen(
     state: UiState,
     today: LocalDate,
     activeExerciseId: Long?,
+    timer: TimerUiState,
+    timerActions: TimerActions,
+    onEnableTimer: () -> Unit,
+    onStartExerciseProgram: (ExerciseRef) -> Unit,
     onSelectExercise: (Long?, String?) -> Unit,
     onCreateExercise: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
     onAddSet: (ActivityForm) -> Unit,
@@ -146,13 +153,28 @@ fun LogScreen(
             )
         },
         bottomBar = {
-            EntryPanel(
-                state = state,
-                exercise = active,
-                opDate = iso,
-                onPick = { picking = true },
-                onAddSet = onAddSet,
-            )
+            /*
+             * The timer sits ABOVE the entry card, not over it. It is a glance-at thing
+             * and the card is the thing being used, so the timer gets one line and the
+             * card keeps every pixel it had — the whole reason the card is pinned down
+             * here is that its buttons must stay inside the arc of a thumb.
+             */
+            Column {
+                TimerBar(
+                    state = timer,
+                    actions = timerActions,
+                    exercise = active,
+                    onStartExerciseProgram = { active?.let(onStartExerciseProgram) },
+                    onEnable = onEnableTimer,
+                )
+                EntryPanel(
+                    state = state,
+                    exercise = active,
+                    opDate = iso,
+                    onPick = { picking = true },
+                    onAddSet = onAddSet,
+                )
+            }
         },
     ) { padding ->
         SessionFeed(

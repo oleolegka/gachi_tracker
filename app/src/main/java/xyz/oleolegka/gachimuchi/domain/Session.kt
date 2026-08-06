@@ -254,8 +254,15 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
     }
 }
 
-/** The rest a form states outright (the bot and the demo seed write it; the app does not). */
-private fun explicitRestAfter(form: ActivityForm): Double? = when (form) {
+/**
+ * The rest a form states outright (the bot and the demo seed write it; the app does not).
+ *
+ * Not private: the rest timer derives its offered duration the same way the session feed
+ * derives the "rest 2:30" line (domain/TimerSettings.kt). Two implementations of "how long
+ * was the pause" would drift apart, and the screen and the timer would then disagree about
+ * the same two events.
+ */
+internal fun explicitRestAfter(form: ActivityForm): Double? = when (form) {
     is StrengthSet -> form.restAfterSec
     is HoldSet -> form.restAfterSec
     else -> null
@@ -273,7 +280,7 @@ private fun explicitRestAfter(form: ActivityForm): Double? = when (form) {
  * two events, which it already stores honestly, and defers to the explicit field
  * whenever a record carries one.
  */
-private fun secondsBetween(fromTs: String, toTs: String): Double? = runCatching {
+internal fun secondsBetween(fromTs: String, toTs: String): Double? = runCatching {
     ChronoUnit.SECONDS.between(LocalDateTime.parse(fromTs), LocalDateTime.parse(toTs)).toDouble()
 }.getOrNull()
 

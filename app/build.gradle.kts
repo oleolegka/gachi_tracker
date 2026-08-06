@@ -13,8 +13,8 @@ android {
         applicationId = "xyz.oleolegka.gachimuchi"
         minSdk = 29
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     /*
@@ -97,6 +97,14 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+
+    /*
+     * Room runs over the TEST sources too, so that the migration test can declare the
+     * previous schema as a real @Database and have Room generate its DDL. Writing the old
+     * CREATE TABLE statements by hand would test the migration against a schema invented
+     * for the test rather than against the one version 1 actually shipped.
+     */
+    kspTest(libs.androidx.room.compiler)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

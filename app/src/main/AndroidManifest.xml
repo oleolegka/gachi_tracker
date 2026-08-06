@@ -1,6 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        Every permission below exists for the workout timer, and each is listed with the
+        one thing it buys. The phone this app is built for runs GrapheneOS, where the
+        permission list is read, so nothing is requested "just in case".
+
+        There is deliberately no INTERNET, no ACCESS_NETWORK_STATE, no
+        RECEIVE_BOOT_COMPLETED and no REQUEST_IGNORE_BATTERY_OPTIMIZATIONS. The app never
+        talks to a network; a timer is not resumed across a reboot (the monotonic clock it
+        counts on does not survive one, and a rest between sets outlives no restart); and
+        asking to be exempted from battery management is a request the user can make
+        themselves if they ever want it.
+    -->
+
+    <!--
+        Shows the countdown and its buttons. Android 13+ only; asked for at the moment the
+        timer is switched on, never at first launch. Refusing it does not break the timer:
+        the countdown still runs and still signals, it just has no notification.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        Keeps the process from being frozen while a run is live. Without a foreground
+        service Android suspends the app within about twenty seconds of the screen turning
+        off, which is the whole failure this feature exists to avoid.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!--
+        The service type. A workout timer matches none of the platform's named categories,
+        and the one that looks closest, shortService, is capped at three minutes and cannot
+        be extended - shorter than an ordinary rest between heavy sets. See TimerService.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!--
+        The primary signal. The phone is in a pocket and the ringer is usually on silent,
+        so the buzz at a step boundary is what is actually noticed, not the tone.
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+        Keeps the CPU from suspending between step boundaries. A foreground service stops
+        the process being killed; it does not stop the device sleeping, and a Tabata
+        interval is ten seconds long. Held only while the clock is moving, released on
+        pause and stop, and always taken with a timeout.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+        The backstop alarm at the end of a step, so the signal still fires if the process
+        is killed despite the service.
+
+        Two permissions because the platform changed its mind: up to Android 12L the
+        needed one is SCHEDULE_EXACT_ALARM, hence the maxSdkVersion; from Android 13
+        USE_EXACT_ALARM is the one for apps whose core function IS a timer or an alarm
+        clock, and unlike SCHEDULE_EXACT_ALARM it is granted at install instead of sending
+        the user into a settings screen. This app is a timer, so the second one is the
+        honest fit. If either is somehow absent the code falls back to an inexact alarm
+        rather than failing.
+    -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!--
+        Package visibility, not a permission: since Android 11 an app cannot even SEE
+        whether a speech engine is installed without declaring this. It is what lets the
+        settings screen say "no speech engine found" truthfully on a phone without Google
+        services instead of claiming that on every phone.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:label="gachimuchi"
@@ -16,6 +93,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".timer.TimerService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Counts down the intervals of a workout, and the rest between sets, while the phone is in a pocket with the screen off." />
+        </service>
+
+        <!--
+            Receives the backstop alarm and the notification buttons. Not exported and
+            every intent naming it is explicit, so only this app can drive the timer.
+        -->
+        <receiver
+            android:name=".timer.TimerReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

@@ -81,6 +81,71 @@ interface AliasDao {
     suspend fun deleteByKeys(keys: List<String>, spaceId: Long = LOCAL_SPACE_ID)
 }
 
+/**
+ * Interval programs. Groups and blocks are deleted by cascade when their parent goes, so
+ * there is no delete for them here; rewriting a program replaces its groups wholesale
+ * (see ProgramRepository) rather than diffing rows, because an editor that reorders blocks
+ * makes a diff more code than a rewrite for no benefit at this size.
+ */
+@Dao
+interface ProgramDao {
+    @Insert
+    suspend fun insertProgram(program: ProgramEntity): Long
+
+    @Insert
+    suspend fun insertGroup(group: ProgramGroupEntity): Long
+
+    @Insert
+    suspend fun insertBlock(block: ProgramBlockEntity): Long
+
+    @Update
+    suspend fun updateProgram(program: ProgramEntity)
+
+    @Query("SELECT * FROM programs WHERE space_id = :spaceId ORDER BY position, id")
+    fun observePrograms(spaceId: Long = LOCAL_SPACE_ID): Flow<List<ProgramEntity>>
+
+    @Query("SELECT * FROM programs WHERE space_id = :spaceId ORDER BY position, id")
+    suspend fun allPrograms(spaceId: Long = LOCAL_SPACE_ID): List<ProgramEntity>
+
+    @Query("SELECT * FROM programs WHERE id = :id")
+    suspend fun programById(id: Long): ProgramEntity?
+
+    @Query("SELECT COUNT(*) FROM programs WHERE space_id = :spaceId")
+    suspend fun countPrograms(spaceId: Long = LOCAL_SPACE_ID): Int
+
+    @Query(
+        "SELECT * FROM program_groups WHERE program_id IN " +
+            "(SELECT id FROM programs WHERE space_id = :spaceId) ORDER BY program_id, position, id"
+    )
+    fun observeGroups(spaceId: Long = LOCAL_SPACE_ID): Flow<List<ProgramGroupEntity>>
+
+    @Query(
+        "SELECT * FROM program_groups WHERE program_id IN " +
+            "(SELECT id FROM programs WHERE space_id = :spaceId) ORDER BY program_id, position, id"
+    )
+    suspend fun allGroups(spaceId: Long = LOCAL_SPACE_ID): List<ProgramGroupEntity>
+
+    @Query(
+        "SELECT * FROM program_blocks WHERE group_id IN (SELECT g.id FROM program_groups g " +
+            "JOIN programs p ON p.id = g.program_id WHERE p.space_id = :spaceId) " +
+            "ORDER BY group_id, position, id"
+    )
+    fun observeBlocks(spaceId: Long = LOCAL_SPACE_ID): Flow<List<ProgramBlockEntity>>
+
+    @Query(
+        "SELECT * FROM program_blocks WHERE group_id IN (SELECT g.id FROM program_groups g " +
+            "JOIN programs p ON p.id = g.program_id WHERE p.space_id = :spaceId) " +
+            "ORDER BY group_id, position, id"
+    )
+    suspend fun allBlocks(spaceId: Long = LOCAL_SPACE_ID): List<ProgramBlockEntity>
+
+    @Query("DELETE FROM program_groups WHERE program_id = :programId")
+    suspend fun deleteGroupsOf(programId: Long)
+
+    @Query("DELETE FROM programs WHERE space_id = :spaceId AND id = :id")
+    suspend fun deleteProgram(id: Long, spaceId: Long = LOCAL_SPACE_ID)
+}
+
 @Dao
 interface SlotDao {
     @Insert

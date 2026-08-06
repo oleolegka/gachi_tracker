@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -13,6 +14,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,33 +23,48 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.timer.SpeechStatus
+import xyz.oleolegka.gachimuchi.ui.components.TimerActions
+import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
+import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
+import xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen
+import xyz.oleolegka.gachimuchi.ui.screens.TimerScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TodayScreen
 
 /**
- * Three tabs in the bottom bar (§12-C: Today is a tab of its own), plus the logging
- * screen on top of them.
+ * Four tabs in the bottom bar (§12-C: Today is a tab of its own), plus the logging screen
+ * and the program editor on top of them.
  *
- * Navigation is still plain state, without navigation-compose. The logging screen is not
- * a route but a MODE: it takes over the whole window, has nothing to navigate to (the
- * exercise picker is a sheet), and leaving it is a single action. A back stack library
- * would buy nothing here and would cost a dependency plus saved-state plumbing.
+ * Navigation is still plain state, without navigation-compose. The logging screen and the
+ * editor are not routes but MODES: each takes over the whole window, has nothing to
+ * navigate to, and leaving it is a single action. A back stack library would buy nothing
+ * here and would cost a dependency plus saved-state plumbing.
  */
 private enum class Tab(val title: String, val icon: ImageVector) {
     TODAY("Today", Icons.Filled.Star),
     OVERVIEW("Overview", Icons.AutoMirrored.Filled.List),
     CALENDAR("Calendar", Icons.Filled.DateRange),
+    TIMER("Timer", Icons.Filled.PlayArrow),
 }
 
 @Composable
 fun GachiApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val activeExerciseId by viewModel.activeExerciseId.collectAsStateWithLifecycle()
+    val timerRun by viewModel.timerRun.collectAsStateWithLifecycle()
+    val timerSettings by viewModel.timerSettings.collectAsStateWithLifecycle()
+    val timerEnabled by viewModel.timerEnabled.collectAsStateWithLifecycle()
+    val speech by viewModel.speechStatus.collectAsStateWithLifecycle()
+    val programs by viewModel.programs.collectAsStateWithLifecycle()
+
     var tab by rememberSaveable { mutableStateOf(Tab.TODAY) }
     var logging by rememberSaveable { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<EditorTarget?>(null) }
     val today = remember { viewModel.today }
     val iso = today.toString()
 
@@ -55,11 +72,61 @@ fun GachiApp(viewModel: MainViewModel) {
     // everything recorded today, so a crash or a closed app never loses one
     val session = remember(state.events, iso) { buildSession(state.events, iso) }
 
+    /*
+     * The offered rest length is derived from the whole journal, so it is computed once
+     * per change of the things it depends on rather than on every recomposition — the
+     * countdown recomposes several times a second while running.
+     */
+    val restSec = remember(state.events, activeExerciseId, timerSettings) {
+        viewModel.restSecFor(activeExerciseId)
+    }
+    val restSource = remember(state.events, activeExerciseId, timerSettings) {
+        viewModel.restSourceFor(activeExerciseId)
+    }
+
+    val timerState = TimerUiState(
+        enabled = timerEnabled,
+        run = timerRun,
+        settings = timerSettings,
+        speechAvailable = speech == SpeechStatus.READY,
+        restSec = restSec,
+        restSource = restSource,
+    )
+    val timerActions = TimerActions(
+        enable = viewModel::enableTimer,
+        startRest = { viewModel.startRest(activeExerciseId) },
+        pause = viewModel::pauseTimer,
+        resume = viewModel::resumeTimer,
+        skip = viewModel::skipStep,
+        previous = viewModel::previousStep,
+        nudge = viewModel::nudgeTimer,
+        stop = viewModel::stopTimer,
+    )
+    // the permission conversation, hoisted once so both the tab and the logging screen use
+    // the same one and the dialog cannot appear twice
+    val enableTimer = rememberTimerEnabler(onEnabled = viewModel::enableTimer)
+
+    editing?.let { target ->
+        ProgramEditorScreen(
+            initial = target.program,
+            onSave = {
+                viewModel.saveProgram(it)
+                editing = null
+            },
+            onClose = { editing = null },
+        )
+        return
+    }
+
     if (logging) {
         LogScreen(
             state = state,
             today = today,
             activeExerciseId = activeExerciseId,
+            timer = timerState,
+            timerActions = timerActions,
+            onEnableTimer = enableTimer,
+            onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
             onSelectExercise = viewModel::selectExercise,
             onCreateExercise = viewModel::createExercise,
             onAddSet = viewModel::addSet,
@@ -103,6 +170,29 @@ fun GachiApp(viewModel: MainViewModel) {
             Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
             Tab.OVERVIEW -> OverviewScreen(state, today, inner)
             Tab.CALENDAR -> CalendarScreen(state, today, inner)
+            Tab.TIMER -> {
+                // the settings row about spoken steps has to know the answer before it is
+                // touched, so the engine is looked for when the screen appears
+                LaunchedEffect(Unit) { viewModel.prepareSpeech() }
+                TimerScreen(
+                    state = timerState,
+                    actions = timerActions,
+                    programs = programs,
+                    onRunProgram = viewModel::runProgram,
+                    onEditProgram = { editing = EditorTarget(it) },
+                    onDeleteProgram = viewModel::deleteProgram,
+                    onSettings = viewModel::updateTimerSettings,
+                    onEnable = enableTimer,
+                    onDisable = viewModel::disableTimer,
+                    modifier = inner,
+                )
+            }
         }
     }
 }
+
+/**
+ * Wrapper so that "edit nothing yet" (a new program) is distinguishable from "not editing"
+ * — both would otherwise be null, and the editor would never open for a new program.
+ */
+private data class EditorTarget(val program: WorkoutProgram?)
