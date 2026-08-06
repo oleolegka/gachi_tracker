@@ -30,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,14 +52,19 @@ import xyz.oleolegka.gachimuchi.domain.ActivityRef
 import xyz.oleolegka.gachimuchi.domain.DayState
 import xyz.oleolegka.gachimuchi.domain.DayStatus
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.FACT_TYPES
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
-import xyz.oleolegka.gachimuchi.domain.SlotOccurrence
-import xyz.oleolegka.gachimuchi.domain.activeDays
+import xyz.oleolegka.gachimuchi.domain.SlotState
+import xyz.oleolegka.gachimuchi.domain.SlotStatus
 import xyz.oleolegka.gachimuchi.domain.activitiesByDay
+import xyz.oleolegka.gachimuchi.domain.activityStamps
+import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.offersLogging
 import xyz.oleolegka.gachimuchi.domain.planVsFact
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.repeatBadge
+import xyz.oleolegka.gachimuchi.ui.LocalOpenLogging
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.DeleteSlotDialog
@@ -72,6 +78,7 @@ import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.weekdayShort
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 
 /**
@@ -87,7 +94,22 @@ import java.time.temporal.ChronoUnit
  * month look like something is missing.
  *
  * The dots under a date are ACTIVITIES, coloured by form and capped at three — a row of
- * eight dots stops being countable, and the count is the only thing the dots are for.
+ * eight dots stops being countable, and the count is the only thing the dots are for. The
+ * cell's own tint is the day's PLAN verdict, which is a summary of its slots: done, missed
+ * or still outstanding. The two say different things — dots are what happened, the tint is
+ * what it means against the plan — and the legend under the grid names both.
+ *
+ * ── Every slot carries its own verdict ──────────────────────────────────────────
+ * The rule is written out in domain/Schedule.kt and is decided by TIME: the morning gym
+ * session can be done while the evening hangboard is still planned, and a session whose
+ * time has not come yet is never shown as done. A session that is not done yet carries a
+ * "Log" button, because a plan one cannot act on is a list of reproaches. That button is a
+ * WORD next to two icons: the row already carries a pencil and a bin, and "log a workout"
+ * one mis-tap away from "delete the plan" is not a trade worth making.
+ *
+ * The button appears on TODAY's sessions only. The logging screen writes entries for
+ * today, so offering it on last Tuesday's missed slot would quietly record the workout on
+ * the wrong day — the very class of bug the per-slot status exists to remove.
  *
  * ── Editing happens on the selected day, in a dialog ────────────────────────────
  * "Plan a session" sits under the agenda and always means "on the day above it", so the
@@ -128,9 +150,21 @@ fun CalendarScreen(
         last.plusDays((7 - last.dayOfWeek.value).toLong())
     }
 
-    val days: List<DayStatus> = remember(state.events, state.slots, gridStart, gridEnd, today) {
-        val active = activeDays(state.events, gridStart.toString(), gridEnd.toString())
-        planVsFact(state.slots, active, gridStart, gridEnd, today)
+    /*
+     * The verdicts depend on the CLOCK, not only on the date: a session at 20:00 is still
+     * planned at noon and late by midnight. The clock is read again whenever the data or
+     * the screen's own state changes, which covers every way of arriving here — but a
+     * screen left open and untouched keeps the reading it was composed with. That is the
+     * price of a pure function over a moving "now", and it is one recomposition away from
+     * correct.
+     */
+    val now: LocalDateTime = remember(state.events, state.slots, monthOffset, selected) {
+        LocalDateTime.now()
+    }
+
+    val days: List<DayStatus> = remember(state.events, state.slots, gridStart, gridEnd, now) {
+        val stamps = activityStamps(state.events, gridStart.toString(), gridEnd.toString())
+        planVsFact(state.slots, stamps, gridStart, gridEnd, now)
     }
     val activities = remember(state.events, gridStart, gridEnd) {
         activitiesByDay(state.events, gridStart.toString(), gridEnd.toString())
@@ -171,6 +205,8 @@ fun CalendarScreen(
                     status = selectedStatus,
                     facts = selectedFacts,
                     formOf = formOf,
+                    today = today,
+                    exerciseNamed = { state.exerciseNamed(it) },
                     onEdit = { editing = SlotEditorTarget(it, selectedDate) },
                     onDelete = { deleting = it },
                 )
@@ -326,7 +362,7 @@ private fun MonthNavigator(
             ) {
                 LegendItem("done", colors.good)
                 LegendItem("missed", colors.critical)
-                LegendItem("unplanned", colors.inkMuted)
+                LegendItem("planned", colors.accent)
                 LegendItem("dots = activities", colors.forForm(ExerciseForm.STRENGTH))
             }
         }
@@ -343,11 +379,13 @@ private fun LegendItem(label: String, color: Color) {
 }
 
 /**
- * One day: the number, and up to three dots for the activities logged on it.
+ * One day: the number, a plan verdict, and up to three dots for the activities logged on it.
  *
- * The day's plan/fact STATE is not colour on the cell — it is the status word in the
- * agenda below. Painting five states onto a 40 dp square would need five colours nobody
- * can decode without a legend they cannot see while looking at the grid.
+ * The verdict is a WASH of the state's colour rather than the colour itself — the number
+ * has to stay readable, and a saturated square would shout louder than the dots, which are
+ * the finer information. Only the three verdicts the legend names are painted: an
+ * unplanned day is a plain cell with dots on it, which is exactly what "activity, no plan"
+ * looks like, and an empty day is a plain cell with nothing.
  */
 @Composable
 private fun DayCell(
@@ -362,12 +400,23 @@ private fun DayCell(
 ) {
     val colors = LocalGachiColors.current
     val date = LocalDate.parse(status.day)
+    val wash = when (status.state) {
+        DayState.DONE, DayState.MISS, DayState.PLAN -> colors.forDayState(status.state).copy(alpha = 0.16f)
+        DayState.EXTRA, DayState.EMPTY -> null
+    }
     Box(
         modifier
             .aspectRatio(1f / 1.06f)
             .heightIn(min = 44.dp)
             .clip(RoundedCornerShape(10.dp))
-            .then(if (isSelected) Modifier.background(colors.accent) else Modifier)
+            .then(
+                when {
+                    // the selection is the strongest signal on the grid and always wins
+                    isSelected -> Modifier.background(colors.accent)
+                    wash != null -> Modifier.background(wash)
+                    else -> Modifier
+                }
+            )
             .then(
                 if (isToday && !isSelected) {
                     Modifier.border(1.5.dp, colors.accent, RoundedCornerShape(10.dp))
@@ -410,85 +459,131 @@ private fun DayCell(
     }
 }
 
-/** The agenda of the selected day: the plan, its status, and what was actually recorded. */
+/**
+ * The agenda of the selected day: every planned session with its OWN verdict, and what was
+ * actually recorded.
+ *
+ * A recorded entry is labelled by whether it closed a slot ([DayStatus.closedByActivityIds]),
+ * not by whether the day happened to have a plan at all: on a day with two slots and one
+ * workout, the workout says "done" and the slot it did not reach says "missed".
+ */
 @Composable
 private fun DayAgenda(
     status: DayStatus?,
     facts: List<ActivityEvent>,
     formOf: (Long?) -> ExerciseForm?,
+    today: LocalDate,
+    exerciseNamed: (String) -> Long?,
     onEdit: (Slot) -> Unit,
     onDelete: (Slot) -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    val occurrences = status?.occurrences.orEmpty()
+    val openLogging = LocalOpenLogging.current
+    val slots = status?.slots.orEmpty()
+    val closed = status?.closedByActivityIds.orEmpty()
 
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        if (occurrences.isEmpty() && facts.isEmpty()) {
+        if (slots.isEmpty() && facts.isEmpty()) {
             DashedNote("Nothing planned and nothing recorded")
             return@Column
         }
 
-        occurrences.forEach { occurrence ->
+        slots.forEach { slotStatus ->
+            val slot = slotStatus.occurrence.slot
             SlotRow(
-                occurrence = occurrence,
-                state = status?.state ?: DayState.PLAN,
-                onEdit = { onEdit(occurrence.slot) },
-                onDelete = { onDelete(occurrence.slot) },
+                status = slotStatus,
+                // the rule lives in the domain: logging writes today's entries (offersLogging)
+                onLog = if (slotStatus.offersLogging(today)) {
+                    { openLogging(exerciseNamed(slotStatus.name)) }
+                } else {
+                    null
+                },
+                onEdit = { onEdit(slot) },
+                onDelete = { onDelete(slot) },
             )
         }
 
-        if (facts.isEmpty() && occurrences.isNotEmpty()) {
+        if (facts.isEmpty() && slots.isNotEmpty()) {
             DashedNote("Planned, but nothing recorded yet")
         }
 
         facts.forEach { event ->
             val form = formOf(event.form.exerciseId)
+            // a weigh-in is not training (FACT_TYPES), so it is never judged against a plan
+            val judged = event.type in FACT_TYPES
             AgendaRow(
                 eyebrow = form?.title?.uppercase() ?: "ACTIVITY",
                 accent = form?.let { colors.forForm(it) } ?: colors.inkMuted,
                 name = event.form.displayName(),
                 meta = event.form.summaryLine(),
-                statusLabel = if (occurrences.isEmpty()) "unplanned" else "done",
-                statusColor = if (occurrences.isEmpty()) colors.inkMuted else colors.goodText,
+                statusLabel = when {
+                    event.id in closed -> "done"
+                    !judged -> "logged"
+                    else -> "unplanned"
+                },
+                statusColor = if (event.id in closed) colors.goodText else colors.inkMuted,
             )
         }
     }
 }
 
 /**
- * A planned session on the selected day, with the two things that can be done to it.
+ * A planned session on the selected day, with its verdict and the things that can be done
+ * to it.
  *
  * The actions are on the ROW rather than behind a long press or a swipe: a long press is
  * invisible and a swipe would collide with the month grid's horizontal feel. The bin does
  * not delete — it opens [DeleteSlotDialog], because for a repeating slot the answer to
  * "what will this remove" is a sentence, not an icon.
+ *
+ * "Log" is TEXT while edit and delete are icons, and that asymmetry is the point: three
+ * icons of the same size in a row put "record a workout" a thumb's width from "delete the
+ * plan", and the two are much too different to be one mis-tap apart.
  */
 @Composable
 private fun SlotRow(
-    occurrence: SlotOccurrence,
-    state: DayState,
+    status: SlotStatus,
+    onLog: (() -> Unit)?,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    val (label, color) = when (state) {
-        DayState.DONE -> "done" to colors.goodText
-        DayState.MISS -> "missed" to colors.critical
-        DayState.EXTRA -> "unplanned" to colors.inkMuted
-        else -> "planned" to colors.inkMuted
+    val (label, color) = when (status.state) {
+        SlotState.DONE -> "done" to colors.goodText
+        SlotState.MISS -> "missed" to colors.critical
+        SlotState.PLAN -> "planned" to colors.inkMuted
     }
     AgendaRow(
         eyebrow = "PLAN",
         accent = colors.accent,
-        name = occurrence.name,
-        meta = listOfNotNull(occurrence.atTime, repeatBadge(occurrence.slot.repeatRule))
+        name = status.name,
+        meta = listOfNotNull(status.atTime, repeatBadge(status.slot.repeatRule))
             .joinToString(" - "),
         statusLabel = label,
         statusColor = color,
     ) {
-        RowAction(Icons.Filled.Edit, "Edit \"${occurrence.name}\"", colors.inkSecondary, onEdit)
-        RowAction(Icons.Filled.Delete, "Delete \"${occurrence.name}\"", colors.critical, onDelete)
+        if (onLog != null) {
+            TextButton(onClick = onLog, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                Text("Log", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        RowAction(Icons.Filled.Edit, "Edit \"${status.name}\"", colors.inkSecondary, onEdit)
+        RowAction(Icons.Filled.Delete, "Delete \"${status.name}\"", colors.critical, onDelete)
     }
+}
+
+/**
+ * The catalog exercise called exactly what the slot is called, if there is one.
+ *
+ * A slot is a SESSION ("Gym", "Hangboard") and the model has no slot -> exercise link, so
+ * this is a lucky coincidence rather than a feature: normally it finds nothing and the
+ * logging screen opens with the exercise still to be picked. Only the same name counts,
+ * after the normalization the catalog itself uses — anything looser would point the entry
+ * card at an exercise the user did not plan.
+ */
+private fun UiState.exerciseNamed(name: String): Long? {
+    val want = normPhrase(name) ?: return null
+    return exercises.firstOrNull { normPhrase(it.name) == want }?.id
 }
 
 @Composable

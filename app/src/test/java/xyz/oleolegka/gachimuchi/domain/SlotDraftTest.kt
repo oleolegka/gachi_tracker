@@ -24,7 +24,6 @@ class SlotDraftTest {
         assertEquals("07:30", parseSlotTime("0730"))
         assertEquals("07:30", parseSlotTime("7.30"))
         assertEquals("18:30", parseSlotTime("18 30"))
-        assertEquals("18:05", parseSlotTime("18:5"))
         assertEquals("00:00", parseSlotTime("0"))
     }
 
@@ -37,6 +36,65 @@ class SlotDraftTest {
         assertNull(parseSlotTime("12345"))
         assertNull(parseSlotTime("18:000"))
         assertNull(parseSlotTime("")) // empty means "no time", which the draft handles
+    }
+
+    @Test
+    fun `a half-typed minute is not a time`() {
+        // the field auto-formats, so "18:5" on screen means three of four digits are in —
+        // reading it as 18:05 would store a time nobody typed whenever 18:50 was meant
+        assertNull(parseSlotTime("18:5"))
+        assertNull(parseSlotTime("17:0"))
+        assertNull(parseSlotTime("9:3"))
+        // the whole minute is fine either way round
+        assertEquals("09:30", parseSlotTime("9:30"))
+        assertEquals("17:00", parseSlotTime("17:00"))
+    }
+
+    @Test
+    fun `the colon appears while the digits are typed`() {
+        assertEquals("", formatTimeDigits(""))
+        assertEquals("1", formatTimeDigits("1"))
+        assertEquals("17", formatTimeDigits("17"))
+        assertEquals("17:0", formatTimeDigits("170"))
+        assertEquals("17:00", formatTimeDigits("1700"))
+    }
+
+    @Test
+    fun `a leading digit that cannot start an hour makes the hour one digit`() {
+        assertEquals("9", formatTimeDigits("9"))
+        assertEquals("9:3", formatTimeDigits("93"))
+        assertEquals("9:30", formatTimeDigits("930"))
+        // 25 is not an hour, so it is read as 2 o'clock and something
+        assertEquals("2:5", formatTimeDigits("25"))
+        assertEquals("2:50", formatTimeDigits("250"))
+    }
+
+    @Test
+    fun `anything that is not a digit is dropped, so a pasted time works too`() {
+        assertEquals("17:00", formatTimeDigits("17:00"))
+        assertEquals("17:00", formatTimeDigits("17 00"))
+        assertEquals("17:00", formatTimeDigits("1700999"))
+    }
+
+    @Test
+    fun `what the field shows is what the parser reads back`() {
+        // every state the field can be in: complete ones parse, half-typed ones do not
+        assertEquals("07:00", parseSlotTime(formatTimeDigits("7")))
+        assertEquals("18:00", parseSlotTime(formatTimeDigits("18")))
+        assertEquals("09:30", parseSlotTime(formatTimeDigits("930")))
+        assertEquals("17:00", parseSlotTime(formatTimeDigits("1700")))
+        assertNull(parseSlotTime(formatTimeDigits("170")))
+        assertNull(parseSlotTime(formatTimeDigits("93")))
+        assertNull(parseSlotTime(formatTimeDigits("")))
+    }
+
+    @Test
+    fun `a time read back and formatted again is the same time`() {
+        assertEquals(18 * 60 + 5, parseMinuteOfDay("18:05"))
+        assertEquals("18:05", formatTime(18, 5))
+        assertNull(parseMinuteOfDay(null))
+        assertNull(parseMinuteOfDay("18"))
+        assertNull(parseMinuteOfDay("18:60"))
     }
 
     @Test

@@ -2,6 +2,7 @@ package xyz.oleolegka.gachimuchi.domain
 
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -13,10 +14,10 @@ import java.util.Locale
  * any month is computed from a handful of slots, and editing a slot changes all its
  * future occurrences at once.
  *
- * STATUS GRANULARITY IS THE DAY, NOT THE SLOT (a deliberate simplification, same as on
- * the server): the model has no link from an event to a particular slot, so a day with
- * two slots and one workout counts as fully done, and `extra` means "there was activity
- * and NOT A SINGLE slot" rather than "activity outside the plan".
+ * STATUS IS PER SLOT, and it is decided BY TIME. The model still has no stored link from
+ * an event to a slot, so the link is inferred — see [matchDay] for the exact rule. Two
+ * slots on the same day can end up in different states: the morning gym session done, the
+ * evening hangboard still planned.
  *
  * WHAT THE RULES DELIBERATELY LACK: UNTIL, EXDATE/RDATE, intervals other than 1, and
  * several weekdays in one slot — "Gym on Mon/Thu" is TWO weekly slots.
@@ -26,6 +27,21 @@ const val REPEAT_NONE = "none"
 const val REPEAT_DAILY = "daily"
 const val REPEAT_WEEKLY = "weekly"
 val REPEAT_RULES = listOf(REPEAT_NONE, REPEAT_DAILY, REPEAT_WEEKLY)
+
+/**
+ * How long before its time a slot can already be closed by an activity: you may start a
+ * session a little early, and the entry is written when the first set is done.
+ */
+const val SLOT_WINDOW_BEFORE_MIN = 30
+
+/**
+ * How long after its time a slot can still be closed. Generous on purpose and asymmetric:
+ * an entry is written DURING or AFTER a session, essentially never long before it, and a
+ * session itself lasts an hour or two. This is also the moment a slot becomes "missed" —
+ * as long as the window is open, an entry can still land in it, so nothing is called
+ * missed while there is a chance of it.
+ */
+const val SLOT_WINDOW_AFTER_MIN = 180
 
 /** A master plan slot (the domain mirror of a `slots` table row). */
 data class Slot(
@@ -40,18 +56,101 @@ data class Slot(
 data class SlotOccurrence(val day: String, val slot: Slot) {
     val name: String get() = slot.name
     val atTime: String? get() = slot.atTime
+
+    /** Minutes since midnight, or null for a slot with no time ("some time that day"). */
+    val minuteOfDay: Int? get() = parseMinuteOfDay(slot.atTime)
 }
+
+/** State of ONE slot occurrence. */
+enum class SlotState { DONE, MISS, PLAN }
+
+/** A slot occurrence together with its verdict and the activity that closed it. */
+data class SlotStatus(
+    val occurrence: SlotOccurrence,
+    val state: SlotState,
+    val closedByActivityId: Long? = null,
+) {
+    val day: String get() = occurrence.day
+    val name: String get() = occurrence.name
+    val atTime: String? get() = occurrence.atTime
+    val slot: Slot get() = occurrence.slot
+}
+
+/**
+ * Whether this planned session should offer a way to log the workout it stands for.
+ *
+ * Two conditions, and the second is the load-bearing one. A session already done needs no
+ * button; and the LOGGING SCREEN WRITES ENTRIES FOR TODAY, so a button on any other day
+ * would record the workout on the wrong date. That makes "only today" a property of the
+ * model rather than of the calendar screen, which is why it is decided here: a missed slot
+ * from last Tuesday is exactly the row a user would tap to fix, and the fix would land on
+ * the wrong day silently.
+ */
+fun SlotStatus.offersLogging(today: LocalDate): Boolean =
+    state != SlotState.DONE && day == today.toString()
 
 /** Plan/fact states of a day (§12-B; the strings match the dashboard tokens). */
 enum class DayState { DONE, MISS, PLAN, EXTRA, EMPTY }
 
-/** Plan versus fact for a single day of the range. */
+/**
+ * Plan versus fact for a single day.
+ *
+ * [unmatchedActivities] are the entries that closed no slot — training that was not in
+ * the plan (or was recorded far away from any planned time).
+ */
 data class DayStatus(
     val day: String,
-    val occurrences: List<SlotOccurrence>,
-    val hasActivity: Boolean,
+    val slots: List<SlotStatus>,
+    val activityCount: Int,
+    val unmatchedActivities: Int,
     val state: DayState,
-)
+) {
+    val occurrences: List<SlotOccurrence> get() = slots.map { it.occurrence }
+    val hasActivity: Boolean get() = activityCount > 0
+
+    /** Ids of the entries that closed a slot — the rest of the day's entries are unplanned. */
+    val closedByActivityIds: Set<Long> get() = slots.mapNotNull { it.closedByActivityId }.toSet()
+}
+
+/**
+ * One recorded activity as the calendar sees it: which day it belongs to, and at what
+ * time of day it was written.
+ *
+ * [minuteOfDay] is null when the clock time says nothing about when the training
+ * happened — an entry backfilled on another day carries the time it was TYPED, not the
+ * time it was trained. Such an entry still counts as a fact for its day, it just cannot
+ * be attributed to a slot by time.
+ */
+data class ActivityStamp(val id: Long, val day: String, val minuteOfDay: Int?)
+
+/** "HH:MM" -> minutes since midnight; null for null or unparsable input. */
+fun parseMinuteOfDay(at: String?): Int? {
+    val text = at?.trim() ?: return null
+    val parts = text.split(':')
+    if (parts.size != 2) return null
+    val h = parts[0].toIntOrNull() ?: return null
+    val m = parts[1].toIntOrNull() ?: return null
+    if (h !in 0..23 || m !in 0..59) return null
+    return h * 60 + m
+}
+
+/**
+ * Journal events turned into calendar facts over the inclusive [dateFrom]..[dateTo]
+ * range. Body weight is excluded through [FACT_TYPES] — stepping on the scales is not
+ * training.
+ */
+fun activityStamps(
+    events: List<JournalEvent>,
+    dateFrom: String,
+    dateTo: String,
+    types: Collection<String> = FACT_TYPES,
+): List<ActivityStamp> = readActivities(events, types, dateFrom, dateTo).map { ev ->
+    // ts is "YYYY-MM-DDTHH:MM:SS" (data/ActivityRepository.now); only a timestamp from the
+    // SAME day as the entry tells us anything about when the training took place
+    val sameDay = ev.ts.length >= 16 && ev.ts.startsWith(ev.opDate + "T")
+    val minute = if (sameDay) parseMinuteOfDay(ev.ts.substring(11, 16)) else null
+    ActivityStamp(id = ev.id, day = ev.opDate, minuteOfDay = minute)
+}
 
 /**
  * Whether a slot falls on a day according to its rule. No rule ever produces
@@ -92,36 +191,134 @@ fun slotsForRange(slots: List<Slot>, dateFrom: LocalDate, dateTo: LocalDate): Li
     )
 }
 
+/** The moment a slot's window opens: [SLOT_WINDOW_BEFORE_MIN] before it, or midnight. */
+internal fun windowOpensAt(occ: SlotOccurrence): LocalDateTime {
+    val start = LocalDate.parse(occ.day).atStartOfDay()
+    val minute = occ.minuteOfDay ?: return start
+    return start.plusMinutes((minute - SLOT_WINDOW_BEFORE_MIN).toLong())
+}
+
+/** The moment it closes: [SLOT_WINDOW_AFTER_MIN] after it, or the end of the day. */
+internal fun windowClosesAt(occ: SlotOccurrence): LocalDateTime {
+    val start = LocalDate.parse(occ.day).atStartOfDay()
+    val minute = occ.minuteOfDay ?: return start.plusDays(1)
+    return start.plusMinutes((minute + SLOT_WINDOW_AFTER_MIN).toLong())
+}
+
+/**
+ * Which activity closes which slot on ONE day. Returns slot index -> activity id;
+ * a slot missing from the map was not closed.
+ *
+ * THE RULE, in full (it has to be predictable, so it is written out rather than tuned):
+ *
+ * 1. Each activity closes AT MOST ONE slot, and each slot needs its own activity — two
+ *    slots and one workout means one of them stays open.
+ * 2. A slot can only be closed once its window has OPENED ([windowOpensAt]). A slot whose
+ *    time has not arrived yet can therefore never be "done" — the bug this rule exists
+ *    for: an entry made at noon used to mark an eight-in-the-evening session as done.
+ * 3. A timed slot and an activity with a known clock time pair up only if the activity
+ *    falls inside the window [time - 30 min, time + 3 h]; the pair with the SMALLEST
+ *    distance is taken first, then the next one, and so on (a greedy nearest match).
+ * 4. A slot WITHOUT a time ("some time that day") pairs with any activity of the day, and
+ *    an activity whose clock time is unknown (backfilled on another day) pairs with any
+ *    slot of the day whose window has opened. Both are the fallback: they are only
+ *    considered after every match by time has been made, and they run in day order
+ *    (earliest slot first).
+ * 5. Whatever is left over stays unmatched: such an activity is UNPLANNED training, and
+ *    such a slot is missed once its window has closed.
+ */
+internal fun matchDay(
+    occs: List<SlotOccurrence>,
+    acts: List<ActivityStamp>,
+    now: LocalDateTime,
+): Map<Int, Long> {
+    if (occs.isEmpty() || acts.isEmpty()) return emptyMap()
+    // tier 0 = matched by time, tier 1 = fallback; inside a tier the closest pair wins,
+    // then the earlier slot, then the earlier activity
+    data class Candidate(val tier: Int, val cost: Int, val occIdx: Int, val actIdx: Int)
+
+    val candidates = ArrayList<Candidate>()
+    occs.forEachIndexed { occIdx, occ ->
+        if (now.isBefore(windowOpensAt(occ))) return@forEachIndexed
+        val slotMinute = occ.minuteOfDay
+        acts.forEachIndexed { actIdx, act ->
+            val actMinute = act.minuteOfDay
+            if (slotMinute != null && actMinute != null) {
+                val delta = actMinute - slotMinute
+                if (delta < -SLOT_WINDOW_BEFORE_MIN || delta > SLOT_WINDOW_AFTER_MIN) return@forEachIndexed
+                candidates.add(Candidate(0, if (delta < 0) -delta else delta, occIdx, actIdx))
+            } else {
+                candidates.add(Candidate(1, 0, occIdx, actIdx))
+            }
+        }
+    }
+    candidates.sortWith(compareBy({ it.tier }, { it.cost }, { it.occIdx }, { it.actIdx }))
+    val taken = HashMap<Int, Long>()
+    val usedActs = HashSet<Int>()
+    for (c in candidates) {
+        if (c.occIdx in taken || c.actIdx in usedActs) continue
+        taken[c.occIdx] = acts[c.actIdx].id
+        usedActs.add(c.actIdx)
+    }
+    return taken
+}
+
 /**
  * Plan/fact status of EVERY day in the (inclusive) range, in ascending date order —
  * empty days get a row too: the calendar needs the whole grid.
  *
- * [today] is the past/future boundary: a day with a slot and no activity counts as
- * missed only if it is strictly earlier than [today]; today itself is not missed yet.
+ * [now] is the clock: it decides which slots can already be closed and which are late
+ * (see [matchDay]). Slot states are computed first, and the day's own state is their
+ * summary:
+ *
+ * - no slots at all: EXTRA when something was recorded, EMPTY otherwise;
+ * - any slot missed: MISS (a hole in the day is the thing worth seeing);
+ * - every slot done: DONE;
+ * - otherwise PLAN — the day still has something outstanding, even if part of it is done.
  */
 fun planVsFact(
     slots: List<Slot>,
-    activeDays: Set<String>,
+    activities: List<ActivityStamp>,
     dateFrom: LocalDate,
     dateTo: LocalDate,
-    today: LocalDate,
+    now: LocalDateTime,
 ): List<DayStatus> {
     require(!dateTo.isBefore(dateFrom)) { "date_to is earlier than date_from" }
-    val byDay = slotsForRange(slots, dateFrom, dateTo).groupBy { it.day }
+    val occsByDay = slotsForRange(slots, dateFrom, dateTo).groupBy { it.day }
+    val actsByDay = activities.groupBy { it.day }
     val out = ArrayList<DayStatus>()
     var day = dateFrom
     while (!day.isAfter(dateTo)) {
         val iso = day.toString()
-        val occs = byDay[iso].orEmpty()
-        val act = iso in activeDays
-        val state = when {
-            occs.isNotEmpty() && act -> DayState.DONE
-            occs.isNotEmpty() && day.isBefore(today) -> DayState.MISS
-            occs.isNotEmpty() -> DayState.PLAN
-            act -> DayState.EXTRA
-            else -> DayState.EMPTY
+        val occs = occsByDay[iso].orEmpty()
+        // the fallback pairs in journal order, so a stable activity order is part of the rule
+        val acts = actsByDay[iso].orEmpty()
+            .sortedWith(compareBy({ it.minuteOfDay ?: Int.MAX_VALUE }, { it.id }))
+        val matched = matchDay(occs, acts, now)
+        val statuses = occs.mapIndexed { idx, occ ->
+            val closedBy = matched[idx]
+            val state = when {
+                closedBy != null -> SlotState.DONE
+                !now.isBefore(windowClosesAt(occ)) -> SlotState.MISS
+                else -> SlotState.PLAN
+            }
+            SlotStatus(occurrence = occ, state = state, closedByActivityId = closedBy)
         }
-        out.add(DayStatus(iso, occs, act, state))
+        val state = when {
+            statuses.isEmpty() -> if (acts.isEmpty()) DayState.EMPTY else DayState.EXTRA
+            statuses.any { it.state == SlotState.MISS } -> DayState.MISS
+            statuses.all { it.state == SlotState.DONE } -> DayState.DONE
+            else -> DayState.PLAN
+        }
+        out.add(
+            DayStatus(
+                day = iso,
+                slots = statuses,
+                activityCount = acts.size,
+                unmatchedActivities = acts.size - matched.size,
+                state = state,
+            )
+        )
         day = day.plusDays(1)
     }
     return out
@@ -181,7 +378,8 @@ fun SlotDraft.problem(): SlotProblem? = when {
 /** The message under the editor's fields for [problem]. */
 fun problemText(problem: SlotProblem): String = when (problem) {
     SlotProblem.NAME_EMPTY -> "Give the session a name, for example Gym or Fingerboard."
-    SlotProblem.TIME_UNREADABLE -> "The time should read like 18:00, or be left empty."
+    SlotProblem.TIME_UNREADABLE -> "Finish the time: type the digits and 1700 becomes 17:00. " +
+        "An empty field means some time that day."
     SlotProblem.RULE_UNKNOWN -> "Pick how often it repeats."
     SlotProblem.DATE_UNREADABLE -> "Pick the day it belongs to."
 }
@@ -207,6 +405,12 @@ private val TIME_SEPARATORS = charArrayOf(':', '.', ',', '-', ' ')
  * and on a phone the colon lives one keyboard away from the digits. What it will NOT do is
  * guess: an hour past 23 or a minute past 59 is rejected rather than rolled over, because
  * "25:00" is a typo and silently turning it into tomorrow's 01:00 would plan the wrong day.
+ *
+ * A HALF-TYPED MINUTE IS NOT A TIME. "18:5" is refused rather than read as 18:05, because
+ * the editor no longer waits for a colon to be typed — [formatTimeDigits] puts it in as the
+ * digits arrive, so "18:5" on screen means three digits of four are in and the fourth is
+ * still coming. Reading it as 18:05 would silently store a time nobody typed, exactly half
+ * the time (the other half meant 18:50). The whole minute or nothing.
  */
 fun parseSlotTime(text: String): String? {
     val cleaned = text.trim()
@@ -215,7 +419,7 @@ fun parseSlotTime(text: String): String? {
     val parts = cleaned.split(*TIME_SEPARATORS).filter { it.isNotEmpty() }
     val (hour, minute) = when (parts.size) {
         2 -> {
-            if (parts[0].length > 2 || parts[1].length > 2) return null
+            if (parts[0].length > 2 || parts[1].length != 2) return null
             (parts[0].toIntOrNull() ?: return null) to (parts[1].toIntOrNull() ?: return null)
         }
 
@@ -235,6 +439,33 @@ fun parseSlotTime(text: String): String? {
     if (hour !in 0..23 || minute !in 0..59) return null
     return "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
 }
+
+// --- typing a time -------------------------------------------------------------------
+//
+// The slot time is stored as "HH:MM", and a phone's number keypad has no colon on it —
+// so the colon is never typed. It is either placed by [formatTimeDigits] as the digits
+// arrive, or the whole value comes from the clock dialog.
+
+/**
+ * Digits as typed -> what the field should show. The colon appears by itself:
+ * "1" -> "1", "17" -> "17", "170" -> "17:0", "1700" -> "17:00", and
+ * "9" -> "9", "93" -> "9:3", "930" -> "9:30".
+ *
+ * The hour takes two digits only when two digits can BE an hour: a leading 3..9, or a
+ * pair over 23, means the hour was a single digit ("25" is 2:5x, not a broken 25 o'clock).
+ * Everything that is not a digit is dropped, so pasting "17:00" also works.
+ */
+fun formatTimeDigits(input: String): String {
+    val digits = input.filter { it.isDigit() }
+    if (digits.isEmpty()) return ""
+    val twoDigitHour = digits[0] < '3' && (digits.length < 2 || digits.take(2).toInt() <= 23)
+    val hourLen = if (twoDigitHour) 2 else 1
+    if (digits.length <= hourLen) return digits
+    return digits.take(hourLen) + ":" + digits.drop(hourLen).take(2)
+}
+
+/** Hour and minute from the clock dialog -> the stored "HH:MM". */
+fun formatTime(hour: Int, minute: Int): String = "%02d:%02d".format(hour, minute)
 
 /**
  * The repeat as a BADGE for a list row: "every day", "every week", or nothing for a

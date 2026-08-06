@@ -26,7 +26,11 @@ into the journal; nothing is recorded until you confirm it. Programs export to a
 from JSON files ([format](docs/program-file-format.md)).
 
 **A calendar you can plan in.** A session is a slot on a day — once, every day or every
-week — and the plan is checked against what you actually logged: done, missed, unplanned.
+week — and EVERY slot gets its own verdict against what you actually logged: done, missed,
+still to come. The morning gym session can be done while the evening hangboard is still
+planned, a session whose time has not come is never shown as done, and one that is still
+outstanding today opens the logging screen straight from the plan. Times are typed without
+a colon: the field takes digits and `1700` becomes `17:00` as you go.
 
 **Charts and history**: activity across the year, trends and volume per exercise over a
 chosen period, records with the date they were set.

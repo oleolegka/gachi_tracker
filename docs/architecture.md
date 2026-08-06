@@ -109,6 +109,35 @@ on stop counting as missed.
 Nothing in the journal is touched by any of it. What you actually did is a separate,
 append-only record, and the plan is only ever compared against it.
 
+## Plan versus fact is judged per slot, by the clock
+
+A journal entry carries no link to a planned session — nothing ever asks "which of today's
+two sessions was that?" — so the calendar infers the link from the time it was written. The
+rule is fixed rather than clever, because a verdict has to be predictable:
+
+- an entry closes a slot if it was written between 30 minutes before its time and 3 hours
+  after it; of all possible pairs the closest is taken first, then the next;
+- one entry closes at most one slot, and every slot needs an entry of its own: two sessions
+  planned and one workout logged leaves one of them open;
+- a slot whose window has not opened cannot be done — an entry at noon says nothing about a
+  session planned for eight in the evening;
+- a slot with no time covers the whole day, and an entry backfilled on another day (its
+  clock time is when it was typed, not when it was trained) falls back to the same day-level
+  granularity: it closes the earliest slot still open that day;
+- a slot is missed only once its window has closed, so nothing is called missed while an
+  entry could still land in it;
+- an entry that closes nothing is unplanned training, and a day's colour in the grid is the
+  summary of its slots, with a missed one dominating.
+
+The cost of being honest about it: logging a session hours away from the time it was
+planned for now leaves the slot missed and the entry unplanned, where the old day-level
+rule counted the whole day as done. That is the same information the old rule was hiding.
+
+The rule also decides where the "Log" button appears (`offersLogging`). The logging screen
+writes entries for TODAY, so only today's outstanding sessions offer it — a button on last
+Tuesday's missed slot would record the workout on the wrong day, which is the class of bug
+per-slot status exists to remove.
+
 ## Celebration pictures are yours and are copied in
 
 No image ships with the app. They are picked with the system photo picker, which needs no
@@ -153,8 +182,9 @@ record.
 
 ## Known limits
 
-- **Plan versus fact is judged per day, not per slot.** Two sessions planned on one day
-  and one workout logged marks both as done.
+- **A slot is matched to an entry by the clock, never by what was trained.** Nothing links
+  a workout to the session it belonged to, so a gym slot is closed by whatever was logged
+  near its time — a set of push-ups counts against it just as well.
 - **Strength volume is tonnage** (weight times reps). Sets done at body weight contribute
   zero, so a mixed history understates the bars.
 - **The activity heatmap counts distinct exercises per day**, not events. Counting events

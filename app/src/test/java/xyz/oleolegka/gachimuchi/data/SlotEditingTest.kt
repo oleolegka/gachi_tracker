@@ -20,7 +20,7 @@ import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
-import xyz.oleolegka.gachimuchi.domain.activeDays
+import xyz.oleolegka.gachimuchi.domain.activityStamps
 import xyz.oleolegka.gachimuchi.domain.planVsFact
 import xyz.oleolegka.gachimuchi.domain.slotsForRange
 import java.time.LocalDate
@@ -141,8 +141,13 @@ class SlotEditingTest {
     @Test
     fun `plan and fact are recomputed after every edit of the plan`() = runTest {
         val today = monday.plusDays(14)
+        // the clock the verdicts are read against: the small hours of the last day, so
+        // every earlier slot's window has closed and the last day's 18:00 one has not opened
+        val now = today.atStartOfDay()
         val exerciseId = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH)
-        // one workout, on the Monday
+        // one workout, on the Monday. The entry is written NOW and dated back to the Monday,
+        // so its clock time says nothing about when it was trained (activityStamps drops it)
+        // and it can only close a slot by the same-day fallback.
         repo.record(
             StrengthSet(
                 exercise = "Bench press", reps = 5, weightKg = 60.0,
@@ -152,8 +157,8 @@ class SlotEditingTest {
 
         suspend fun states(): Map<String, DayState> {
             val events = repo.allEvents()
-            val active = activeDays(events, monday.toString(), today.toString())
-            return planVsFact(repo.allSlots(), active, monday, today, today)
+            val stamps = activityStamps(events, monday.toString(), today.toString())
+            return planVsFact(repo.allSlots(), stamps, monday, today, now)
                 .associate { it.day to it.state }
         }
 
@@ -165,7 +170,10 @@ class SlotEditingTest {
         val id = repo.saveSlot(draft(name = "Gym", time = "18:00", rule = REPEAT_WEEKLY))!!
         assertEquals(DayState.DONE, states().getValue(monday.toString()))
         assertEquals(DayState.MISS, states().getValue(monday.plusDays(7).toString()))
-        assertEquals("today is not missed yet", DayState.PLAN, states().getValue(today.toString()))
+        assertEquals(
+            "a session whose window has not opened is not missed yet",
+            DayState.PLAN, states().getValue(today.toString()),
+        )
 
         // move it a day later: the workout stops counting for it, and the day it left is bare
         repo.saveSlot(
