@@ -238,4 +238,11 @@ data class RunSnapshot(
     @SerialName("boot_ref") val bootRef: Long,
     /** The exercise the run was started from, when it was generated from one. */
     @SerialName("exercise_id") val exerciseId: Long? = null,
+    /**
+     * What kind of run this is, recorded at the start because it cannot be recovered from
+     * the steps afterwards: a rest between sets is also a one-step program carrying an
+     * exercise id. It decides whether finishing offers to write sets into the journal
+     * (domain/RunLog.kt). Defaulted, so a snapshot written by an older build still reads.
+     */
+    @SerialName("origin") val origin: RunOrigin = RunOrigin.PROGRAM,
 )

@@ -110,6 +110,23 @@
         <receiver
             android:name=".timer.TimerReceiver"
             android:exported="false" />
+
+        <!--
+            Lets another app read ONE exported program file when "share" is used, without
+            the app holding any storage permission and without handing out a file:// URI
+            (illegal since Android 7). The grant covers a single file in the cache and ends
+            with the send. Saving to a file needs no provider at all - the system picker
+            hands back a URI the app writes to once.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

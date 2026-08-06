@@ -45,6 +45,7 @@ import xyz.oleolegka.gachimuchi.domain.workStepCount
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.isEffort
+import xyz.oleolegka.gachimuchi.ui.components.rememberProgramTransfer
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
@@ -64,12 +65,15 @@ fun TimerScreen(
     onRunProgram: (WorkoutProgram) -> Unit,
     onEditProgram: (WorkoutProgram?) -> Unit,
     onDeleteProgram: (Long) -> Unit,
+    onImportPrograms: (List<WorkoutProgram>) -> Unit,
     onSettings: (TimerSettings) -> Unit,
     onEnable: () -> Unit,
     onDisable: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalGachiColors.current
+    // owns the pickers and the dialogs of exporting and importing; see ProgramTransfer.kt
+    val transfer = rememberProgramTransfer(onImported = onImportPrograms)
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -111,6 +115,7 @@ fun TimerScreen(
                 enabled = state.enabled,
                 onRun = { onRunProgram(program) },
                 onEdit = { onEditProgram(program) },
+                onExport = { transfer.export(listOf(program)) },
                 onDelete = { onDeleteProgram(program.id) },
             )
         }
@@ -120,6 +125,23 @@ fun TimerScreen(
                 onClick = { onEditProgram(null) },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             ) { Text("New program") }
+        }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                OutlinedButton(
+                    onClick = transfer.import,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                ) { Text("Import from a file") }
+                OutlinedButton(
+                    onClick = { transfer.export(programs) },
+                    enabled = programs.isNotEmpty(),
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                ) { Text("Export all") }
+            }
         }
 
         item { SettingsSection(state, onSettings, onEnable, onDisable) }
@@ -245,6 +267,7 @@ private fun ProgramCard(
     enabled: Boolean,
     onRun: () -> Unit,
     onEdit: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
@@ -264,6 +287,7 @@ private fun ProgramCard(
                     Text("Run")
                 }
                 TextButton(onClick = onEdit) { Text("Edit") }
+                TextButton(onClick = onExport) { Text("Export") }
                 TextButton(onClick = onDelete) { Text("Delete") }
             }
         }

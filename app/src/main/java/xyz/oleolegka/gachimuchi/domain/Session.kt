@@ -87,6 +87,12 @@ fun holdSetOf(
     addedKg: Double? = null,
     reps: Int? = null,
     holdSec: Double? = null,
+    /**
+     * The pause AFTER this set. The entry card leaves it out on purpose (it cannot know a
+     * pause that has not happened yet — see [secondsBetween]); a set written from a
+     * finished interval run can, because the program states it.
+     */
+    restAfterSec: Double? = null,
 ): HoldSet = HoldSet(
     activity = exercise.name,
     // zero is "not filled in", not a set of zero reps: the validator would reject it and
@@ -99,6 +105,7 @@ fun holdSetOf(
     addedKg = addedKg?.takeIf { it > 0 },
     ownWeight = true,
     exerciseId = exercise.id,
+    restAfterSec = restAfterSec?.takeIf { it > 0 },
     opDate = opDate,
 )
 
