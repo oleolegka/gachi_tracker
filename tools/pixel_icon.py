@@ -112,7 +112,7 @@ DRAW_ORDER = ["S", "s", "V", "B", "H", "o", "E"]
 # --- geometry ------------------------------------------------------------------------
 
 CANVAS_DP = 108.0  # the adaptive-icon canvas
-SAFE_DIAMETER_DP = 66.0  # guaranteed to be visible through any launcher mask
+SAFE_DIAMETER_DP = 86.0  # the drawing's enclosing circle; 66 is the mask-proof minimum, but it leaves the art visibly small next to other launcher icons
 
 # Neighbouring rectangles are grown by this much (in canvas units, against a cell of
 # roughly 1.7) so that no hairline of the backdrop shows through the seam between two
