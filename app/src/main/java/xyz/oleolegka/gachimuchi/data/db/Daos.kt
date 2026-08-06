@@ -146,6 +146,11 @@ interface ProgramDao {
     suspend fun deleteProgram(id: Long, spaceId: Long = LOCAL_SPACE_ID)
 }
 
+/**
+ * Plan slots. Unlike the journal these are edited in place: one row is the master record
+ * of a whole series, so changing the time of a weekly session is one UPDATE rather than a
+ * rewrite of its occurrences (there are none to rewrite — they are computed).
+ */
 @Dao
 interface SlotDao {
     @Insert
@@ -153,6 +158,30 @@ interface SlotDao {
 
     @Delete
     suspend fun delete(slot: SlotEntity)
+
+    /**
+     * Edits the four fields the editor owns, by id.
+     *
+     * A column list rather than Room's @Update of a whole entity, because the editor never
+     * loads `created_at` or `space_id` and an entity rebuilt from a draft would overwrite
+     * them with whatever the rebuild made up. Returns the number of rows touched, so a
+     * caller can tell "saved" from "that slot is gone".
+     */
+    @Query(
+        "UPDATE slots SET name = :name, at_time = :atTime, repeat_rule = :repeatRule, " +
+            "anchor_date = :anchorDate WHERE space_id = :spaceId AND id = :id"
+    )
+    suspend fun updateFields(
+        id: Long,
+        name: String,
+        atTime: String?,
+        repeatRule: String,
+        anchorDate: String,
+        spaceId: Long = LOCAL_SPACE_ID,
+    ): Int
+
+    @Query("SELECT * FROM slots WHERE id = :id")
+    suspend fun byId(id: Long): SlotEntity?
 
     @Query("SELECT * FROM slots WHERE space_id = :spaceId ORDER BY id")
     fun observeAll(spaceId: Long = LOCAL_SPACE_ID): Flow<List<SlotEntity>>

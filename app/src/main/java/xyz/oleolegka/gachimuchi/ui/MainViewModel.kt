@@ -32,6 +32,7 @@ import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
@@ -202,6 +203,23 @@ class MainViewModel(
             repo.learnAlias(name, id)
             _activeExerciseId.value = id
         }
+    }
+
+    // --- the plan (§12-B) ---------------------------------------------------------------
+    //
+    // The plan is the one thing in the app that is edited rather than appended to, and the
+    // ViewModel adds nothing to it: the calendar screen builds a draft, the domain says
+    // whether it is storable, the repository writes it. There is no "current slot" state
+    // here, because the editor is a dialog that lives and dies inside the screen.
+
+    /** Creates a slot (id null) or rewrites an existing one. An unusable draft is ignored. */
+    fun saveSlot(draft: SlotDraft, id: Long? = null) {
+        viewModelScope.launch { repo.saveSlot(draft, id) }
+    }
+
+    /** Deletes a slot and, with it, every occurrence of it — past days included. */
+    fun deleteSlot(id: Long) {
+        viewModelScope.launch { repo.deleteSlot(id) }
     }
 
     /**

@@ -17,7 +17,9 @@ This is an early version — the skeleton of the app:
   a bare check-in with no metrics, and body weight;
 - personal records: estimated 1RM by the Epley formula, best weight at a given rep
   count, and maximum added weight on hangs;
-- a training calendar with repeating slots (view only for now);
+- a training calendar you can plan in: a session is a slot on a day (once, every day or
+  every week), edited and deleted from the day it sits on, with the plan checked against
+  what was actually logged (done, missed, unplanned);
 - an interval workout timer that keeps running with the screen off (see below);
 - programs exported to and imported from JSON files, through the system file picker and
   with no storage permission ([the format](docs/program-file-format.md));
@@ -31,7 +33,8 @@ This is an early version — the skeleton of the app:
 ## Planned
 
 - progress charts;
-- calendar editing;
+- richer repeat rules for the calendar: an end date, skipping a single occurrence, and
+  "every second Tuesday" — today a rule is once, daily or weekly and nothing else;
 - sync with a self-hosted server for backups.
 
 ## Design notes
@@ -95,6 +98,14 @@ are picked with the system photo picker, which needs no storage permission and h
 only the files that were tapped. Each one is copied into the app's own storage, so moving
 or deleting the original later changes nothing. With an empty gallery the feature is
 simply silent.
+
+**The plan is edited; the facts are not.** A calendar slot is one row that says "this
+session, at this time, repeating by this rule from this date" — the individual occurrences
+are computed, never stored. So editing a slot moves the whole series at once, and the
+weekday of a weekly session comes from its date field rather than from a weekday picker
+("Gym on Mon and Thu" is two slots). Deleting one removes every occurrence, the past ones
+included: days it used to sit on stop counting as missed. Nothing in the journal is
+touched by any of it — what you actually did is a separate, append-only record.
 
 **No Google Play Services.** The app depends on no Google service and is meant to work
 on GrapheneOS and other builds without them.

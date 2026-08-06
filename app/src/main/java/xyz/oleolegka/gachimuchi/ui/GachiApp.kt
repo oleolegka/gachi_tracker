@@ -215,7 +215,13 @@ fun GachiApp(viewModel: MainViewModel) {
         when (tab) {
             Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
             Tab.OVERVIEW -> OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
-            Tab.CALENDAR -> CalendarScreen(state, today, inner)
+            Tab.CALENDAR -> CalendarScreen(
+                state = state,
+                today = today,
+                modifier = inner,
+                onSaveSlot = viewModel::saveSlot,
+                onDeleteSlot = viewModel::deleteSlot,
+            )
             Tab.TIMER -> {
                 // the settings row about spoken steps has to know the answer before it is
                 // touched, so the engine is looked for when the screen appears

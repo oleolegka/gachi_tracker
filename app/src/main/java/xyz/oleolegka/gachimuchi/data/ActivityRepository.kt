@@ -15,10 +15,12 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.normPhrase
 import xyz.oleolegka.gachimuchi.domain.payloadJson
 import xyz.oleolegka.gachimuchi.domain.toPayload
+import xyz.oleolegka.gachimuchi.domain.toSlot as draftToSlot
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -147,6 +149,42 @@ class ActivityRepository(private val db: AppDatabase) {
             anchorDate = anchorDate, createdAt = now(),
         )
     )
+
+    suspend fun slot(id: Long): Slot? = db.slots().byId(id)?.toSlot()
+
+    /**
+     * Writes a slot the editor built: an INSERT when [id] is null, an UPDATE of that id
+     * otherwise. Returns the slot id, or null when the draft is not storable.
+     *
+     * The draft is validated here as well as on the screen. That is not belt and braces
+     * for its own sake — this is the boundary the database is behind, and a slot with a
+     * blank name or an unreadable time would come back out as a row the calendar has to
+     * render forever. The screen refuses first (with a message); the repository refuses
+     * last (quietly), and neither relies on the other.
+     */
+    suspend fun saveSlot(draft: SlotDraft, id: Long? = null): Long? {
+        // aliased on import: this file also declares a SlotEntity.toSlot of its own
+        val slot = draft.draftToSlot(id ?: 0L) ?: return null
+        if (id == null) {
+            return createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
+        }
+        val touched = db.slots().updateFields(
+            id = id,
+            name = slot.name,
+            atTime = slot.atTime,
+            repeatRule = slot.repeatRule,
+            anchorDate = slot.anchorDate,
+        )
+        return if (touched > 0) id else null
+    }
+
+    /**
+     * Deletes one slot — WITH ALL ITS OCCURRENCES, which is not a separate step: the
+     * occurrences are computed from this row, so removing it removes the whole series,
+     * past days included. Nothing in the journal is affected (see domain/Schedule.kt,
+     * `deletionWarning`, which is the text the user confirms).
+     */
+    suspend fun deleteSlot(id: Long) = db.slots().deleteByIds(listOf(id))
 
     /** The plan is freely editable (append-only applies to facts, not to the plan). */
     suspend fun deleteSlots(ids: List<Long>) = db.slots().deleteByIds(ids)

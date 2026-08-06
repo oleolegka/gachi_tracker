@@ -54,6 +54,7 @@ private val dayFormat = DateTimeFormatter.ofPattern("d MMMM", Locale.ENGLISH)
 private val monthFormat = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH)
 private val shortDayFormat = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 private val shortMonthFormat = DateTimeFormatter.ofPattern("MMM", Locale.ENGLISH)
+private val weekdayDayFormat = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
 /** Weekday headers of the calendar grid, Monday first (the grid starts on Monday). */
 val weekdayShort: List<String> =
@@ -148,6 +149,12 @@ fun axisUnit(format: ValueFormat, maxValue: Double): String = when (format) {
     ValueFormat.DISTANCE -> if (maxValue >= 1000) "km" else "m"
     ValueFormat.COUNT -> ""
 }
+
+/**
+ * A day with its weekday: "Thu 6 Aug". The calendar and the slot editor both need it —
+ * a plan is read as "Thursday" far more often than as "the sixth".
+ */
+fun fmtWeekdayDay(d: LocalDate): String = d.format(weekdayDayFormat)
 
 /** A short day for a chart axis or a badge: "6 Aug". */
 fun fmtShortDay(d: LocalDate): String = d.format(shortDayFormat)
