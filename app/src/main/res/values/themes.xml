@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Placeholder theme for the window before Compose starts: the colours live in the
+         Compose theme (ui/theme/Color.kt, the research_visual.md §6 palette). All this
+         sets is the window background, so it does not flash white on a dark system. -->
+    <style name="Theme.Gachimuchi" parent="android:Theme.DeviceDefault.DayNight" />
+</resources>
