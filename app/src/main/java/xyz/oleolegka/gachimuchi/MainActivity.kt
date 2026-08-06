@@ -50,12 +50,23 @@ class MainActivity : ComponentActivity() {
                 val vm: MainViewModel = viewModel(
                     factory = MainViewModel.Factory(repo, programs, timer)
                 )
-                // first launch: write the demo history and the starter programs, so the
-                // screens are not empty
-                androidx.compose.runtime.LaunchedEffect(Unit) {
-                    vm.seedIfEmpty()
-                    vm.seedProgramsIfEmpty()
-                }
+                /*
+                 * First launch writes the two STARTER PROGRAMS and nothing else.
+                 *
+                 * It used to write ninety days of invented training as well, so that no
+                 * screen would ever be seen empty. That was the wrong trade in an app whose
+                 * only claim is that its journal is true: a new user was handed somebody
+                 * else's history as if it were theirs, and the two then grew together in one
+                 * journal with no way to separate them again. Empty screens now say they are
+                 * empty and point at the button that fills them; the demo is available in
+                 * Settings, on request, and removable from the same place.
+                 *
+                 * The starter programs stay because they are not history. They are two real
+                 * protocols in a list the user can delete, they claim nothing about what
+                 * anyone has done, and the program editor is much easier to understand from
+                 * an example than from a blank form.
+                 */
+                androidx.compose.runtime.LaunchedEffect(Unit) { vm.seedProgramsIfEmpty() }
 
                 /*
                  * The celebration wraps the whole app rather than sitting on a screen: a

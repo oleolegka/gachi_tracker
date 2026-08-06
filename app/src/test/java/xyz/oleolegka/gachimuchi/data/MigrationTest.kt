@@ -15,6 +15,7 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -22,22 +23,76 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import xyz.oleolegka.gachimuchi.data.db.AliasDao
-import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventDao
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
-import xyz.oleolegka.gachimuchi.data.db.ExerciseDao
-import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
-import xyz.oleolegka.gachimuchi.data.db.SlotDao
-import xyz.oleolegka.gachimuchi.data.db.SlotEntity
+import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
+import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
+import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.toPayload
+
+/*
+ * The catalog, the aliases and the slots as they were up to schema version 3: without the
+ * demo-seed mark added in version 4.
+ *
+ * These snapshots have to exist. The old databases below used to be declared with the
+ * CURRENT entity classes, which meant Room generated today's DDL for them and the "old"
+ * database in the test already had every column the migration was about to add. That made
+ * every migration test pass for the wrong reason and would have hidden a real one: the
+ * 3 -> 4 upgrade adds a column, and against a table that already has it, ALTER TABLE fails.
+ * A phone would have refused to open its database while the test suite stayed green.
+ */
+
+@Entity(tableName = "exercises", indices = [Index(value = ["space_id", "id"])])
+data class ExerciseEntityV3(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+)
+
+@Entity(tableName = "aliases", primaryKeys = ["space_id", "key"])
+data class AliasEntityV3(
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val key: String,
+    val value: Long,
+    val uses: Int = 1,
+    val blocked: Boolean = false,
+)
+
+@Entity(tableName = "slots", indices = [Index(value = ["space_id", "id"])])
+data class SlotEntityV3(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    @ColumnInfo(name = "at_time") val atTime: String?,
+    @ColumnInfo(name = "repeat_rule") val repeatRule: String,
+    @ColumnInfo(name = "anchor_date") val anchorDate: String,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+)
+
+/** Just enough to put rows into the old tables; reading happens through the current DAOs. */
+@Dao
+interface LegacyCatalogDao {
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV3): Long
+
+    @Insert
+    suspend fun insertAlias(alias: AliasEntityV3)
+
+    @Insert
+    suspend fun insertSlot(slot: SlotEntityV3): Long
+}
 
 /**
  * Version 1 of the schema, exactly as it shipped: the four tables that existed before the
@@ -48,15 +103,13 @@ import xyz.oleolegka.gachimuchi.domain.toPayload
  * invented here, which is precisely the schema that cannot be wrong.
  */
 @Database(
-    entities = [EventEntity::class, ExerciseEntity::class, AliasEntity::class, SlotEntity::class],
+    entities = [EventEntity::class, ExerciseEntityV3::class, AliasEntityV3::class, SlotEntityV3::class],
     version = 1,
     exportSchema = false,
 )
 abstract class SchemaV1Database : RoomDatabase() {
     abstract fun events(): EventDao
-    abstract fun exercises(): ExerciseDao
-    abstract fun aliases(): AliasDao
-    abstract fun slots(): SlotDao
+    abstract fun catalog(): LegacyCatalogDao
 }
 
 /*
@@ -135,9 +188,9 @@ interface ProgramDaoV2 {
 @Database(
     entities = [
         EventEntity::class,
-        ExerciseEntity::class,
-        AliasEntity::class,
-        SlotEntity::class,
+        ExerciseEntityV3::class,
+        AliasEntityV3::class,
+        SlotEntityV3::class,
         ProgramEntityV2::class,
         ProgramGroupEntityV2::class,
         ProgramBlockEntityV2::class,
@@ -147,8 +200,32 @@ interface ProgramDaoV2 {
 )
 abstract class SchemaV2Database : RoomDatabase() {
     abstract fun events(): EventDao
-    abstract fun exercises(): ExerciseDao
+    abstract fun catalog(): LegacyCatalogDao
     abstract fun programs(): ProgramDaoV2
+}
+
+/**
+ * Version 3: the program tables have grown their exercise link and their category (so they
+ * are the CURRENT program entities), while the catalog, the aliases and the slots are still
+ * unmarked. This is the phone the 3 -> 4 migration actually runs on — including the one this
+ * change was written for, which has a demo history on it and no way to tell it apart.
+ */
+@Database(
+    entities = [
+        EventEntity::class,
+        ExerciseEntityV3::class,
+        AliasEntityV3::class,
+        SlotEntityV3::class,
+        ProgramEntity::class,
+        ProgramGroupEntity::class,
+        ProgramBlockEntity::class,
+    ],
+    version = 3,
+    exportSchema = false,
+)
+abstract class SchemaV3Database : RoomDatabase() {
+    abstract fun events(): EventDao
+    abstract fun catalog(): LegacyCatalogDao
 }
 
 /**
@@ -178,8 +255,8 @@ class MigrationTest {
         val v1 = Room.databaseBuilder(context, SchemaV1Database::class.java, dbName).build()
         opened = v1
 
-        val exerciseId = v1.exercises().insert(
-            ExerciseEntity(
+        val exerciseId = v1.catalog().insertExercise(
+            ExerciseEntityV3(
                 name = "Hangs 20 mm", form = ExerciseForm.HOLD.code,
                 createdAt = "2026-08-01T10:00:00", edgeMm = 20.0,
                 protocolWorkSec = 7.0, protocolRestSec = 3.0,
@@ -194,9 +271,9 @@ class MigrationTest {
         v1.events().insert(
             EventEntity(ts = "2026-08-01T10:00:00", type = set.type, payload = set.toPayload())
         )
-        v1.aliases().upsert(AliasEntity(key = "bench", value = exerciseId))
-        v1.slots().insert(
-            SlotEntity(
+        v1.catalog().insertAlias(AliasEntityV3(key = "bench", value = exerciseId))
+        v1.catalog().insertSlot(
+            SlotEntityV3(
                 name = "Gym", atTime = "19:00", repeatRule = "weekly",
                 anchorDate = "2026-08-01", createdAt = "2026-08-01T09:00:00",
             )
@@ -213,8 +290,8 @@ class MigrationTest {
         val v2 = Room.databaseBuilder(context, SchemaV2Database::class.java, dbName).build()
         opened = v2
 
-        v2.exercises().insert(
-            ExerciseEntity(
+        v2.catalog().insertExercise(
+            ExerciseEntityV3(
                 name = "Hangs 20 mm", form = ExerciseForm.HOLD.code,
                 createdAt = "2026-08-01T10:00:00", edgeMm = 20.0,
                 protocolWorkSec = 7.0, protocolRestSec = 3.0,
@@ -366,5 +443,79 @@ class MigrationTest {
         // mismatch, which is what would catch a column type or a default written wrongly
         val again = openVersion2()
         assertEquals(1, again.programs().countPrograms())
+    }
+
+    // --- version 3 -> 4: the demo-seed mark ------------------------------------------------
+
+    /**
+     * A phone in use before the mark existed: a catalog, a word, a plan and a journal entry,
+     * none of which knows whether it came from the demo seed. This is the state the upgrade
+     * has to be safe on, because it is the state the app is being upgraded from.
+     */
+    private suspend fun writeVersion3() {
+        val v3 = Room.databaseBuilder(context, SchemaV3Database::class.java, dbName).build()
+        opened = v3
+
+        val exerciseId = v3.catalog().insertExercise(
+            ExerciseEntityV3(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-05-01T10:00:00",
+            )
+        )
+        val set = strengthSetOf(
+            exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                id = exerciseId, name = "Bench press", form = ExerciseForm.STRENGTH,
+            ),
+            opDate = "2026-05-01", reps = 5, weightKg = 80.0,
+        )
+        v3.events().insert(
+            EventEntity(ts = "2026-05-01T10:00:00", type = set.type, payload = set.toPayload())
+        )
+        v3.catalog().insertAlias(AliasEntityV3(key = "bench", value = exerciseId))
+        v3.catalog().insertSlot(
+            SlotEntityV3(
+                name = "Gym", atTime = "18:00", repeatRule = "weekly",
+                anchorDate = "2026-05-04", createdAt = "2026-05-01T09:00:00",
+            )
+        )
+        v3.close()
+        opened = null
+    }
+
+    @Test
+    fun `everything already on the phone comes through the mark as the user's own`() = runTest {
+        writeVersion3()
+
+        val v4 = openVersion2()
+
+        // the rows are all still there
+        assertEquals(1, v4.events().count())
+        assertEquals(1, v4.slots().all().size)
+        val exercise = v4.exercises().all().single()
+        assertEquals("Bench press", exercise.name)
+
+        /*
+         * And every one of them reads as "not the seed's". That default is the whole safety
+         * property of this migration: the mark exists only to authorise DELETION, so a row
+         * whose origin is unknown has to come through as unmarked. Guessing the other way
+         * would have armed the remove button against records nobody can get back.
+         */
+        assertFalse(exercise.seeded)
+        assertFalse(v4.slots().all().single().seeded)
+        assertFalse(v4.aliases().byKey("bench")!!.seeded)
+    }
+
+    @Test
+    fun `the marked database passes Room's schema check on the next open`() = runTest {
+        writeVersion3()
+
+        openVersion2().also { it.events().count() }.close()
+        opened = null
+
+        // Room compares the database against the entity definitions here, which is what
+        // catches a column declared NOT NULL in one place and nullable in the other
+        val again = openVersion2()
+        assertEquals(1, again.events().count())
+        assertEquals(1, again.exercises().all().size)
     }
 }

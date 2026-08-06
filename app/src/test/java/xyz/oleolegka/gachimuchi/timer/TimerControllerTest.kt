@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.timer
 import android.app.AlarmManager
 import android.content.Context
 import android.os.SystemClock
+import android.os.VibratorManager
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -15,9 +16,12 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
 import xyz.oleolegka.gachimuchi.data.TimerStore
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
+import xyz.oleolegka.gachimuchi.domain.RunOrigin
+import xyz.oleolegka.gachimuchi.domain.RunState
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.StepKind
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
@@ -26,6 +30,9 @@ import xyz.oleolegka.gachimuchi.domain.flatten
 import xyz.oleolegka.gachimuchi.domain.restProgram
 import xyz.oleolegka.gachimuchi.domain.startRun
 import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * The glue between the pure runner and Android: does a command actually reach the state,
@@ -222,6 +229,180 @@ class TimerControllerTest {
 
         assertNull(revived.run.value)
         assertNull(store().loadRun())
+    }
+
+    // --- a run that finished while the process was dead --------------------------------------
+
+    /** A hangboard session: a lead-in, then two sets of three hangs with a pause between. */
+    private val repeaters = WorkoutProgram(
+        name = "Repeaters 7:3",
+        prepareSec = 15,
+        groups = listOf(
+            ProgramGroup(
+                name = "Repeaters",
+                blocks = listOf(ProgramBlock("Hang", workSec = 7, restSec = 3, repeats = 3)),
+                repeats = 2,
+                restBetweenRepeatsSec = 180,
+            )
+        ),
+    )
+
+    /**
+     * Stores a run that RAN ITSELF OUT [endedAgoMs] ago in this boot, exactly as the process
+     * would have left it: the state it was last saved in, plus a boot reference that is still
+     * current because the device has not restarted.
+     */
+    private fun storeRunThatEnded(program: WorkoutProgram, endedAgoMs: Long): RunSnapshot {
+        val steps = program.flatten()
+        val now = SystemClock.elapsedRealtime()
+        val snapshot = RunSnapshot(
+            programId = 0,
+            programName = program.name,
+            steps = steps,
+            // last saved on its final step, which has since run out
+            state = RunState(stepIndex = steps.lastIndex, running = true, stepEndAtMs = now - endedAgoMs),
+            bootRef = System.currentTimeMillis() - now,
+            exerciseId = 42,
+            origin = RunOrigin.EXERCISE,
+        )
+        store().saveRun(snapshot)
+        return snapshot
+    }
+
+    /**
+     * The scenario the whole persisted-offer feature exists for, taken one step further than
+     * it used to be tested: the process does not merely miss the end of the run, it is GONE
+     * when the run ends, and the outcome is built by a fresh controller hours later.
+     *
+     * Nothing here drives the controller. The run is put on disk and a new controller is
+     * constructed, which is what a process rebuilt by the alarm receiver — or by the user
+     * opening the app the next morning — actually does.
+     */
+    @Test
+    fun `an outcome materialised from disk is dated when the run ended, not when it was found`() {
+        ShadowSystemClock.advanceBy(Duration.ofHours(12))
+        val saved = storeRunThatEnded(repeaters, endedAgoMs = 11 * 3600_000L)
+        // the wall moment the run's last step ended, as the phone would reconstruct it
+        val endedAtWallMs = saved.bootRef + saved.state.stepEndAtMs
+
+        val revived = newController()
+
+        val outcome = revived.outcome.value
+        assertNotNull("a session that happened must not be lost to the process dying", outcome)
+        assertEquals(listOf(3, 3), outcome!!.sets.map { it.reps })
+
+        /*
+         * The moment the LAST STEP ENDED, reconstructed from the boot reference — not the
+         * moment this controller was built. The old code read the wall clock here, so this
+         * value came back eleven hours late and the date with it: an evening session filed
+         * under the following morning, in the one record the app exists to keep.
+         *
+         * The second of slack is the boot reference being recomputed as the run is picked up:
+         * wall minus monotonic wobbles by a few milliseconds between two readings, which is
+         * the same jitter [isRunStale] tolerates on a real device. Eleven hours is the error
+         * being tested for; a millisecond is not.
+         */
+        assertTrue(
+            "ended at ${outcome.endedAtWallMs}, expected about $endedAtWallMs",
+            kotlin.math.abs(outcome.endedAtWallMs - endedAtWallMs) < 1_000,
+        )
+        assertEquals(
+            Instant.ofEpochMilli(endedAtWallMs).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
+            outcome.opDate,
+        )
+        // and the offer knows it is stale, which is what makes it say when the run ended
+        assertFalse(outcome.isFresh(System.currentTimeMillis()))
+    }
+
+    @Test
+    fun `a run the device restarted out from under keeps the sets it had already done`() {
+        val steps = repeaters.flatten()
+        // 15 s lead-in, then two sets of three hangs: 1,3,5 and 7,9,11
+        assertEquals(12, steps.size)
+
+        val stepStartedAt = 600_000L
+        val endedWallMs = System.currentTimeMillis() - 30 * 60_000L
+        store().saveRun(
+            RunSnapshot(
+                programId = 0,
+                programName = repeaters.name,
+                steps = steps,
+                // standing on the second hang of set 2 when the battery went
+                state = RunState(
+                    stepIndex = 9, running = true, stepEndAtMs = stepStartedAt + steps[9].durationMs,
+                ),
+                // wall minus monotonic, from the boot that has since ended
+                bootRef = endedWallMs - stepStartedAt,
+                exerciseId = 42,
+                origin = RunOrigin.EXERCISE,
+            )
+        )
+
+        val revived = newController()
+
+        // the run itself is still discarded: its end moments are readings of a clock that no
+        // longer exists, and resuming would count down from an arbitrary number
+        assertNull(revived.run.value)
+        assertNull(store().loadRun())
+
+        /*
+         * But the sets are not readings of anything. Three hangs and one more happened, and
+         * they used to be thrown away in silence along with the snapshot — a phone that ran
+         * out of battery mid-session lost the session and never said so.
+         */
+        val outcome = revived.outcome.value
+        assertNotNull("a reboot must not swallow the part of the session that happened", outcome)
+        assertEquals(listOf(3, 1), outcome!!.sets.map { it.reps })
+        assertTrue(outcome.interrupted)
+        // dated from the start of the step it was standing on: the last moment the run is
+        // KNOWN to have been alive, rather than where that step would have ended
+        assertEquals(endedWallMs, outcome.endedAtWallMs)
+        // and it is quiet about it
+        assertFalse(vibrated())
+    }
+
+    @Test
+    fun `finding a finished run on launch does not gong the room`() {
+        ShadowSystemClock.advanceBy(Duration.ofHours(12))
+        storeRunThatEnded(repeaters, endedAgoMs = 4 * 3600_000L)
+
+        val revived = newController()
+
+        /*
+         * The signals go out on the alarm stream and ignore the ringer switch (see
+         * Signals.kt) — deliberately, because that is the only way to be heard at the gym.
+         * The cost of getting this wrong is therefore not a stray beep: it is a full-volume
+         * gong and a long vibration, in a quiet room, for a workout that ended before dinner,
+         * every time the app is opened. The offer below is the right way to raise a run that
+         * ended hours ago.
+         */
+        assertFalse("a run that ended four hours ago is not news", vibrated())
+        assertNotNull(revived.outcome.value)
+    }
+
+    @Test
+    fun `a boundary the alarm delivers on time still signals`() {
+        ShadowSystemClock.advanceBy(Duration.ofHours(12))
+        // the backstop alarm fires AT the boundary, and the process it wakes may be brand new:
+        // this is the same restore path as the test above and it must behave the opposite way
+        storeRunThatEnded(repeaters, endedAgoMs = 200)
+
+        newController()
+
+        assertTrue("the backstop alarm is the reason this path exists", vibrated())
+    }
+
+    /**
+     * Whether anything asked the vibrator to do something.
+     *
+     * Vibration rather than the tone, because it is the channel the app treats as primary
+     * (Signals.kt) and because Robolectric records it: the shadow keeps the attributes of the
+     * last vibration, which are null until something vibrates.
+     */
+    private fun vibrated(): Boolean {
+        val vibrator = context.getSystemService(VibratorManager::class.java).defaultVibrator
+        val shadow = shadowOf(vibrator)
+        return shadow.isVibrating || shadow.vibrationAttributesFromLastVibration != null
     }
 
     // --- settings ------------------------------------------------------------------------

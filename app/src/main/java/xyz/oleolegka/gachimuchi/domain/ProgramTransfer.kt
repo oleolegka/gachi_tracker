@@ -209,6 +209,35 @@ private fun problemWith(program: PortableProgram): String? {
             }
         }
     }
+
+    /*
+     * ── And then the numbers together ───────────────────────────────────────────
+     * Everything above judges one value at a time, and a program can be built entirely out
+     * of reasonable values and still be impossible: a group repeated 40 times around 60
+     * efforts is 2400 steps, and every number in it passes. [flatten] stops expanding at
+     * [MAX_PROGRAM_STEPS] and says nothing about having done so — so the file imported, the
+     * user was told "Imported 1 program", and what landed was a protocol quietly cut off
+     * part way through. A truncated program is the exact failure this validator exists to
+     * prevent; arriving at it by multiplication rather than by one bad field made no
+     * difference to the person whose hangboard session stopped early.
+     *
+     * Two steps, because the cheap one guards the exact one. The effort count is arithmetic
+     * and cannot blow up; only once it is known to be small is the program expanded for
+     * real, which is the only way to count what [flatten] will actually emit (zero-length
+     * steps dropped, adjacent rests merged, trailing rest removed) rather than an estimate.
+     */
+    val efforts = program.groups.sumOf { group ->
+        group.repeats.toLong() * group.blocks.sumOf { it.repeats.toLong() }
+    }
+    if (efforts > MAX_PROGRAM_STEPS) {
+        return "\"$name\" expands to $efforts efforts, more than the $MAX_PROGRAM_STEPS steps a " +
+            "program can hold. The repeat counts multiply together - check them as a whole."
+    }
+    val steps = program.toProgram().flatten().size
+    if (steps >= MAX_PROGRAM_STEPS) {
+        return "\"$name\" expands to $steps steps, which is the most a program can hold. It would " +
+            "be cut short rather than run to the end - shorten it and export it again."
+    }
     return null
 }
 

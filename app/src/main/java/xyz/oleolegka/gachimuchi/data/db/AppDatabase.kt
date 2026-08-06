@@ -33,7 +33,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -130,7 +130,34 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        /**
+         * Version 3 -> 4: the demo-seed marker on the catalog, the aliases and the slots.
+         *
+         * Purely additive: one boolean column per table, NOT NULL with a default of 0, so
+         * every row already on the phone reads as "the user's own" — which is the safe
+         * answer, because the only thing this flag is ever used for is DELETION.
+         *
+         * That default is also why the migration does not try to be clever and stamp the
+         * demo rows an older build wrote. It cannot tell them apart from the user's: the
+         * seed's exercises are deduplicated by name, so a hand-made "Bench press" and a
+         * seeded one are the same row shape, and a migration that guessed wrong would
+         * quietly arm a delete button against real data. Recognising that older demo data is
+         * done at wipe time instead (data/seed/DemoCleanup.kt), where the journal can be
+         * consulted and a row that carries real records can be spared.
+         *
+         * NOT NULL with a default rather than nullable, because [ExerciseEntity] and friends
+         * declare a non-null Boolean: Room compares the database against the entities on the
+         * next open and a nullable column here would fail that check.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (table in listOf("exercises", "aliases", "slots")) {
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `$COLUMN_SEEDED` INTEGER NOT NULL DEFAULT 0")
+                }
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

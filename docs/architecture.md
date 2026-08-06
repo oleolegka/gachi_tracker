@@ -32,8 +32,28 @@ while the process is frozen, and returning after four minutes away lands on the 
 workout is genuinely on.
 
 A run is persisted as that end moment plus a boot reference. That is what lets it survive
-the process being killed, and what makes it obvious that a run from before a reboot must
-be discarded rather than resumed.
+the process being killed, and what makes it obvious that a run from before a reboot cannot
+be resumed — its end moments are readings of a clock that no longer exists.
+
+Cannot be resumed is not the same as worthless. The count of sets a run got through owes
+nothing to the monotonic clock, so a run a reboot ended is offered as the part that
+happened, conservatively: the step it was standing on does not count, because the device
+could have gone down at any point inside it. The boot reference does one more job here — it
+is wall minus monotonic, so it turns those dead readings back into the wall time the run
+was last known to be alive.
+
+The same reference is what dates a session. An outcome is very often built long after the
+run ends, because a run ends with the phone in a pocket and the process may not survive
+until the screen is looked at; reading the wall clock at that point filed evening sessions
+under the following morning. The day comes from `bootRef + the moment the last step ended`,
+never from "now".
+
+And nothing announces a boundary that is not now. The path that rebuilds the controller
+from disk is both the recovery path and the backstop path — the exact alarm wakes a dead
+process and the rebuilt controller settling the state is what produces the beep — so the
+signal cannot be suppressed on restore. It is gated on lateness instead: within a few
+seconds of the boundary it sounds, and hours later it does not, which is the difference
+between an alarm firing and a person opening the app.
 
 Keeping it alive takes three mechanisms, because no single one is enough:
 
@@ -209,12 +229,35 @@ the gesture before the app sees it.
 
 ## Logging is entered from anywhere, but only offered where it means something
 
-The button lives on the Today tab alone. Screens that know what would be recorded — a
-planned session on the calendar, a finished run on the timer — offer their own way in
-through `LocalOpenLogging`, so no screen needs a new parameter to do it. Putting the button
-on all five tabs was tried and reverted: it turned the app's primary action into furniture
-that followed the user onto Settings and onto the yearly heatmap, where there is nothing to
-record.
+The button lives on the Today tab alone. A screen that knows what would be recorded offers
+its own way in through `LocalOpenLogging`, so it needs no new parameter to do it — today
+that is the calendar, where tapping a planned session opens the entry card on the exercise
+it is about. Putting the button on all five tabs was tried and reverted: it turned the
+app's primary action into furniture that followed the user onto Settings and onto the
+yearly heatmap, where there is nothing to record.
+
+The timer is the exception, and it is not a gap. A finished run does not open the logging
+screen at all: it raises an offer that already knows the sets, the exercise and the day,
+and confirming it writes them through the repository directly. Sending it through the
+entry card would mean re-typing four sets the app has just counted, which is the problem
+the offer exists to remove.
+
+## Demo data is asked for, and can be taken back
+
+The app used to write about ninety days of invented training on first launch so that no
+screen would ever be seen empty. That is the wrong trade for an app whose only claim is
+that its journal is true, and the removal half was missing entirely: the synthetic sets
+went into the same journal as the real ones and stayed there.
+
+It now lives in Settings, behind a confirmation, in both directions. Everything the seed
+creates is marked — events by a negative author id, catalog rows, aliases and slots by a
+`seeded` column (schema version 4) — so removal can take exactly what it wrote. Two rules
+keep that safe. An exercise that carries records the user made is never deleted; it stops
+being demo data instead. And demo data written before the mark existed is recognised by
+matching the known set of names, which is a guess, so it is only acted on from the button
+that shows what it is about to remove first.
+
+Empty screens now say they are empty and name the button that fills them.
 
 ## Known limits
 

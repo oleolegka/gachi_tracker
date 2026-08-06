@@ -327,6 +327,21 @@ fun ActivityForm.toJsonObject(): JsonObject = when (this) {
  * Re-validates the payload through the init blocks (idempotent).
  * Throws [IllegalArgumentException] if the type is not a domain form.
  */
+/**
+ * [formFromEvent] for a row that is allowed to be rubbish: an unreadable payload comes back
+ * as null instead of throwing.
+ *
+ * The journal is append-only and its rows are validated on the way in, so in a journal this
+ * app wrote by itself nothing here can fail. It is not the only writer any more: entries are
+ * meant to be exchanged with the bot, and a file that arrives truncated, hand-edited or
+ * written by a newer schema puts ONE unreadable row in the middle of years of good ones.
+ * Every reducer folds the whole journal, so a throw on that row took out the four screens
+ * built on top of them — the app would not open, on the one device holding the history.
+ * Skipping the row loses the row; throwing loses the app.
+ */
+fun formFromEventOrNull(type: String, payload: String): ActivityForm? =
+    runCatching { formFromEvent(type, payload) }.getOrNull()
+
 fun formFromEvent(type: String, payload: String): ActivityForm = when (type) {
     TYPE_STRENGTH_SET -> payloadJson.decodeFromString<StrengthSet>(payload)
     TYPE_HOLD_SET -> payloadJson.decodeFromString<HoldSet>(payload)

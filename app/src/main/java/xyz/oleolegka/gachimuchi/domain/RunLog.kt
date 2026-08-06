@@ -2,6 +2,8 @@ package xyz.oleolegka.gachimuchi.domain
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * What a finished run is worth writing down.
@@ -191,19 +193,48 @@ const val FRESH_OUTCOME_MS = 10 * 60 * 1000L
 const val OUTCOME_MAX_AGE_MS = 24 * 60 * 60 * 1000L
 
 /**
+ * The monotonic moment a run ENDED, as opposed to the moment anyone noticed.
+ *
+ * A run that ran itself out ended at the end of its last step, which [settleRun] leaves in
+ * [RunState.stepEndAtMs] — a reading that may be hours old by the time it is read, because
+ * the process can be killed mid-run and the end only discovered when the app is next opened.
+ * A run that was stopped, skipped or paused out of existence ends now, because "now" is when
+ * the user did that.
+ *
+ * The cap at [now] matters for the second case: a run stopped by hand is standing inside a
+ * step whose end moment is in the FUTURE, and taking that at face value would file the
+ * session under a moment that has not happened yet.
+ */
+fun runEndedAtMs(steps: List<WorkoutStep>, state: RunState, now: Long): Long {
+    val settled = settleRun(steps, state, now)
+    return if (settled.finished) settled.stepEndAtMs.coerceAtMost(now) else now
+}
+
+/**
  * Reads a run — live or just ended — as an outcome, settling its state against [now] first.
  *
- * [now] is the monotonic clock the run is expressed in; [wallMs] and [opDate] are the wall
- * clock and the calendar day, which the monotonic one cannot supply and which are what make
- * a stored offer readable later.
+ * ── Where the day comes from, and why it is not "today" ─────────────────────────
+ * [now] is monotonic and cannot name a day, so the wall clock has to come from somewhere.
+ * It comes from the run itself: [RunSnapshot.bootRef] is wall-minus-monotonic, so
+ * `bootRef + endedAt` is the WALL MOMENT THE RUN ENDED, not the moment this function was
+ * called. Those are the same thing in the ordinary case and hours apart in the case this
+ * exists for — an evening session whose process Android killed, materialised when the phone
+ * is unlocked the next morning. Reading the clock here filed that session under the wrong
+ * day, silently, in the one record the app is for; it also made the offer claim the run had
+ * just ended, so neither the "this run ended at HH:MM" warning nor the twenty-four hour cut
+ * off could ever fire on the path they were written for.
+ *
+ * A snapshot with no boot reference (bootRef = 0, which only happens in tests and in
+ * hand-built values) yields no wall time and no date, and the offer reads as "when this
+ * happened is not known" — the same as before any of this was recorded.
  */
 fun runOutcome(
     snapshot: RunSnapshot,
     now: Long,
-    wallMs: Long = 0,
-    opDate: String = "",
+    zone: ZoneId = ZoneId.systemDefault(),
 ): RunOutcome {
     val settled = settleRun(snapshot.steps, snapshot.state, now)
+    val endedAtWallMs = wallMomentOf(snapshot.bootRef, runEndedAtMs(snapshot.steps, snapshot.state, now))
     return RunOutcome(
         programName = snapshot.programName,
         origin = snapshot.origin,
@@ -211,10 +242,55 @@ fun runOutcome(
         programId = snapshot.programId,
         interrupted = !settled.finished,
         sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished),
-        endedAtWallMs = wallMs,
-        opDate = opDate,
+        endedAtWallMs = endedAtWallMs,
+        opDate = isoDateOf(endedAtWallMs, zone),
     )
 }
+
+/**
+ * What a run that a REBOOT ended is worth writing down.
+ *
+ * A snapshot from a previous boot cannot be resumed — its end moments are readings of a
+ * clock that no longer exists — but the sets it already got through are not readings of
+ * anything. They are a count of work steps the run moved past, and that count survives a
+ * restart perfectly well. Throwing the whole snapshot away, which is what used to happen,
+ * silently lost the finished part of a session to a battery running flat.
+ *
+ * Two deliberate conservatisms, because this is reconstruction and not a record:
+ * - the step the run was standing on is NOT counted. The device could have gone down at any
+ *   point inside it, and counting an effort that may not have happened is the failure this
+ *   whole feature is built to avoid;
+ * - the run is dated from the START of that step — the last moment it is known to have been
+ *   alive — rather than from where the step would have ended.
+ *
+ * [RunSnapshot.bootRef] is from the old boot and that is exactly right here: it was
+ * wall-minus-monotonic while those monotonic numbers still meant something, so it converts
+ * them back to wall time across the restart.
+ */
+fun salvagedOutcome(snapshot: RunSnapshot, zone: ZoneId = ZoneId.systemDefault()): RunOutcome {
+    val index = snapshot.state.stepIndex.coerceIn(0, maxOf(0, snapshot.steps.lastIndex))
+    val stepStart = snapshot.state.stepEndAtMs - (snapshot.steps.getOrNull(index)?.durationMs ?: 0L)
+    val endedAtWallMs = wallMomentOf(snapshot.bootRef, stepStart)
+    return RunOutcome(
+        programName = snapshot.programName,
+        origin = snapshot.origin,
+        exerciseId = snapshot.exerciseId,
+        programId = snapshot.programId,
+        interrupted = true,
+        sets = completedSets(snapshot.steps, endedAtIndex = snapshot.state.stepIndex, finished = false),
+        endedAtWallMs = endedAtWallMs,
+        opDate = isoDateOf(endedAtWallMs, zone),
+    )
+}
+
+/** Wall time from a boot reference and a monotonic reading; 0 when either is unusable. */
+private fun wallMomentOf(bootRef: Long, elapsedMs: Long): Long {
+    if (bootRef <= 0 || elapsedMs < 0) return 0
+    return bootRef + elapsedMs
+}
+
+private fun isoDateOf(wallMs: Long, zone: ZoneId): String =
+    if (wallMs <= 0) "" else Instant.ofEpochMilli(wallMs).atZone(zone).toLocalDate().toString()
 
 /**
  * The journal entries a set of [CompletedSet]s becomes — one [HoldSet] per set, exactly

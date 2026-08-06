@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -63,7 +62,6 @@ fun TodayScreen(
     state: UiState,
     today: LocalDate,
     modifier: Modifier = Modifier,
-    onReseed: () -> Unit = {},
 ) {
     val iso = today.toString()
     val colors = LocalGachiColors.current
@@ -77,21 +75,24 @@ fun TodayScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row {
-                    Text(
-                        today.format(weekdayDateFormat),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(" - ${today.year}", fontSize = 13.sp, color = colors.inkSecondary)
-                }
-                TextButton(onClick = onReseed) { Text("Demo data") }
+            /*
+             * The date, and nothing beside it.
+             *
+             * There used to be a "Demo data" button here, one tap from the primary screen,
+             * with no confirmation, which poured synthetic sets straight into the journal —
+             * and because the catalog deduplicates by name, those sets landed on the user's
+             * own exercises. The one screen that answers "what did I do today" was the one
+             * screen that could make that answer untrue by accident. It now lives in
+             * Settings, behind a question, with a way back out.
+             */
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    today.format(weekdayDateFormat),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(" - ${today.year}", fontSize = 13.sp, color = colors.inkSecondary)
             }
         }
 

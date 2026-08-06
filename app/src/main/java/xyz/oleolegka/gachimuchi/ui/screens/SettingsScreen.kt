@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -23,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,23 +38,38 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import xyz.oleolegka.gachimuchi.data.GalleryStore
+import xyz.oleolegka.gachimuchi.data.seed.demoInventory
+import xyz.oleolegka.gachimuchi.data.seed.keptExercisesNote
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.CelebrationPicture
+import xyz.oleolegka.gachimuchi.ui.DemoPrompt
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicturePicker
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
- * The settings tab. Right now it holds one thing — the celebration pictures — and it
- * exists as a tab of its own rather than as a section of another screen because the
+ * The settings tab: the celebration pictures, and the demo data.
+ *
+ * It exists as a tab of its own rather than as a section of another screen because the
  * settings that are still to come (and the timer's own, which live on the timer screen
  * next to the thing they configure) need somewhere to land.
  *
  * The timer's settings deliberately stay where they are. They are read while looking at a
- * countdown; these are read once, when the pictures are set up, and never again.
+ * countdown; these are read once and then rarely again.
+ *
+ * ── Why the demo data is HERE and behind two taps ───────────────────────────────
+ * It was a bare button on the Today screen and it ran on first launch. Both were wrong for
+ * the same reason: writing ninety days of invented sets into a real journal is a
+ * destructive act, and so is deleting them again, and neither belongs one tap from the
+ * screen used during a workout. Settings is where a thing is done deliberately, and both
+ * directions state what they are about to do — with counts, not reassurances — before they
+ * do it.
  */
 @Composable
-fun SettingsScreen(modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    demo: DemoActions,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val gallery = remember(context) { GalleryStore.get(context) }
     val pictures by gallery.pictures.collectAsStateWithLifecycle()
@@ -153,7 +170,160 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 onToggleRecord = { gallery.setForRecords(picture.id, !picture.forRecords) },
             )
         }
+
+        item {
+            Text(
+                "Demo data",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            Text(
+                "Ninety days of made-up training, so the charts and the records have " +
+                    "something to draw. It is not yours and it never was: it goes into the " +
+                    "same journal as your own records, marked, and can be taken back out " +
+                    "from here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
+            )
+        }
+
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = demo.askWrite,
+                    enabled = !demo.busy,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Add demo data") }
+                OutlinedButton(
+                    onClick = demo.askRemove,
+                    enabled = !demo.busy,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Remove demo data") }
+            }
+        }
+
+        demo.note?.let { text ->
+            item {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.inkSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = demo.dismissNote) { Text("OK") }
+                }
+            }
+        }
     }
+
+    demo.prompt?.let { prompt ->
+        DemoConfirmDialog(prompt = prompt, onConfirm = demo.confirm, onDismiss = demo.dismissPrompt)
+    }
+}
+
+/** What the settings screen needs in order to offer the demo data, and nothing more. */
+data class DemoActions(
+    val prompt: DemoPrompt?,
+    val note: String?,
+    val busy: Boolean,
+    val askWrite: () -> Unit,
+    val askRemove: () -> Unit,
+    val confirm: () -> Unit,
+    val dismissPrompt: () -> Unit,
+    val dismissNote: () -> Unit,
+)
+
+/**
+ * The question asked before either direction runs.
+ *
+ * The removal branch describes the ACTUAL PLAN — the counts were worked out from the
+ * database before this dialog appeared, and the same plan is what runs when it is confirmed.
+ * A confirmation that promises "only demo data" while the code decides afterwards what that
+ * means is not a confirmation, it is a formality; this one can be checked against what the
+ * screens look like a moment later.
+ */
+@Composable
+private fun DemoConfirmDialog(prompt: DemoPrompt, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val colors = LocalGachiColors.current
+    val plan = (prompt as? DemoPrompt.Remove)?.plan
+    val nothingToDo = plan != null && plan.isEmpty
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                when {
+                    prompt is DemoPrompt.Write -> "Add demo data?"
+                    nothingToDo -> "No demo data found"
+                    else -> "Remove demo data?"
+                }
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                when {
+                    prompt is DemoPrompt.Write -> {
+                        Text(
+                            "This writes about ninety days of invented training into your " +
+                                "journal, along with the exercises and the planned sessions " +
+                                "it needs.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "Your own records are not touched, and \"Remove demo data\" " +
+                                "takes all of it back out again.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.inkMuted,
+                        )
+                    }
+
+                    nothingToDo -> Text(
+                        "Nothing on this phone looks like demo data, so there is nothing to " +
+                            "remove.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+
+                    else -> {
+                        Text(
+                            "This removes ${demoInventory(plan!!)}.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "Records you entered yourself are not touched.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.inkMuted,
+                        )
+                        keptExercisesNote(plan).takeIf { it.isNotEmpty() }?.let {
+                            Text(it, style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (nothingToDo) {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            } else {
+                TextButton(onClick = onConfirm) {
+                    Text(if (prompt is DemoPrompt.Write) "Add it" else "Remove it")
+                }
+            }
+        },
+        dismissButton = {
+            if (!nothingToDo) TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

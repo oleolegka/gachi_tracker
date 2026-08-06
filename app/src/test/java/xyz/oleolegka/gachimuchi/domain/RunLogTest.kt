@@ -194,6 +194,131 @@ class RunLogTest {
         assertEquals(4, outcome.sets.size)
     }
 
+    // --- WHEN the run ended, as opposed to when anyone found out ---------------------------
+    //
+    // The offer outlives the process, which means the code that turns a run into an outcome
+    // very often runs long after the run itself. Everything below is about that gap. Reading
+    // the wall clock at materialisation time was wrong in three visible ways at once: an
+    // evening session was filed under the next morning, the offer claimed the run had just
+    // ended, and the twenty-four hour cut off measured from the wrong end.
+
+    private val utc: java.time.ZoneId = java.time.ZoneId.of("UTC")
+
+    /** 2026-08-05, 21:40 UTC — an evening hangboard session. */
+    private val eveningWallMs = java.time.LocalDateTime.of(2026, 8, 5, 21, 40)
+        .toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
+
+    @Test
+    fun `a finished run ended when its last step ended, not when it was noticed`() {
+        val endedAt = 900_000L
+        val state = RunState(stepIndex = steps.lastIndex, running = true, stepEndAtMs = endedAt)
+
+        // discovered twelve hours later, on the next launch
+        assertEquals(endedAt, runEndedAtMs(steps, state, now = endedAt + 12 * 3600_000L))
+    }
+
+    @Test
+    fun `a run still going ends now, and not at a moment in the future`() {
+        val state = RunState(stepIndex = 29, running = true, stepEndAtMs = 5_000)
+
+        // stopped by hand inside a step: its end moment has not arrived and must not be used
+        assertEquals(1_000L, runEndedAtMs(steps, state, now = 1_000))
+    }
+
+    @Test
+    fun `an evening session answered the next morning is filed under the evening`() {
+        val endedAt = 900_000L
+        val bootRef = eveningWallMs - endedAt
+        val snapshot = RunSnapshot(
+            programId = 0, programName = program.name, steps = steps,
+            state = RunState(stepIndex = steps.lastIndex, running = true, stepEndAtMs = endedAt),
+            bootRef = bootRef, exerciseId = hangs.id, origin = RunOrigin.EXERCISE,
+        )
+
+        // the process was killed; the outcome is materialised when the phone is unlocked at
+        // 09:00 the following day
+        val outcome = runOutcome(snapshot, now = endedAt + 11 * 3600_000L + 20 * 60_000L, zone = utc)
+
+        assertEquals("2026-08-05", outcome.opDate)
+        assertEquals(eveningWallMs, outcome.endedAtWallMs)
+        assertEquals(4, outcome.sets.size)
+        // and it knows it is not fresh, which is what puts "this run ended at 21:40" on the
+        // offer instead of letting it pretend the session just finished
+        assertFalse(outcome.isFresh(eveningWallMs + 11 * 3600_000L))
+        assertFalse(outcome.isExpired(eveningWallMs + 11 * 3600_000L))
+    }
+
+    @Test
+    fun `a snapshot with no boot reference says it does not know when it ended`() {
+        val state = RunState(stepIndex = steps.lastIndex, running = false, finished = true)
+
+        val outcome = runOutcome(snapshot(state, RunOrigin.EXERCISE), now = 0, zone = utc)
+
+        // bootRef 0 is "unknown", and an unknown moment is reported as unknown rather than
+        // as 1970 or as today
+        assertEquals(0L, outcome.endedAtWallMs)
+        assertEquals("", outcome.opDate)
+        assertTrue(outcome.isFresh(System.currentTimeMillis()))
+    }
+
+    // --- a run the device restarted out from under ------------------------------------------
+
+    @Test
+    fun `a reboot keeps the sets that were already done and dates them honestly`() {
+        /*
+         * Set 3, second hang (step 27), saved at the moment that step began. The device then
+         * went down; the monotonic clock it was counting against no longer exists, so the run
+         * cannot be resumed — but two complete sets happened and they are not in doubt.
+         */
+        val stepStart = 900_000L
+        val state = RunState(
+            stepIndex = 27, running = true, stepEndAtMs = stepStart + steps[27].durationMs,
+        )
+        val snapshot = RunSnapshot(
+            programId = 0, programName = program.name, steps = steps, state = state,
+            bootRef = eveningWallMs - stepStart, exerciseId = hangs.id, origin = RunOrigin.EXERCISE,
+        )
+
+        val outcome = salvagedOutcome(snapshot, zone = utc)
+
+        assertTrue(outcome.offersLogging)
+        assertTrue(outcome.interrupted)
+        // the two finished sets, and the one hang of set 3 that had already been completed;
+        // the hang the run was STANDING ON is not counted - the device could have gone down
+        // at any point inside it
+        assertEquals(listOf(6, 6, 1), outcome.sets.map { it.reps })
+        // dated from the last moment the run is known to have been alive
+        assertEquals(eveningWallMs, outcome.endedAtWallMs)
+        assertEquals("2026-08-05", outcome.opDate)
+    }
+
+    @Test
+    fun `a rest between sets is not salvaged across a reboot either`() {
+        val rest = restProgram(150)
+        val restSteps = rest.flatten()
+        val snapshot = RunSnapshot(
+            programId = 0, programName = rest.name, steps = restSteps,
+            state = RunState(stepIndex = 0, running = true, stepEndAtMs = 150_000),
+            bootRef = eveningWallMs, exerciseId = hangs.id, origin = RunOrigin.REST,
+        )
+
+        assertFalse(salvagedOutcome(snapshot, zone = utc).offersLogging)
+    }
+
+    @Test
+    fun `a reboot during the lead-in salvages nothing at all`() {
+        val state = RunState(stepIndex = 0, running = true, stepEndAtMs = 15_000)
+        val snapshot = RunSnapshot(
+            programId = 0, programName = program.name, steps = steps, state = state,
+            bootRef = eveningWallMs, exerciseId = hangs.id, origin = RunOrigin.EXERCISE,
+        )
+
+        val outcome = salvagedOutcome(snapshot, zone = utc)
+
+        assertTrue(outcome.sets.isEmpty())
+        assertFalse("nothing happened, so there is nothing to raise a dialog about", outcome.offersLogging)
+    }
+
     // --- what actually gets written --------------------------------------------------------
 
     @Test

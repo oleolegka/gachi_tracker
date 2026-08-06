@@ -32,10 +32,17 @@ data class ActivityEvent(
     val form: ActivityForm,
 )
 
-/** Ids of the sets reversed by [TYPE_SET_CANCEL] events. */
+/**
+ * Ids of the sets reversed by [TYPE_SET_CANCEL] events.
+ *
+ * A reversal that cannot be read is skipped rather than thrown on — see [formFromEventOrNull]
+ * for why one bad row must not be able to take the app down. The cost is stated plainly: the
+ * set that reversal belonged to goes back to counting, which is visible in the feed and can
+ * be cancelled again, whereas the alternative is four screens that do not open.
+ */
 fun cancelledEventIds(events: List<JournalEvent>): Set<Long> =
     events.filter { it.type == TYPE_SET_CANCEL }
-        .map { payloadJson.decodeFromString<SetCancel>(it.payload).cancels }
+        .mapNotNull { runCatching { payloadJson.decodeFromString<SetCancel>(it.payload).cancels }.getOrNull() }
         .toSet()
 
 /**
@@ -45,6 +52,10 @@ fun cancelledEventIds(events: List<JournalEvent>): Set<Long> =
  * inclusive [dateFrom]..[dateTo] range over op_date, and an exact normalized [key]
  * (body weight is excluded whenever a key is given — it has no key).
  * [includeCancelled] = false drops reversed sets.
+ *
+ * A row whose payload will not parse is SKIPPED, not thrown on ([formFromEventOrNull]).
+ * This function is the floor every screen stands on, and one damaged row used to take all
+ * of them down at once.
  */
 fun readActivities(
     events: List<JournalEvent>,
@@ -61,7 +72,7 @@ fun readActivities(
     for (row in events) {
         if (row.type !in typeSet) continue
         if (row.id in cancelled) continue
-        val form = formFromEvent(row.type, row.payload)
+        val form = formFromEventOrNull(row.type, row.payload) ?: continue
         if (dateFrom != null && form.opDate < dateFrom) continue
         if (dateTo != null && form.opDate > dateTo) continue
         if (wantKey != null && form.key != wantKey) continue
@@ -74,6 +85,17 @@ fun readActivities(
     }
     return out
 }
+
+/**
+ * Every catalog exercise these events point at — CANCELLED SETS INCLUDED.
+ *
+ * Deliberately not built on [readActivities]: that drops reversed sets, and this answers a
+ * different question. A cancelled set is still a row in the journal that names its exercise,
+ * so deleting the catalog row underneath it would leave a record nothing can label. Used by
+ * the demo wipe to decide which of its own exercises have to be spared.
+ */
+fun exerciseIdsReferencedBy(events: List<JournalEvent>): Set<Long> =
+    events.mapNotNullTo(HashSet()) { formFromEventOrNull(it.type, it.payload)?.exerciseId }
 
 /** Strength sets of one exercise on one day (a plain reducer, no record detection). */
 data class StrengthDayGroup(

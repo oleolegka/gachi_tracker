@@ -42,6 +42,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
+import xyz.oleolegka.gachimuchi.ui.screens.DemoActions
 import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
@@ -77,9 +78,15 @@ private val Tab.icon: ImageVector
  * yearly heatmap where there is nothing to record. Today is the screen about the workout
  * happening now, which is the screen the button is an answer to.
  *
- * The other ways in are CONTEXTUAL, offered by screens that know what would be logged: a
- * planned session tapped on the calendar, a finished run on the timer. They all go through
- * [LocalOpenLogging], published here, so a screen needs no new parameter to offer one.
+ * The other way in is CONTEXTUAL, offered by a screen that knows what would be logged: a
+ * planned session tapped on the calendar, which goes through [LocalOpenLogging], published
+ * here, so the screen needs no new parameter to offer it.
+ *
+ * The timer does NOT come through here, and the difference is worth stating because the
+ * documentation used to claim otherwise. A finished run never opens the logging screen: it
+ * raises [RunLogDialog] with the sets, the exercise and the day already worked out, and
+ * confirming writes them straight through the repository. Routing it through the entry card
+ * would mean typing in four sets the app has just counted.
  *
  * It is a floating button rather than a sixth destination in the bottom bar because the
  * bar already carries five, which is the ceiling Material sets before labels start being
@@ -99,6 +106,8 @@ fun GachiApp(viewModel: MainViewModel) {
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val runOutcome by viewModel.runOutcome.collectAsStateWithLifecycle()
     val logReceipt by viewModel.logReceipt.collectAsStateWithLifecycle()
+    val demoPrompt by viewModel.demoPrompt.collectAsStateWithLifecycle()
+    val demoNote by viewModel.demoNote.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     var logging by rememberSaveable { mutableStateOf(false) }
@@ -331,7 +340,7 @@ fun GachiApp(viewModel: MainViewModel) {
                         else Modifier
                     )
                 when (tab) {
-                    Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
+                    Tab.TODAY -> TodayScreen(state, today, inner)
                     Tab.OVERVIEW ->
                         OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
 
@@ -365,7 +374,19 @@ fun GachiApp(viewModel: MainViewModel) {
                         )
                     }
 
-                    Tab.SETTINGS -> SettingsScreen(inner)
+                    Tab.SETTINGS -> SettingsScreen(
+                        demo = DemoActions(
+                            prompt = demoPrompt,
+                            note = demoNote,
+                            busy = state.loading,
+                            askWrite = viewModel::askWriteDemoData,
+                            askRemove = viewModel::askRemoveDemoData,
+                            confirm = viewModel::confirmDemoPrompt,
+                            dismissPrompt = viewModel::dismissDemoPrompt,
+                            dismissNote = viewModel::dismissDemoNote,
+                        ),
+                        modifier = inner,
+                    )
                 }
             }
         }

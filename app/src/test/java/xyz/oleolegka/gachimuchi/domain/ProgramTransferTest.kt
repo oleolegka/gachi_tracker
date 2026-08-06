@@ -257,6 +257,54 @@ class ProgramTransferTest {
         assertEquals(first.first().groups, second.first().groups)
     }
 
+    // --- numbers that are fine apart and impossible together ---------------------------------
+
+    /** A file carrying one program built from the given repeat counts. */
+    private fun fileWithRepeats(groupRepeats: Int, blockRepeats: Int): String = writeProgramFile(
+        listOf(
+            WorkoutProgram(
+                name = "Too much",
+                prepareSec = 10,
+                groups = listOf(
+                    ProgramGroup(
+                        name = "Set",
+                        blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = blockRepeats)),
+                        repeats = groupRepeats,
+                        restBetweenRepeatsSec = 180,
+                    )
+                ),
+            )
+        )
+    )
+
+    @Test
+    fun `a file whose repeat counts multiply out of range is refused, not quietly cut short`() {
+        // both numbers pass every check of their own; their product does not
+        val result = readProgramFile(fileWithRepeats(groupRepeats = 40, blockRepeats = 60))
+
+        assertTrue(result is ProgramImport.Rejected)
+        val reason = (result as ProgramImport.Rejected).reason
+        assertTrue("the reason must name the program: $reason", reason.contains("Too much"))
+        assertTrue("and say what the problem is: $reason", reason.contains("2000"))
+    }
+
+    @Test
+    fun `the two numbers the audit found are refused rather than truncated`() {
+        // 999 x 999 expands to nearly a million steps; flatten stops at 2000 and says nothing,
+        // so this used to import cleanly and report "Imported 1 program"
+        assertTrue(readProgramFile(fileWithRepeats(999, 999)) is ProgramImport.Rejected)
+    }
+
+    @Test
+    fun `a big but runnable program still imports`() {
+        // 12 sets of 30 efforts is 360 hangs and 719 steps: unusual, entirely possible, and
+        // the ceiling must not be so keen that it refuses a real workout
+        val result = readProgramFile(fileWithRepeats(groupRepeats = 12, blockRepeats = 30))
+
+        assertTrue(result is ProgramImport.Loaded)
+        assertEquals(360, (result as ProgramImport.Loaded).programs.single().workStepCount())
+    }
+
     @Test
     fun `two programs of the same name inside one file do not collapse into each other`() {
         val twins = listOf(repeaters, repeaters.copy(id = 0))

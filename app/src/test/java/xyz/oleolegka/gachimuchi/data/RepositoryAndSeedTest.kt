@@ -151,7 +151,8 @@ class RepositoryAndSeedTest {
         val first = DemoSeed.seed(repo, today = today, days = 30)
         val second = DemoSeed.seed(repo, today = today, days = 30)
         assertEquals(first.events, second.events)
-        // the previous seed's events are wiped by author, the catalog is reused, the slots stay
+        // the previous demo is removed by its marks before the new one is written, slots
+        // included — see DemoDataTest for the rules that removal follows
         assertEquals(second.events, repo.eventCount())
         assertEquals(12, repo.allExercises().size)
         assertEquals(first.slots, repo.allSlots().size)

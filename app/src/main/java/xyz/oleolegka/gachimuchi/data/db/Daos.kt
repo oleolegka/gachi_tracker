@@ -60,6 +60,16 @@ interface ExerciseDao {
 
     @Query("DELETE FROM exercises WHERE space_id = :spaceId AND id IN (:ids)")
     suspend fun deleteByIds(ids: List<Long>, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Hands a seeded exercise over to the user.
+     *
+     * Called when the demo data is removed and one of its exercises turns out to carry real
+     * sets: the row cannot go without orphaning them, so it stops being demo data instead.
+     * Clearing the mark is what stops the next press of the button trying again.
+     */
+    @Query("UPDATE exercises SET seeded = 0 WHERE space_id = :spaceId AND id IN (:ids)")
+    suspend fun clearSeedMark(ids: List<Long>, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 @Dao
@@ -176,10 +186,13 @@ interface SlotDao {
      * loads `created_at` or `space_id` and an entity rebuilt from a draft would overwrite
      * them with whatever the rebuild made up. Returns the number of rows touched, so a
      * caller can tell "saved" from "that slot is gone".
+     *
+     * Editing also clears the demo-seed mark: a slot the user has opened and changed is
+     * theirs, and removing the demo data later must not take it away.
      */
     @Query(
         "UPDATE slots SET name = :name, at_time = :atTime, repeat_rule = :repeatRule, " +
-            "anchor_date = :anchorDate WHERE space_id = :spaceId AND id = :id"
+            "anchor_date = :anchorDate, seeded = 0 WHERE space_id = :spaceId AND id = :id"
     )
     suspend fun updateFields(
         id: Long,

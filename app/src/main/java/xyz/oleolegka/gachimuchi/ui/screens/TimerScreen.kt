@@ -49,6 +49,7 @@ import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
 import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
 import xyz.oleolegka.gachimuchi.domain.totalSec
 import xyz.oleolegka.gachimuchi.domain.workStepCount
+import xyz.oleolegka.gachimuchi.ui.components.EmptyState
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.isEffort
@@ -122,6 +123,24 @@ fun TimerScreen(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 8.dp),
             )
+        }
+
+        if (programs.isEmpty()) {
+            item {
+                /*
+                 * A heading with two buttons under it and nothing in between reads as a
+                 * screen that failed to load, not as a screen with nothing on it. It is a
+                 * reachable state — the starter programs are deletable, and now that the app
+                 * no longer fills itself in on first launch it is a state a new phone can be
+                 * in — so it says what a program is and what the buttons below will do.
+                 */
+                EmptyState(
+                    title = "No programs yet",
+                    hint = "A program is a sequence of timed efforts and rests - hangboard " +
+                        "repeaters, a Tabata, a circuit. Build one with \"New program\", or " +
+                        "read one in from a file someone sent you.",
+                )
+            }
         }
 
         /*

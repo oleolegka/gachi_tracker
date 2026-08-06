@@ -19,6 +19,10 @@ import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.seed.DemoSeed
+import xyz.oleolegka.gachimuchi.data.seed.DemoWipePlan
+import xyz.oleolegka.gachimuchi.data.seed.applyDemoWipe
+import xyz.oleolegka.gachimuchi.data.seed.planDemoWipe
+import xyz.oleolegka.gachimuchi.data.seed.removalSummary
 import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.CelebrationCue
@@ -88,7 +92,26 @@ data class LogReceipt(
     val setCount: Int,
     val opDate: String,
     val eventIds: List<Long>,
+    /**
+     * The write did not complete: something threw part way through.
+     *
+     * Kept apart from `setCount == 0` because the two need opposite sentences and used to
+     * get the same one. An offer edited down to nothing is the user's own decision and
+     * "nothing was written" is the whole answer; a write that failed is the app's fault, may
+     * have landed some of the sets ([eventIds] says which), and telling that user their sets
+     * were empty is a lie that sends them looking in the wrong place.
+     */
+    val failed: Boolean = false,
 )
+
+/** The demo-data question waiting for an answer — see [MainViewModel.demoPrompt]. */
+sealed interface DemoPrompt {
+    /** Write the synthetic history. */
+    data object Write : DemoPrompt
+
+    /** Remove it again, taking exactly what [plan] says. */
+    data class Remove(val plan: DemoWipePlan) : DemoPrompt
+}
 
 class MainViewModel(
     private val repo: ActivityRepository,
@@ -233,24 +256,80 @@ class MainViewModel(
         viewModelScope.launch { repo.deleteSlot(id) }
     }
 
+    // --- demo data, on request and reversible --------------------------------------------
+    //
+    // It used to be written on first launch and there was no way to remove it. Both halves
+    // of that were wrong, and the second one is why the first one mattered: ninety days of
+    // invented training went into the journal the app exists to keep honest, mixed with
+    // whatever the user recorded afterwards, permanently. Now it is asked for, it is
+    // confirmed, and it can be taken back out (data/seed/DemoCleanup.kt).
+    //
+    // Both directions go through the same two steps — say what will happen, then do it —
+    // because both are destructive: writing buries the empty states a new user should see,
+    // and removing deletes rows.
+
+    private val _demoPrompt = MutableStateFlow<DemoPrompt?>(null)
+
+    /** The question the settings screen is currently asking, or null. */
+    val demoPrompt: StateFlow<DemoPrompt?> = _demoPrompt.asStateFlow()
+
+    private val _demoNote = MutableStateFlow<String?>(null)
+
+    /** What the last demo-data action did, in a sentence, until the screen is left. */
+    val demoNote: StateFlow<String?> = _demoNote.asStateFlow()
+
+    fun askWriteDemoData() {
+        _demoNote.value = null
+        _demoPrompt.value = DemoPrompt.Write
+    }
+
     /**
-     * Demo history on first launch: there is nothing to verify on empty screens.
-     * Idempotent — a repeated call first wipes the previous seed's events (by author).
+     * Works out what a removal would take BEFORE asking, so the question can be about real
+     * numbers instead of a promise. On a phone with no demo data on it the answer is that,
+     * and the dialog says so rather than offering a button that does nothing.
      */
-    fun seedIfEmpty() {
+    fun askRemoveDemoData() {
+        _demoNote.value = null
         viewModelScope.launch {
-            if (repo.eventCount() > 0) return@launch
-            seeding.value = true
-            runCatching { DemoSeed.seed(repo, today) }
-            seeding.value = false
+            val plan = runCatching { planDemoWipe(repo) }.getOrNull()
+            if (plan == null) {
+                _demoNote.value = "The demo data could not be looked up. Nothing was changed."
+            } else {
+                _demoPrompt.value = DemoPrompt.Remove(plan)
+            }
         }
     }
 
-    /** Debug button: rewrite the demo history in place (the seed events are replaced). */
-    fun reseed() {
+    fun dismissDemoPrompt() {
+        _demoPrompt.value = null
+    }
+
+    fun dismissDemoNote() {
+        _demoNote.value = null
+    }
+
+    /**
+     * Carries out the question that was asked. A removal executes the plan the user was
+     * shown, not a freshly computed one: between the two there is a dialog, and re-reading
+     * the database would mean the confirmation described one thing and the delete did
+     * another.
+     */
+    fun confirmDemoPrompt() {
+        val prompt = _demoPrompt.value ?: return
+        _demoPrompt.value = null
         viewModelScope.launch {
             seeding.value = true
-            runCatching { DemoSeed.seed(repo, today) }
+            _demoNote.value = when (prompt) {
+                DemoPrompt.Write -> runCatching { DemoSeed.seed(repo, today) }.fold(
+                    onSuccess = { "Demo data written: ${it.events} entries over ${it.activeDays} days." },
+                    onFailure = { "The demo data could not be written. Nothing was changed." },
+                )
+
+                is DemoPrompt.Remove -> runCatching { applyDemoWipe(repo, prompt.plan) }.fold(
+                    onSuccess = { removalSummary(prompt.plan) },
+                    onFailure = { "The demo data could not be removed." },
+                )
+            }
             seeding.value = false
         }
     }
@@ -408,11 +487,21 @@ class MainViewModel(
                     ?.let { runCatching { programRepo.linkExercise(it, exercise.id) } }
                 timer.clearOutcome()
             }
+            /*
+             * The failure is REPORTED AS A FAILURE. It used to be flattened into
+             * `setCount = 0`, and the receipt then explained that every set in the offer had
+             * been empty — about sets that were not empty, after a write that broke for some
+             * other reason entirely. A confirmation that invents a cause is worse than one
+             * that says nothing: it sends the user away satisfied that they know what
+             * happened, and the offer they would otherwise have retried is the last copy of
+             * the session.
+             */
             _logReceipt.value = LogReceipt(
                 exerciseName = exercise.name,
                 setCount = written.size,
                 opDate = day,
                 eventIds = written,
+                failed = !ok,
             )
         }
     }

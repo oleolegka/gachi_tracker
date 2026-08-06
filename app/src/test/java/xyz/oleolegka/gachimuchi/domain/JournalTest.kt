@@ -93,4 +93,56 @@ class JournalTest {
         val days = activeDays(events, "2026-08-01", "2026-08-03")
         assertEquals(setOf("2026-08-02"), days)
     }
+
+    // --- one bad row must not cost the whole journal -----------------------------------------
+    //
+    // Every screen in the app is a fold over this list, so anything that throws in here throws
+    // on four screens at once, on the device holding the only copy of the history. The journal
+    // is validated on the way in and is about to stop being the only writer: entries are meant
+    // to be exchanged with the bot, and a file can arrive truncated, hand-edited or written by
+    // a schema this build has never seen.
+
+    @Test
+    fun `a row whose payload will not parse is skipped, not thrown on`() {
+        val good = strength("2026-08-01", "Bench press", 60.0, 5, 1)
+        val truncated = JournalEvent(50, "2026-08-02T10:00:00", 1, 1, TYPE_STRENGTH_SET, """{"exercise":"Squ""")
+        val nonsense = JournalEvent(51, "2026-08-02T11:00:00", 1, 1, TYPE_HOLD_SET, """{"activity":"Hangs","reps":-4,"op_date":"2026-08-02"}""")
+        val alien = JournalEvent(52, "2026-08-02T12:00:00", 1, 1, "sleep_log", """{"hours":8}""")
+        val later = strength("2026-08-03", "Bench press", 62.5, 5, 1)
+
+        val read = readActivities(listOf(good, truncated, nonsense, alien, later))
+
+        // the two readable sets come through, including the one AFTER the damage - a throw
+        // here would have hidden every entry in the journal, not just the broken one
+        assertEquals(listOf("2026-08-01", "2026-08-03"), read.map { it.opDate })
+        assertEquals(2, strengthSetsByExerciseId(listOf(good, truncated, later), 1).size)
+    }
+
+    @Test
+    fun `an unreadable reversal does not take the reducers down with it`() {
+        val first = strength("2026-08-06", "Bench press", 60.0, 5, 1)
+        val broken = JournalEvent(98, "2026-08-06T11:00:00", 1, 1, TYPE_SET_CANCEL, "{}")
+        val real = JournalEvent(
+            99, "2026-08-06T11:30:00", 1, 1, TYPE_SET_CANCEL,
+            payloadJson.encodeToString(SetCancel(first.id)),
+        )
+
+        // the readable reversal still counts; the unreadable one is simply not evidence
+        assertEquals(setOf(first.id), cancelledEventIds(listOf(first, broken, real)))
+        assertEquals(0, readActivities(listOf(first, broken, real)).size)
+    }
+
+    @Test
+    fun `the exercises a journal points at include the ones whose sets were cancelled`() {
+        val set = strength("2026-08-06", "Bench press", 60.0, 5, 7)
+        val cancel = JournalEvent(
+            97, "2026-08-06T11:00:00", 1, 1, TYPE_SET_CANCEL,
+            payloadJson.encodeToString(SetCancel(set.id)),
+        )
+        val broken = JournalEvent(96, "2026-08-06T12:00:00", 1, 1, TYPE_HOLD_SET, "not json")
+
+        // this is what stops the demo wipe deleting a catalog row that real history names,
+        // whether or not the reducers still count that history
+        assertEquals(setOf(7L), exerciseIdsReferencedBy(listOf(set, cancel, broken)))
+    }
 }

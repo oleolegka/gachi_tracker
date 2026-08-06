@@ -12,6 +12,7 @@ import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
+import xyz.oleolegka.gachimuchi.domain.normPhrase
 import java.time.DayOfWeek
 import java.time.LocalDate
 import kotlin.math.max
@@ -20,17 +21,25 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * Demo history for the first launch — a (shortened) port of `tools/seed_mock.py`.
+ * Demo history — a (shortened) port of `tools/seed_mock.py`.
  *
  * THIS IS NOT A PRODUCT FIXTURE. The data is made up; the numbers were picked to look
  * plausible (progression at a sane pace, skipped sessions), but it is still synthetic.
  *
- * Honest differences from the Python seeder:
- * - there is no manifest and no selective wipe of "what I wrote": events are wiped by
- *   the [SEED_AUTHOR_ID] author, while the catalog and the slots are reused rather than
- *   deleted. A full reset means clearing the app data;
- * - progression is monotonic in the exercise's SESSION counter, as in the original: the
- *   peak lands on the last session, so records are detected on recent dates.
+ * ── It is never written unasked, and that is a reversal ─────────────────────────
+ * This used to run on first launch, on the argument that empty screens show nothing worth
+ * looking at. What it actually did was hand a new user ninety days of somebody else's
+ * training as if it were theirs, in the one app whose entire value is that its journal is
+ * true. Worse, it was one-way: nothing outside this file could take it back out again, so
+ * the demo and the real records grew together in the same journal for good.
+ *
+ * Now it is written only when the user asks for it (Settings), and everything it creates is
+ * marked so the same screen can take it all back out — events by [SEED_AUTHOR_ID], the
+ * catalog, the aliases and the slots by [xyz.oleolegka.gachimuchi.data.db.COLUMN_SEEDED].
+ * See data/seed/DemoCleanup.kt for what removal spares and why.
+ *
+ * Progression is monotonic in the exercise's SESSION counter, as in the original: the peak
+ * lands on the last session, so records are detected on recent dates.
  *
  * §12-A: the hangboard is split into SEPARATE exercises ("Hangs 20 mm · 7:3" and
  * "Hangs 15 mm · 7:3" are two catalog rows with independent histories), and the tracked
@@ -71,6 +80,45 @@ object DemoSeed {
         DayOfWeek.SUNDAY to emptyList(),
     )
 
+    /** The catalog rows that are neither strength nor holds: name, alias, form. */
+    private val plainCatalog = listOf(
+        Triple("Running", "run", ExerciseForm.CARDIO),
+        Triple("Elliptical", "ellipse", ExerciseForm.CARDIO),
+        Triple("Emil hangs", "emil", ExerciseForm.DURATION),
+        Triple("Stretching", "stretch", ExerciseForm.TICK),
+        Triple("Bouldering gym", "boulder", ExerciseForm.TICK),
+        Triple("Body weight", "bodyweight", ExerciseForm.BODYWEIGHT),
+    )
+
+    /**
+     * Every exercise name this seed has ever created, NORMALIZED.
+     *
+     * Used to recognise demo data written by a build that had no marker column — see
+     * data/seed/DemoCleanup.kt. Names are compared the way the catalog itself compares them
+     * ([normPhrase]), because that is what decided whether a row was created in the first
+     * place.
+     */
+    val demoExerciseKeys: Set<String> =
+        (strengthCatalog.map { it.name } + holdCatalog.map { it.name } + plainCatalog.map { it.first })
+            .mapNotNull { normPhrase(it) }
+            .toSet()
+
+    /** One demo slot as it is written: the session name, the time of day and the repeat rule. */
+    data class SlotShape(val name: String, val atTime: String?, val repeatRule: String)
+
+    /**
+     * The plan the seed writes. Only the three fields that do not depend on WHEN the seed
+     * ran are listed: the anchor date is derived from "today", so it cannot be matched
+     * against later. Same purpose as [demoExerciseKeys] — recognising unmarked demo data.
+     */
+    val demoSlotShapes: List<SlotShape> = listOf(
+        SlotShape("Gym", "18:00", REPEAT_WEEKLY),
+        SlotShape("Hangboard", "20:00", REPEAT_WEEKLY),
+        SlotShape("Stretching", "21:30", REPEAT_DAILY),
+        SlotShape("Bouldering gym", "12:00", REPEAT_NONE),
+        SlotShape("Running", "08:00", REPEAT_NONE),
+    )
+
     /** Rounds a weight to a realistic plate step. */
     private fun r2(x: Double, step: Double = 2.5): Double =
         (x / step).roundToInt() * step
@@ -79,8 +127,14 @@ object DemoSeed {
 
     /**
      * Writes the demo history. Deterministic for a given [rngSeed] and [today].
-     * Before writing, the events of the previous seed are wiped (by author) so that
-     * calling it again does not produce duplicates.
+     *
+     * Whatever an earlier demo left behind is removed first, so writing it twice produces one
+     * demo rather than two. Only MARKED rows are taken: unlike the settings button, this
+     * removal happens without anybody being shown what it is about to do, so it does not act
+     * on the by-name guess that recognises demo data from before the mark existed (see
+     * [removeDemoData]). The consequence is stated plainly: on a phone that was seeded by an
+     * older build, adding the demo again leaves the old one in place beside the new one, and
+     * "Remove demo data" is what clears both.
      */
     suspend fun seed(
         repo: ActivityRepository,
@@ -90,32 +144,25 @@ object DemoSeed {
     ): Summary {
         val rng = Random(rngSeed)
         val start = today.minusDays((days - 1).toLong())
-        // reseeding does not duplicate anything: the previous seed's events are wiped by
-        // author, while the catalog and the slots are reused (ensureExercise dedups by name)
-        repo.clearSeedEvents()
+        removeDemoData(repo, matchByName = false)
 
         val exerciseIds = HashMap<String, Long>()
         for (s in strengthCatalog) {
-            val id = repo.ensureExercise(s.name, ExerciseForm.STRENGTH)
+            val id = repo.ensureExercise(s.name, ExerciseForm.STRENGTH, seeded = true)
             exerciseIds[s.name] = id
-            repo.learnAlias(s.name, id); repo.learnAlias(s.alias, id)
+            repo.learnAlias(s.name, id, seeded = true); repo.learnAlias(s.alias, id, seeded = true)
         }
         for (h in holdCatalog) {
-            val id = repo.ensureExercise(h.name, ExerciseForm.HOLD, h.edgeMm, h.workSec, h.restSec)
+            val id = repo.ensureExercise(
+                h.name, ExerciseForm.HOLD, h.edgeMm, h.workSec, h.restSec, seeded = true,
+            )
             exerciseIds[h.name] = id
-            repo.learnAlias(h.name, id); repo.learnAlias(h.alias, id)
+            repo.learnAlias(h.name, id, seeded = true); repo.learnAlias(h.alias, id, seeded = true)
         }
-        for ((name, alias, form) in listOf(
-            Triple("Running", "run", ExerciseForm.CARDIO),
-            Triple("Elliptical", "ellipse", ExerciseForm.CARDIO),
-            Triple("Emil hangs", "emil", ExerciseForm.DURATION),
-            Triple("Stretching", "stretch", ExerciseForm.TICK),
-            Triple("Bouldering gym", "boulder", ExerciseForm.TICK),
-            Triple("Body weight", "bodyweight", ExerciseForm.BODYWEIGHT),
-        )) {
-            val id = repo.ensureExercise(name, form)
+        for ((name, alias, form) in plainCatalog) {
+            val id = repo.ensureExercise(name, form, seeded = true)
             exerciseIds[name] = id
-            repo.learnAlias(name, id); repo.learnAlias(alias, id)
+            repo.learnAlias(name, id, seeded = true); repo.learnAlias(alias, id, seeded = true)
         }
 
         val sessions = HashMap<String, Int>() // exercise -> how many sessions it already had
@@ -260,26 +307,29 @@ object DemoSeed {
             idx++; day = day.plusDays(1)
         }
 
-        // plan slots: "Gym" on Mon and Thu, "Hangboard" on Wed, daily stretching (anchored
-        // two weeks back, so that the early history keeps some "unplanned" days), plus
-        // one-off ones. If slots already exist, leave them alone: the plan belongs to the
-        // user, and the schema has no "this slot came from the seed" marker (unlike events,
-        // which carry the seed author).
-        val existingSlots = repo.allSlots()
-        if (existingSlots.isNotEmpty()) {
-            return Summary(written, exerciseIds.size, existingSlots.size, activeDays.size)
-        }
+        /*
+         * Plan slots: "Gym" on Mon and Thu, "Hangboard" on Wed, daily stretching (anchored
+         * two weeks back, so that the early history keeps some "unplanned" days), plus
+         * one-off ones.
+         *
+         * These are written unconditionally now, because they are MARKED. The old code
+         * skipped them whenever any slot existed at all — the only defence it had against
+         * burying the user's plan under a demo one it could never remove again. With a mark
+         * on the row the demo plan is separable, so it can be written next to a real one and
+         * taken away without it.
+         */
         val slotIds = mutableListOf<Long>()
-        slotIds += repo.createSlot("Gym", "18:00", REPEAT_WEEKLY, firstWeekdayOnOrAfter(start, DayOfWeek.MONDAY).toString())
-        slotIds += repo.createSlot("Gym", "18:00", REPEAT_WEEKLY, firstWeekdayOnOrAfter(start, DayOfWeek.THURSDAY).toString())
-        slotIds += repo.createSlot("Hangboard", "20:00", REPEAT_WEEKLY, firstWeekdayOnOrAfter(start, DayOfWeek.WEDNESDAY).toString())
-        slotIds += repo.createSlot("Stretching", "21:30", REPEAT_DAILY, today.minusDays(14).toString())
-        slotIds += repo.createSlot("Bouldering gym", "12:00", REPEAT_NONE, today.plusDays(2).toString())
+        suspend fun plan(shape: SlotShape, anchor: LocalDate) {
+            slotIds += repo.createSlot(shape.name, shape.atTime, shape.repeatRule, anchor.toString(), seeded = true)
+        }
+        plan(demoSlotShapes[0], firstWeekdayOnOrAfter(start, DayOfWeek.MONDAY))
+        plan(demoSlotShapes[0], firstWeekdayOnOrAfter(start, DayOfWeek.THURSDAY))
+        plan(demoSlotShapes[1], firstWeekdayOnOrAfter(start, DayOfWeek.WEDNESDAY))
+        plan(demoSlotShapes[2], today.minusDays(14))
+        plan(demoSlotShapes[3], today.plusDays(2))
         // a one-off "Running" on a past day WITHOUT activity — a guaranteed "missed" day
         val missDay = (1..30).map { today.minusDays(it.toLong()) }.firstOrNull { it.toString() !in activeDays }
-        if (missDay != null) {
-            slotIds += repo.createSlot("Running", "08:00", REPEAT_NONE, missDay.toString())
-        }
+        if (missDay != null) plan(demoSlotShapes[4], missDay)
 
         return Summary(written, exerciseIds.size, slotIds.size, activeDays.size)
     }

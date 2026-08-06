@@ -38,13 +38,13 @@ import xyz.oleolegka.gachimuchi.domain.phase
 import xyz.oleolegka.gachimuchi.domain.previousStep
 import xyz.oleolegka.gachimuchi.domain.resumeRun
 import xyz.oleolegka.gachimuchi.domain.runOutcome
+import xyz.oleolegka.gachimuchi.domain.salvagedOutcome
 import xyz.oleolegka.gachimuchi.domain.settleRun
 import xyz.oleolegka.gachimuchi.domain.skipStep
 import xyz.oleolegka.gachimuchi.domain.startRun
 import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
 import xyz.oleolegka.gachimuchi.domain.timerCue
 import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
-import java.time.LocalDate
 
 /**
  * The one object that owns a running timer, for the whole process.
@@ -264,17 +264,43 @@ class TimerController internal constructor(context: Context) {
      * A snapshot from a previous boot is discarded rather than resumed: its end moments
      * are readings of a clock that no longer exists, so resuming would count down from an
      * arbitrary number. A rest between sets does not outlive a reboot in any case.
+     *
+     * Discarded, but no longer thrown away in silence — see [salvageAcrossReboot] for the
+     * sets that were already done by the time the device went down.
      */
     private fun restore() {
         restoreOutcome()
         val saved = store.loadRun() ?: return
         if (isRunStale(saved.bootRef, currentBootRef())) {
             store.clearRun()
+            salvageAcrossReboot(saved)
             return
         }
         signalledStep = saved.state.stepIndex
         val now = SystemClock.elapsedRealtime()
         apply(saved.copy(state = settleRun(saved.steps, saved.state, now)), startService = false)
+    }
+
+    /**
+     * Keeps what a run got through before the device restarted.
+     *
+     * The snapshot itself cannot be resumed and is thrown away — that part was always right.
+     * What was wrong was throwing away the SETS with it: the part that had already been
+     * completed is a count of steps the run moved past, which owes nothing to the monotonic
+     * clock and survives a reboot intact. A phone that ran out of battery on the last set of
+     * a hangboard session used to lose the whole session without saying so.
+     *
+     * An offer restored from disk wins over this one. That offer is a run that genuinely
+     * ended and was recorded as ending; this is a reconstruction of one that was interrupted,
+     * and replacing the former with the latter would trade a fact for an estimate.
+     */
+    private fun salvageAcrossReboot(saved: RunSnapshot) {
+        if (_outcome.value != null) return
+        val outcome = salvagedOutcome(saved)
+        if (!outcome.offersLogging) return
+        if (outcome.isExpired(System.currentTimeMillis())) return
+        _outcome.value = outcome
+        runCatching { store.saveOutcome(outcome) }
     }
 
     /**
@@ -327,7 +353,7 @@ class TimerController internal constructor(context: Context) {
 
         if (phase == RunPhase.FINISHED) {
             _run.value = stamped
-            fireFinish(stamped)
+            if (isMomentNow(stamped.state.stepEndAtMs)) fireFinish(stamped) else finishQuietly()
             keepOutcome(stamped)
             store.clearRun()
             cancelAlarm()
@@ -355,12 +381,17 @@ class TimerController internal constructor(context: Context) {
      * nothing in it; everything else is a workout that happened.
      */
     private fun keepOutcome(snapshot: RunSnapshot) {
-        val outcome = runOutcome(
-            snapshot = snapshot,
-            now = SystemClock.elapsedRealtime(),
-            wallMs = System.currentTimeMillis(),
-            opDate = LocalDate.now().toString(),
-        )
+        /*
+         * The wall clock and the day are NOT read here. They are derived inside runOutcome
+         * from the snapshot's own boot reference and the moment its last step ended, because
+         * this function does not run when the run ends — it runs when the run is noticed to
+         * have ended, and those are the same instant only when the app happened to be open.
+         * The case that matters is the opposite one: the process is killed with the phone in
+         * a pocket, and the outcome is materialised on the next launch, which may be the
+         * following morning. Reading the clock here filed an evening session under the next
+         * day and told the user it had just finished.
+         */
+        val outcome = runOutcome(snapshot = snapshot, now = SystemClock.elapsedRealtime())
         if (!outcome.offersLogging) return
         // memory first, disk second, and the disk write cannot take the offer down with it:
         // this runs on the path that ends a run, and an offer that exists is worth more than
@@ -369,14 +400,57 @@ class TimerController internal constructor(context: Context) {
         runCatching { store.saveOutcome(outcome) }
     }
 
-    /** Fires the boundary signal once per step, whoever caused the step to change. */
+    /**
+     * Whether [momentMs] — a monotonic reading of when something happened — is close enough
+     * to now that announcing it out loud still means anything.
+     *
+     * ── Why a signal needs a time test at all ───────────────────────────────────
+     * The path that rebuilds this controller from disk is BOTH the recovery path and the
+     * backstop path. When the process is killed mid-run, the exact alarm fires at the step
+     * boundary, wakes a fresh process, and the rebuilt controller settling the stored state
+     * is what produces the beep — that is the whole design of the backstop, so the signal
+     * cannot simply be suppressed on restore.
+     *
+     * But the same rebuild happens when the user opens the app hours later, and it used to
+     * gong and vibrate then too, on the alarm stream, at full volume, through a phone set to
+     * silent, for a workout that had ended before dinner. The difference between the two is
+     * not which code path ran, it is HOW LATE the moment is. Anything the alarm delivers
+     * arrives within a fraction of a second of the boundary; anything a person opening an app
+     * discovers is minutes or hours old.
+     *
+     * A moment of zero or in the future counts as now: that is a run being driven by hand
+     * (start, skip, back), where the user is holding the phone and the signal is the answer
+     * to a button they just pressed.
+     */
+    private fun isMomentNow(momentMs: Long): Boolean {
+        if (momentMs <= 0) return true
+        return SystemClock.elapsedRealtime() - momentMs <= SIGNAL_LATENESS_MS
+    }
+
+    /**
+     * Fires the boundary signal once per step, whoever caused the step to change — as long
+     * as the step began just now rather than while the process was dead ([isMomentNow]).
+     */
     private fun maybeSignalBoundary(snapshot: RunSnapshot) {
         val index = snapshot.state.stepIndex
         if (index == signalledStep) return
         signalledStep = index
         lastTickSecond = -1
         val step = snapshot.steps.getOrNull(index) ?: return
+        val startedAt = snapshot.state.stepEndAtMs - step.durationMs
+        if (!isMomentNow(startedAt)) return
         signals.boundary(store.settings.value, step.kind)
+    }
+
+    /**
+     * Ends a run that turns out to have finished a while ago: the same tidying as
+     * [fireFinish] without the announcement. No tone, no vibration, and no "finished"
+     * notification either — the offer to log the run is the honest way to raise a session
+     * that ended hours ago, and it is raised anyway.
+     */
+    private fun finishQuietly() {
+        releaseSignalsAfterTheirTail()
+        NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_RUNNING)
     }
 
     private fun fireFinish(snapshot: RunSnapshot) {
@@ -571,6 +645,16 @@ class TimerController internal constructor(context: Context) {
 
         /** Even a very long program cannot hold the CPU for more than this. */
         private const val MAX_WAKE_LOCK_MS = 3 * 60 * 60 * 1000L
+
+        /**
+         * How late a step boundary may be and still be worth a signal — see [isMomentNow].
+         *
+         * Five seconds is chosen to sit above the worst case of the mechanism that has to
+         * keep working (an exact alarm waking a dead process, which is a broadcast and a
+         * controller construction, and takes well under a second even on a cold start) and
+         * far below the shortest gap that could plausibly be a person picking the phone up.
+         */
+        private const val SIGNAL_LATENESS_MS = 5_000L
 
         @Volatile
         private var instance: TimerController? = null

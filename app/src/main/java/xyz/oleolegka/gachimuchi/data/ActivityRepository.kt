@@ -90,13 +90,18 @@ class ActivityRepository(private val db: AppDatabase) {
         edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
+        seeded: Boolean = false,
     ): Long {
         val want = normPhrase(name)
+        // an exercise that is already there is the USER'S, whatever created this call: the
+        // seed mark is set on insert and never stamped onto a row found by name, so pressing
+        // "demo data" cannot make a real exercise deletable
         db.exercises().all().firstOrNull { normPhrase(it.name) == want }?.let { return it.id }
         return db.exercises().insert(
             ExerciseEntity(
                 name = name, form = form.code, createdAt = now(),
                 edgeMm = edgeMm, protocolWorkSec = workSec, protocolRestSec = restSec,
+                seeded = seeded,
             )
         )
     }
@@ -107,17 +112,33 @@ class ActivityRepository(private val db: AppDatabase) {
      * different exercise, the word is blocked (from then on phrases and the picker
      * decide) instead of being silently relearned.
      */
-    suspend fun learnAlias(word: String, exerciseId: Long) {
+    /**
+     * [seeded] = true is the demo seed learning a word, and it behaves differently in one
+     * respect: it only ever ADDS words that are not there yet. It does not repoint an
+     * existing alias, does not bump its use count and does not block it. Demo data must not
+     * be able to change where a word the user taught the app leads, and a word the seed did
+     * create is marked so that removing the demo takes it back out again.
+     */
+    suspend fun learnAlias(word: String, exerciseId: Long, seeded: Boolean = false) {
         val phrase = normPhrase(word) ?: return
-        db.aliases().upsert(AliasEntity(key = phrase, value = exerciseId))
+        val existingPhrase = db.aliases().byKey(phrase)
+        if (!(seeded && existingPhrase != null)) {
+            db.aliases().upsert(
+                AliasEntity(key = phrase, value = exerciseId, seeded = existingPhrase?.seeded ?: seeded)
+            )
+        }
         val first = phrase.substringBefore(' ')
         if (first == phrase) return
         val existing = db.aliases().byKey(first)
         when {
-            existing == null -> db.aliases().upsert(AliasEntity(key = first, value = exerciseId))
+            existing == null ->
+                db.aliases().upsert(AliasEntity(key = first, value = exerciseId, seeded = seeded))
+
+            seeded -> Unit // the seed never touches a word that already means something
             existing.blocked -> Unit
             existing.value == exerciseId ->
                 db.aliases().upsert(existing.copy(uses = existing.uses + 1))
+
             else -> db.aliases().upsert(existing.copy(blocked = true))
         }
     }
@@ -143,10 +164,11 @@ class ActivityRepository(private val db: AppDatabase) {
         atTime: String? = null,
         repeatRule: String,
         anchorDate: String,
+        seeded: Boolean = false,
     ): Long = db.slots().insert(
         SlotEntity(
             name = name.trim(), atTime = atTime, repeatRule = repeatRule,
-            anchorDate = anchorDate, createdAt = now(),
+            anchorDate = anchorDate, createdAt = now(), seeded = seeded,
         )
     )
 
@@ -188,6 +210,26 @@ class ActivityRepository(private val db: AppDatabase) {
 
     /** The plan is freely editable (append-only applies to facts, not to the plan). */
     suspend fun deleteSlots(ids: List<Long>) = db.slots().deleteByIds(ids)
+
+    // --- removing the demo data (data/seed/DemoCleanup.kt decides WHAT, this is HOW) ---
+
+    /** Slot rows as stored, seed mark included — [slots] drops it on the way to the domain. */
+    suspend fun allSlotRows(): List<SlotEntity> = db.slots().all()
+
+    suspend fun allAliases(): List<AliasEntity> = db.aliases().all()
+
+    suspend fun deleteExercises(ids: List<Long>) {
+        if (ids.isNotEmpty()) db.exercises().deleteByIds(ids)
+    }
+
+    suspend fun deleteAliases(keys: List<String>) {
+        if (keys.isNotEmpty()) db.aliases().deleteByKeys(keys)
+    }
+
+    /** Turns seeded exercises into ordinary ones — see [ExerciseDao.clearSeedMark]. */
+    suspend fun keepExercises(ids: List<Long>) {
+        if (ids.isNotEmpty()) db.exercises().clearSeedMark(ids)
+    }
 }
 
 /**

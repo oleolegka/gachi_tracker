@@ -41,16 +41,41 @@ fun LogReceiptDialog(
 ) {
     val colors = LocalGachiColors.current
     val sets = if (receipt.setCount == 1) "1 set" else "${receipt.setCount} sets"
+    val title = when {
+        receipt.failed -> "The write did not finish"
+        receipt.setCount == 0 -> "Nothing was written"
+        else -> "Logged $sets"
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (receipt.setCount == 0) "Nothing was written" else "Logged $sets") },
+        title = { Text(title) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                if (receipt.setCount == 0) {
+                if (receipt.failed) {
+                    /*
+                     * Something threw part way through. The cause is not known here and is
+                     * NOT guessed at: this branch used to fall through to the one below and
+                     * tell the user their sets had been empty, which was both wrong and
+                     * final-sounding. What is known is how much landed, and that is what is
+                     * said, along with the one instruction that is always right.
+                     */
+                    Text(
+                        if (receipt.setCount == 0) {
+                            "Something went wrong while writing to the journal, and nothing " +
+                                "was recorded. The run is still on offer - try again."
+                        } else {
+                            "Something went wrong part way through: $sets reached the journal " +
+                                "on ${receipt.opDate}, and the rest did not. Check the day and " +
+                                "add what is missing by hand."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.warning,
+                    )
+                } else if (receipt.setCount == 0) {
                     /*
                      * Reachable when every set in the offer was edited down to zero, and
                      * also when the exercise turned out not to be a hold. Saying so is the

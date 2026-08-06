@@ -94,10 +94,14 @@ fun backStep(
  * The way into the logging screen, from anywhere.
  *
  * Logging is the thing this app is for, and it is reached from more than one place: the
- * button on Today, a planned session tapped on the calendar, a finished run on the timer.
- * None of those screens should have to be handed a callback through their own signature
- * for it — the entry point belongs to the frame that owns the screen, not to the screens
- * that want in — so it is published through [LocalOpenLogging] and read where it is used.
+ * button on Today, and a planned session tapped on the calendar. Neither screen should have
+ * to be handed a callback through its own signature for it — the entry point belongs to the
+ * frame that owns the screen, not to the screens that want in — so it is published through
+ * [LocalOpenLogging] and read where it is used.
+ *
+ * A finished run on the timer is NOT one of these, whatever the older comments here said. It
+ * raises an offer that already knows what it would write and goes to the journal directly;
+ * it never opens this screen.
  *
  * @see LocalOpenLogging for the call site.
  */

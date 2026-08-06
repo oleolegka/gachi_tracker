@@ -32,6 +32,20 @@ const val LOCAL_AUTHOR_ID = 1L
 /** Author of the demo seed: negative, so that wiping the seed cannot touch real records. */
 const val SEED_AUTHOR_ID = -777L
 
+/**
+ * Marks a row as something the DEMO SEED created (schema version 4).
+ *
+ * Events carry their origin in [SEED_AUTHOR_ID] and always did. The catalog, the aliases
+ * and the slots did not, and that was the hole: demo hangs, demo words and a demo plan were
+ * written into a real profile with nothing to tell them apart from the user's own, so the
+ * only way to get rid of them was to clear the app's data and lose the journal with them.
+ *
+ * The flag is set on INSERT only. An exercise the seed found already there (the catalog
+ * deduplicates by name) belongs to the user and stays unmarked, so removing the demo data
+ * cannot take it away.
+ */
+const val COLUMN_SEEDED = "seeded"
+
 @Entity(
     tableName = "events",
     indices = [Index(value = ["space_id", "id"])],
@@ -70,6 +84,8 @@ data class ExerciseEntity(
     @androidx.room.ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
     @androidx.room.ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
     @androidx.room.ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
+    @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
 )
 
 /**
@@ -85,6 +101,8 @@ data class AliasEntity(
     val value: Long,
     val uses: Int = 1,
     val blocked: Boolean = false,
+    /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
+    @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
 )
 
 /**
@@ -199,4 +217,6 @@ data class SlotEntity(
     @androidx.room.ColumnInfo(name = "repeat_rule") val repeatRule: String,
     @androidx.room.ColumnInfo(name = "anchor_date") val anchorDate: String,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
+    /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
+    @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
 )
