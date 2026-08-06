@@ -4,14 +4,19 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
+import xyz.oleolegka.gachimuchi.data.GalleryStore
 import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import xyz.oleolegka.gachimuchi.timer.TimerNotifications
 import xyz.oleolegka.gachimuchi.ui.GachiApp
 import xyz.oleolegka.gachimuchi.ui.MainViewModel
+import xyz.oleolegka.gachimuchi.ui.celebrate.CelebrationHost
+import xyz.oleolegka.gachimuchi.ui.screens.PictureOnboardingScreen
 import xyz.oleolegka.gachimuchi.ui.theme.GachimuchiTheme
 
 /**
@@ -51,7 +56,20 @@ class MainActivity : ComponentActivity() {
                     vm.seedIfEmpty()
                     vm.seedProgramsIfEmpty()
                 }
-                GachiApp(vm)
+
+                /*
+                 * The celebration wraps the whole app rather than sitting on a screen: a
+                 * set can be logged from more than one place and the picture has to appear
+                 * over whatever is in front (see ui/celebrate/CelebrationHost.kt). Before
+                 * any of it, once, the offer to add pictures at all.
+                 */
+                val gallery = androidx.compose.runtime.remember { GalleryStore.get(applicationContext) }
+                val onboarded by gallery.onboardingDone.collectAsStateWithLifecycle()
+                if (!onboarded) {
+                    PictureOnboardingScreen(onDone = gallery::completeOnboarding)
+                } else {
+                    CelebrationHost(vm.celebrations) { GachiApp(vm) }
+                }
             }
         }
     }

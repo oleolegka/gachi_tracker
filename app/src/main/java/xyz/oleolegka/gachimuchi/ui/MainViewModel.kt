@@ -3,9 +3,13 @@ package xyz.oleolegka.gachimuchi.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
@@ -17,19 +21,28 @@ import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.seed.DemoSeed
 import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
+import xyz.oleolegka.gachimuchi.domain.CelebrationCue
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
+import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
+import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
+import xyz.oleolegka.gachimuchi.domain.holdSetsByExerciseId
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restProgram
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
+import xyz.oleolegka.gachimuchi.domain.strengthSetsByExerciseId
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
@@ -112,11 +125,52 @@ class MainViewModel(
      */
     fun addSet(form: ActivityForm) {
         viewModelScope.launch {
+            val worthAPicture = celebratedByPicture(form)
+            // BEFORE the write, or the set would be compared against itself and no set
+            // would ever be a record
+            val record = if (worthAPicture) recordBrokenBy(form) else null
             repo.record(form)
+            if (worthAPicture) {
+                _celebrations.tryEmit(
+                    CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
+                )
+            }
             val settings = timer.settings.value
             if (timer.enabled.value && settings.autoStartRest && startsRest(form)) {
                 startRest(form.exerciseId)
             }
+        }
+    }
+
+    // --- celebration -------------------------------------------------------------------
+    //
+    // The ViewModel only says WHAT happened; whether anything is shown, and which picture,
+    // is decided where the gallery lives (data/GalleryStore.kt, ui/celebrate/). A cue is
+    // fire-and-forget: nothing buffers it for a screen that is not there, because a
+    // celebration for a set logged two minutes ago is not a celebration.
+
+    private var celebrationSerial = 0L
+
+    private val _celebrations = MutableSharedFlow<CelebrationCue>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val celebrations: SharedFlow<CelebrationCue> = _celebrations.asSharedFlow()
+
+    /**
+     * The record this set breaks, judged against the journal AS IT IS NOW — the same
+     * comparison the session feed makes for a set already written (domain/Session.kt), so
+     * the overlay and the feed cannot disagree about what was a record.
+     */
+    private suspend fun recordBrokenBy(form: ActivityForm): RecordHit? {
+        val exerciseId = form.exerciseId ?: return null
+        val events = repo.allEvents()
+        return when (form) {
+            is StrengthSet ->
+                evaluateStrengthRecord(strengthSetsByExerciseId(events, exerciseId), form.weightKg, form.reps)
+
+            is HoldSet -> evaluateHoldRecord(holdSetsByExerciseId(events, exerciseId), form)
+            else -> null
         }
     }
 
