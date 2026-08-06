@@ -24,10 +24,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.data.toRef
+import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
+import xyz.oleolegka.gachimuchi.ui.components.LogReceiptDialog
 import xyz.oleolegka.gachimuchi.ui.components.RunLogDialog
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
@@ -68,6 +72,7 @@ fun GachiApp(viewModel: MainViewModel) {
     val speech by viewModel.speechStatus.collectAsStateWithLifecycle()
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val runOutcome by viewModel.runOutcome.collectAsStateWithLifecycle()
+    val logReceipt by viewModel.logReceipt.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.TODAY) }
     var logging by rememberSaveable { mutableStateOf(false) }
@@ -116,35 +121,58 @@ fun GachiApp(viewModel: MainViewModel) {
     // the same one and the dialog cannot appear twice
     val enableTimer = rememberTimerEnabler(onEnabled = viewModel::enableTimer)
 
+    // the hold exercises, which are the ones a program can be logged as; computed once per
+    // change of the catalog rather than on every recomposition of a running countdown
+    val holdExercises = remember(state.exercises) {
+        state.exercises.map { it.toRef() }.filter { it.form == ExerciseForm.HOLD }
+    }
+
     /*
      * The offer to write a finished run into the journal is raised HERE, above the tabs and
      * above the logging screen, rather than on the timer tab: a run ends while the phone is
      * in a pocket and the screen it comes back to is whichever one was open. It is a dialog,
      * so it draws over whatever that turns out to be.
      *
-     * It waits for the catalog to arrive first: on the frame after the Activity is rebuilt
-     * the exercise list is momentarily empty, and a dialog that cannot find its exercise
-     * closes itself — which would throw the offer away before it was ever seen.
+     * It waits for the journal to have loaded — before the first emission [UiState.loading]
+     * is true — because on that frame the catalog is empty, and an offer raised against an
+     * empty catalog would say "there is nothing to file this under" about a phone that has
+     * plenty. It does NOT wait for the catalog to be non-empty: a phone with no hold
+     * exercise on it is a real state, and the offer says so rather than never appearing.
      */
-    runOutcome?.takeIf { state.exercises.isNotEmpty() }?.let { outcome ->
-        val exercise = state.refById(outcome.exerciseId)
+    runOutcome?.takeIf { !state.loading }?.let { outcome ->
         RunLogDialog(
             outcome = outcome,
-            exercise = exercise,
-            suggestedAddedKg = remember(outcome, state.events) {
-                outcome.exerciseId?.let { lastHoldSet(state.events, it)?.addedKg }
-            },
-            onLog = { sets, addedKg ->
-                if (exercise == null) viewModel.dismissRunOutcome()
-                else viewModel.logRunSets(exercise, sets, addedKg)
-            },
+            exercise = state.refById(outcome.exerciseId),
+            candidates = holdExercises,
+            lastAddedKg = { id -> lastHoldSet(state.events, id)?.addedKg },
+            nowWallMs = System.currentTimeMillis(),
+            onLog = viewModel::logRunSets,
             onDismiss = viewModel::dismissRunOutcome,
+        )
+    }
+
+    /*
+     * And the answer to "did that actually go in?".
+     *
+     * Writing used to be silent: the dialog closed and the user was left to go and look. Two
+     * sessions in a row were run in the belief that nothing had been recorded, which is the
+     * expensive kind of doubt — it makes the feature worse than useless, because the sets
+     * get typed in again. So a write says what it wrote, and offers to take it back while
+     * the memory of pressing the button is still fresh.
+     */
+    logReceipt?.let { receipt ->
+        LogReceiptDialog(
+            receipt = receipt,
+            onUndo = viewModel::undoRunSets,
+            onDismiss = viewModel::dismissReceipt,
         )
     }
 
     editing?.let { target ->
         ProgramEditorScreen(
             initial = target.program,
+            candidates = holdExercises,
+            categories = remember(programs) { knownCategories(programs) },
             onSave = {
                 viewModel.saveProgram(it)
                 editing = null
@@ -230,6 +258,9 @@ fun GachiApp(viewModel: MainViewModel) {
                     state = timerState,
                     actions = timerActions,
                     programs = programs,
+                    exerciseNames = remember(state.exercises) {
+                        state.exercises.associate { it.id to it.name }
+                    },
                     onRunProgram = viewModel::runProgram,
                     onEditProgram = { editing = EditorTarget(it) },
                     onDeleteProgram = viewModel::deleteProgram,

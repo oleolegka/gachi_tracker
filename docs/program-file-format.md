@@ -35,7 +35,8 @@ and is the authority; this page describes what it does.
           "rest_after_sec": 0
         }
       ],
-      "prepare_sec": 15
+      "prepare_sec": 15,
+      "category": "Hangboard"
     }
   ],
   "exported_at": "2026-08-06"
@@ -61,6 +62,12 @@ to get to the bar first.
 | `name` | string | yes | | Must not be blank. |
 | `groups` | array | yes | | At least one group. |
 | `prepare_sec` | integer | no | `10` | Lead-in before the first effort. `0` means none. |
+| `category` | string | no | `""` | Heading the program is filed under on the timer tab. Free text; the empty string means no heading. |
+
+A program's link to a catalog exercise is deliberately **not** in the file. It is a local
+row id, and carrying it to another phone would attach these hangs to whatever exercise
+happens to hold that id there. An imported program arrives unlinked and asks which exercise
+it was the first time it finishes, exactly as a program typed in by hand does.
 
 ## A group
 

@@ -84,6 +84,18 @@ data class ProgramGroup(
  * A named program. [id] is the row id when it came from the database and 0 when it was
  * generated on the fly (from an exercise, or for a single rest between sets) and never
  * stored.
+ *
+ * ── The optional link to a catalog exercise ─────────────────────────────────────
+ * [exerciseId] is what makes a SAVED program loggable. A program built on the spot from an
+ * exercise always knew which exercise it was; a program typed into the editor did not, so
+ * running "Hangboard repeaters 7:3" from the timer tab counted twenty-four hangs and then
+ * offered nothing, while the identical protocol started from the exercise offered to write
+ * them down. That asymmetry was invisible from the outside and is the whole reason a
+ * finished session went unlogged.
+ *
+ * Optional rather than required, because most programs are not one exercise: a circuit is
+ * five, and forcing a link on it would mean picking a lie. Null means "ask when it
+ * finishes" (ui/components/RunLogDialog.kt), not "never offer".
  */
 @Serializable
 data class WorkoutProgram(
@@ -91,7 +103,72 @@ data class WorkoutProgram(
     @SerialName("name") val name: String,
     @SerialName("groups") val groups: List<ProgramGroup>,
     @SerialName("prepare_sec") val prepareSec: Int = PREPARE_DEFAULT_SEC,
+    /** The catalog exercise this program trains, when it is exactly one. */
+    @SerialName("exercise_id") val exerciseId: Long? = null,
+    /** Free-text heading this program is filed under on the timer tab. Blank means none. */
+    @SerialName("category") val category: String = "",
 )
+
+/** Programs under one heading, in the order they are stored. */
+data class ProgramSection(val title: String, val programs: List<WorkoutProgram>)
+
+/** The heading a program with no category of its own is filed under. */
+const val OTHER_PROGRAMS_SECTION = "Other"
+
+/**
+ * Files the program list under headings for the timer tab.
+ *
+ * ── Why a free-text field and not folders, and not the exercise ─────────────────
+ * The list grows: a few protocols become dozens, and a flat list of dozens on a phone is a
+ * list nobody scrolls to the bottom of. Three ways to cut it were available.
+ *
+ * FOLDERS AS ROWS would need a table, an editor, a rename, and an answer to "what happens
+ * to the programs in a folder you delete" — a lot of machinery for a screen with a handful
+ * of items on it.
+ *
+ * GROUPING BY THE LINKED EXERCISE is free, because the link already exists, but it sorts
+ * almost nothing: a program links to an exercise only when it IS one exercise, and a
+ * circuit, a Tabata and a warm-up never will be. Most of the list would end up in "other",
+ * which is the situation being fixed.
+ *
+ * A CATEGORY WRITTEN ON THE PROGRAM is one nullable column, is edited in the editor next to
+ * everything else about the program, needs no delete story (the last program to leave a
+ * category takes the heading with it), and lets the user name the cut — "Hangboard",
+ * "Warm-up", "Bouldering" — which is the part no automatic rule can guess.
+ *
+ * A list where nothing is categorised comes back as ONE section with an empty title, so a
+ * phone with three programs does not grow a heading it did not ask for.
+ */
+fun programSections(programs: List<WorkoutProgram>): List<ProgramSection> {
+    if (programs.none { it.category.isNotBlank() }) {
+        return if (programs.isEmpty()) emptyList() else listOf(ProgramSection("", programs))
+    }
+    val byTitle = LinkedHashMap<String, MutableList<WorkoutProgram>>()
+    for (program in programs) {
+        val title = program.category.trim().ifEmpty { OTHER_PROGRAMS_SECTION }
+        byTitle.getOrPut(title) { mutableListOf() } += program
+    }
+    return byTitle.entries
+        .sortedWith(
+            // "Other" is last whatever it is called next to; everything else reads A to Z
+            compareBy({ it.key == OTHER_PROGRAMS_SECTION }, { it.key.lowercase() })
+        )
+        .map { ProgramSection(it.key, it.value) }
+}
+
+/**
+ * The categories already in use, for the editor to offer instead of asking the user to
+ * remember how they spelled it last time. Case-insensitively unique, first spelling wins.
+ */
+fun knownCategories(programs: List<WorkoutProgram>): List<String> {
+    val seen = LinkedHashMap<String, String>()
+    for (program in programs) {
+        val title = program.category.trim()
+        if (title.isEmpty()) continue
+        seen.putIfAbsent(title.lowercase(), title)
+    }
+    return seen.values.sortedBy { it.lowercase() }
+}
 
 /**
  * One entry of the flattened sequence: a single stretch of time with a name and a kind.
@@ -291,6 +368,7 @@ fun programFromExercise(
     return WorkoutProgram(
         name = exercise.name,
         prepareSec = prepareSec,
+        exerciseId = exercise.id,
         groups = listOf(
             ProgramGroup(
                 name = exercise.name,

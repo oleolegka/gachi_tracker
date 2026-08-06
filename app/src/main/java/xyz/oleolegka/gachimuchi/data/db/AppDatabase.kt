@@ -33,7 +33,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -110,7 +110,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
+        /**
+         * Version 2 -> 3: two columns on `programs` — the optional link to a catalog
+         * exercise, and the heading the program is filed under.
+         *
+         * Purely additive and both defaulted, so every existing program comes through as
+         * "not linked, no heading", which is exactly what it was. No foreign key is declared
+         * on the link — see [ProgramEntity] for why a hand-written protocol must not be
+         * deletable by way of the catalog.
+         *
+         * `category` is NOT NULL with a default because the entity declares a non-null
+         * String: Room compares the database against the entities on the next open, and a
+         * nullable column here would fail that check rather than fail quietly.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `programs` ADD COLUMN `exercise_id` INTEGER")
+                db.execSQL("ALTER TABLE `programs` ADD COLUMN `category` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

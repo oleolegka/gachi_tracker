@@ -1,5 +1,8 @@
 package xyz.oleolegka.gachimuchi.domain
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
 /**
  * What a finished run is worth writing down.
  *
@@ -17,11 +20,19 @@ package xyz.oleolegka.gachimuchi.domain
  * the ordinary repository. A timer that silently logged sets you did not do would poison
  * the only record of what was actually trained, and the personal records computed from it.
  *
- * ── Only runs generated from an exercise ────────────────────────────────────────
- * [RunOrigin] is what tells them apart, and it has to be recorded when the run starts
- * rather than guessed afterwards: a rest between sets is also "a program with an
+ * ── Every run except a rest, and why that changed ───────────────────────────────
+ * [RunOrigin] is what tells a rest apart from a workout, and it has to be recorded when the
+ * run starts rather than guessed afterwards: a rest between sets is also "a program with an
  * exercise_id" (see [restProgram]), and its single step is also a WORK step. Guessing from
  * the shape would offer to log a rest as a set of one.
+ *
+ * The offer used to be narrower still — only [RunOrigin.EXERCISE], a program generated on
+ * the spot from a catalog row. That silently excluded the ordinary case: a protocol saved
+ * in the editor and run from the timer tab, which is how a hangboard session is actually
+ * started. A whole session of 7:3 repeaters ran, counted twenty-four hangs, and offered
+ * nothing. So a run of a saved program now offers too, and [RunOutcome.exerciseId] is
+ * allowed to be null — the offer then asks which exercise it was, once, and the answer is
+ * remembered on the program.
  *
  * ── Holds only, and why ─────────────────────────────────────────────────────────
  * [programFromExercise] can only build a program from an exercise that carries a work:rest
@@ -60,12 +71,13 @@ enum class RunOrigin {
  * put between this set and the next one — known exactly, unlike the pause the session feed
  * has to derive from the gap between two writes, which is why it is worth recording.
  */
+@Serializable
 data class CompletedSet(
-    val setNumber: Int,
-    val reps: Int,
-    val plannedReps: Int,
-    val workSec: Int,
-    val restAfterSec: Int?,
+    @SerialName("set_number") val setNumber: Int,
+    @SerialName("reps") val reps: Int,
+    @SerialName("planned_reps") val plannedReps: Int,
+    @SerialName("work_sec") val workSec: Int,
+    @SerialName("rest_after_sec") val restAfterSec: Int?,
 )
 
 /**
@@ -124,32 +136,83 @@ fun completedSets(steps: List<WorkoutStep>, endedAtIndex: Int, finished: Boolean
     return out
 }
 
-/** How a run ended, and what it would put in the journal. Held in memory only. */
+/**
+ * How a run ended, and what it would put in the journal.
+ *
+ * ── It is written to disk, and that is a reversal ───────────────────────────────
+ * This used to live in memory only, on the argument that an offer is a conversation about
+ * what just happened and one that outlived the process would surface out of context. The
+ * phone in a pocket proved the argument backwards: a run ends with the screen off, Android
+ * gets around to killing the app before it is looked at again, and the session the user
+ * actually did is gone with no trace and no way to get it back. A slightly stale offer is a
+ * recoverable annoyance; a lost session is not.
+ *
+ * What makes the stale case honest is [endedAtWallMs] and [opDate]. The offer says when the
+ * run ended rather than pretending it was a moment ago, and the sets are written under the
+ * date the run HAPPENED on — an evening session confirmed the next morning belongs to the
+ * evening. Past [OUTCOME_MAX_AGE_MS] it is dropped: at that distance the numbers are a
+ * guess about a day already written.
+ */
+@Serializable
 data class RunOutcome(
-    val programName: String,
-    val origin: RunOrigin,
-    val exerciseId: Long?,
+    @SerialName("program_name") val programName: String,
+    @SerialName("origin") val origin: RunOrigin,
+    @SerialName("exercise_id") val exerciseId: Long?,
+    /** The saved program this run came from, or 0 when it was generated on the spot. */
+    @SerialName("program_id") val programId: Long = 0,
     /** The run was stopped by hand rather than reaching its end. */
-    val interrupted: Boolean,
-    val sets: List<CompletedSet>,
+    @SerialName("interrupted") val interrupted: Boolean,
+    @SerialName("sets") val sets: List<CompletedSet>,
+    /** Wall clock at the moment the run ended. Zero when it was never recorded. */
+    @SerialName("ended_at_wall_ms") val endedAtWallMs: Long = 0,
+    /** ISO date the run ended on — the date its sets are written under. */
+    @SerialName("op_date") val opDate: String = "",
 ) {
     /**
-     * Whether this run is worth interrupting the user about. A rest, a program that belongs
-     * to no exercise, and a run that completed nothing are all silent.
+     * Whether this run is worth interrupting the user about. A rest is silent (the set it
+     * follows is already written), and so is a run that completed no effort at all. Anything
+     * else is a workout that happened, whether or not it knows which exercise it was.
      */
     val offersLogging: Boolean
-        get() = origin == RunOrigin.EXERCISE && exerciseId != null && sets.isNotEmpty()
+        get() = origin != RunOrigin.REST && sets.isNotEmpty()
+
+    /** Whether the offer is about something that just happened, or about a run found later. */
+    fun isFresh(nowWallMs: Long): Boolean =
+        endedAtWallMs <= 0 || nowWallMs - endedAtWallMs < FRESH_OUTCOME_MS
+
+    fun isExpired(nowWallMs: Long): Boolean =
+        endedAtWallMs > 0 && nowWallMs - endedAtWallMs > OUTCOME_MAX_AGE_MS
 }
 
-/** Reads a run — live or just ended — as an outcome, settling its state against [now] first. */
-fun runOutcome(snapshot: RunSnapshot, now: Long): RunOutcome {
+/** Past this the offer stops calling itself "just now" and states the time the run ended. */
+const val FRESH_OUTCOME_MS = 10 * 60 * 1000L
+
+/** Past this a stored offer is dropped rather than raised against a day already written. */
+const val OUTCOME_MAX_AGE_MS = 24 * 60 * 60 * 1000L
+
+/**
+ * Reads a run — live or just ended — as an outcome, settling its state against [now] first.
+ *
+ * [now] is the monotonic clock the run is expressed in; [wallMs] and [opDate] are the wall
+ * clock and the calendar day, which the monotonic one cannot supply and which are what make
+ * a stored offer readable later.
+ */
+fun runOutcome(
+    snapshot: RunSnapshot,
+    now: Long,
+    wallMs: Long = 0,
+    opDate: String = "",
+): RunOutcome {
     val settled = settleRun(snapshot.steps, snapshot.state, now)
     return RunOutcome(
         programName = snapshot.programName,
         origin = snapshot.origin,
         exerciseId = snapshot.exerciseId,
+        programId = snapshot.programId,
         interrupted = !settled.finished,
         sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished),
+        endedAtWallMs = wallMs,
+        opDate = opDate,
     )
 }
 

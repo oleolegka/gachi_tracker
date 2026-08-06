@@ -234,4 +234,76 @@ class ProgramTest {
         assertEquals(24, starters.first { it.name.startsWith("Hangboard") }.workStepCount())
         assertEquals(8, starters.first { it.name.startsWith("Tabata") }.workStepCount())
     }
+
+    @Test
+    fun `a program built from an exercise remembers which exercise that was`() {
+        val hangs = ExerciseRef(
+            id = 42, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
+            edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+        )
+
+        val built = programFromExercise(hangs, reps = 6, sets = 4, restBetweenSetsSec = 180)!!
+
+        // the link is what decides whether finishing it offers to write the sets down
+        assertEquals(42L, built.exerciseId)
+    }
+
+    // --- filing the list under headings -------------------------------------------------
+
+    private fun named(name: String, category: String = "") =
+        WorkoutProgram(id = name.hashCode().toLong(), name = name, groups = emptyList(), category = category)
+
+    @Test
+    fun `a list with nothing categorised stays one plain list`() {
+        val sections = programSections(listOf(named("Tabata"), named("Repeaters")))
+
+        // a phone with three programs must not grow a heading it did not ask for
+        assertEquals(1, sections.size)
+        assertEquals("", sections.single().title)
+        assertEquals(listOf("Tabata", "Repeaters"), sections.single().programs.map { it.name })
+    }
+
+    @Test
+    fun `an empty list has no sections at all`() {
+        assertTrue(programSections(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `headings read A to Z, and the leftovers come last`() {
+        val sections = programSections(
+            listOf(
+                named("Tabata"),
+                named("Repeaters 7:3", "Hangboard"),
+                named("Warm-up", "Warm-up"),
+                named("Max hangs", "Hangboard"),
+            )
+        )
+
+        assertEquals(listOf("Hangboard", "Warm-up", "Other"), sections.map { it.title })
+        // inside a heading the stored order is kept, so the list does not reshuffle itself
+        assertEquals(listOf("Repeaters 7:3", "Max hangs"), sections.first().programs.map { it.name })
+        assertEquals(listOf("Tabata"), sections.last().programs.map { it.name })
+    }
+
+    @Test
+    fun `whitespace is not a category`() {
+        val sections = programSections(listOf(named("A", "   "), named("B", " Hangboard ")))
+
+        assertEquals(listOf("Hangboard", "Other"), sections.map { it.title })
+    }
+
+    @Test
+    fun `the editor is offered each heading once, however it was typed`() {
+        val known = knownCategories(
+            listOf(
+                named("A", "Hangboard"),
+                named("B", "hangboard"),
+                named("C", "Warm-up"),
+                named("D", ""),
+            )
+        )
+
+        // first spelling wins, so the chip list does not grow a second "hangboard"
+        assertEquals(listOf("Hangboard", "Warm-up"), known)
+    }
 }

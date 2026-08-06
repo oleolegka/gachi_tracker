@@ -72,12 +72,39 @@ Spoken announcements are optional and are only offered once a speech engine has 
 been found. On a phone without Google services there often is none, and the app says so
 instead of failing quietly.
 
+## The countdown decides when to signal; the loop only obeys
+
+What the timer owes at a given instant — a boundary signal, a countdown tick, or nothing —
+is a pure function of the step list, the run state and the monotonic clock, so the timing of
+the signals is tested on the JVM rather than only heard on a phone.
+
+The rule that function exists to enforce: a tick is only made STRICTLY INSIDE a step. On a
+step three seconds long the "three" tick would otherwise fall on the moment the step begins,
+and since the tone generator plays one tone at a time and the vibrator one waveform at a
+time, the tick would cut the boundary signal off. On 7:3 repeaters that silenced the change
+of step at every rest.
+
+For the same reason the signal is fired before the state is persisted and the notification
+redrawn, not after: those involve a synchronous disk write, and a beep queued behind one
+arrives after the step it announces.
+
 ## A finished run offers to log itself, and never logs by itself
 
-When a program was built from a catalog exercise, ending the run raises a summary — "three
-sets of six, the last one of three" — with every set editable and two buttons. Nothing
-reaches the journal until it is confirmed: a timer that quietly recorded sets you did not
-do would poison the only record of what was trained.
+Ending a run raises a summary — "three sets of six, the last one of three" — with every set
+editable. Nothing reaches the journal until it is confirmed: a timer that quietly recorded
+sets you did not do would poison the only record of what was trained. And nothing is
+confirmed silently either: the write says what it wrote, by name and count, with an undo.
+
+Every run offers except a rest between sets. A program that knows which catalog exercise it
+trains arrives filled in; one that does not asks, once, and the answer is written back onto
+the program so it never asks again. Restricting the offer to programs generated from an
+exercise is what made a whole session of saved-protocol repeaters count twenty-four hangs
+and then say nothing.
+
+The offer is written to disk. A run ends with the phone in a pocket, and by the time the
+screen is looked at the process may have been killed; an offer that lived in memory went
+with it. A stored offer states when the run ended and files its sets under the day it
+happened on, and is dropped after a day.
 
 Stopping half way offers only the part that ran. Skipping forward, however, counts the
 skipped efforts as done — the runner keeps a position, not a history — which is exactly
@@ -85,6 +112,15 @@ why the numbers are shown before they are written.
 
 The pause between sets comes from the program, where it is known exactly rather than
 derived.
+
+## Programs are filed under headings the user writes
+
+The timer tab groups programs by a free-text category on the program itself, with the
+uncategorised ones under "Other" and every heading collapsible. A list with nothing
+categorised draws as a plain list, so a phone with three programs does not grow a filing
+system. Folders as rows would need a table, a rename and a delete story; grouping by the
+linked exercise would sort almost nothing, because a circuit or a warm-up never links to
+one exercise.
 
 ## Rest between sets is derived, not stored
 

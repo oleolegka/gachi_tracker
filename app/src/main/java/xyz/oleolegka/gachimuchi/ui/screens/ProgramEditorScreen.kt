@@ -3,6 +3,8 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +19,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
@@ -57,10 +61,14 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * Same reason as the logging screen: seven seconds becomes eight with one tap and no
  * keyboard. The text field is still there underneath for the cases a stepper is slow at.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProgramEditorScreen(
     initial: WorkoutProgram?,
+    /** Hold exercises this program could be logged as; the link is what makes it loggable. */
+    candidates: List<ExerciseRef>,
+    /** Headings already in use, so the same one is not spelled two ways. */
+    categories: List<String>,
     onSave: (WorkoutProgram) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -138,6 +146,22 @@ fun ProgramEditorScreen(
                 )
             }
 
+            item {
+                CategoryField(
+                    value = program.category,
+                    known = categories,
+                    onValueChange = { program = program.copy(category = it) },
+                )
+            }
+
+            item {
+                ExerciseLinkField(
+                    candidates = candidates,
+                    selectedId = program.exerciseId,
+                    onSelect = { program = program.copy(exerciseId = it) },
+                )
+            }
+
             itemsIndexedGroups(program) { index, group ->
                 GroupCard(
                     group = group,
@@ -179,6 +203,95 @@ fun ProgramEditorScreen(
 
             item { Spacer(Modifier.height(24.dp)) }
         }
+    }
+}
+
+/**
+ * The heading this program is filed under on the timer tab.
+ *
+ * A text field with the headings already in use offered as chips. Free text alone would
+ * grow "Hangboard", "hangboard" and "Hang board" into three sections; a fixed list would
+ * mean guessing what someone trains. Chips plus a field is the pair that avoids both.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CategoryField(value: String, known: List<String>, onValueChange: (String) -> Unit) {
+    val colors = LocalGachiColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text("Category (empty for none)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        )
+        if (known.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                known.forEach { candidate ->
+                    FilterChip(
+                        selected = value.trim().equals(candidate, ignoreCase = true),
+                        onClick = {
+                            onValueChange(if (value.trim().equals(candidate, true)) "" else candidate)
+                        },
+                        label = { Text(candidate) },
+                    )
+                }
+            }
+        }
+        Text(
+            "Programs with the same category are grouped together and can be collapsed.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+    }
+}
+
+/**
+ * Which catalog exercise this program trains, if it is exactly one.
+ *
+ * This is the field that decides whether finishing the program offers to write the sets
+ * into the journal, so it says so out loud rather than sitting there as an unexplained
+ * dropdown. Only holds are offered: a hold is the one form whose sets map onto timed
+ * efforts one for one (§12-A).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ExerciseLinkField(
+    candidates: List<ExerciseRef>,
+    selectedId: Long?,
+    onSelect: (Long?) -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Logs as", style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
+        if (candidates.isEmpty()) {
+            Text(
+                "There is no hold exercise in the catalog yet. Create one and this program " +
+                    "can write its sets into the journal when it finishes.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+            return@Column
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            candidates.forEach { candidate ->
+                FilterChip(
+                    selected = selectedId == candidate.id,
+                    onClick = { onSelect(if (selectedId == candidate.id) null else candidate.id) },
+                    label = { Text(candidate.name) },
+                )
+            }
+        }
+        Text(
+            if (selectedId == null) {
+                "Not linked: finishing this program will ask which exercise it was, once."
+            } else {
+                "Finishing this program offers to log its sets under this exercise."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
     }
 }
 

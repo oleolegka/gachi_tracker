@@ -114,6 +114,22 @@ data class ProgramEntity(
     @androidx.room.ColumnInfo(name = "prepare_sec") val prepareSec: Int,
     val position: Int = 0,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
+    /**
+     * The catalog exercise this program trains, when it is exactly one (schema version 3).
+     *
+     * Nullable and deliberately WITHOUT a foreign key. A program is reference data that
+     * outlives the catalog row it points at — an exercise renamed, split by edge (§12-A) or
+     * deleted must not take a hand-written protocol down with it, which `ON DELETE CASCADE`
+     * would, and `ON DELETE SET NULL` would still make deleting an exercise silently edit
+     * programs. A dangling id simply reads as "no link" and the offer asks again.
+     */
+    @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: Long? = null,
+    /**
+     * The heading this program is filed under on the timer tab (schema version 3), or the
+     * empty string. Free text on the row rather than a folder table: see [programSections]
+     * in domain/Program.kt for why that trade was made.
+     */
+    val category: String = "",
 )
 
 /**

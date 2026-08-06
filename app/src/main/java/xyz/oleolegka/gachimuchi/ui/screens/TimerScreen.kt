@@ -22,6 +22,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +43,7 @@ import xyz.oleolegka.gachimuchi.domain.currentStep
 import xyz.oleolegka.gachimuchi.domain.formatClock
 import xyz.oleolegka.gachimuchi.domain.nextStep
 import xyz.oleolegka.gachimuchi.domain.phase
+import xyz.oleolegka.gachimuchi.domain.programSections
 import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
 import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
 import xyz.oleolegka.gachimuchi.domain.totalSec
@@ -62,6 +68,8 @@ fun TimerScreen(
     state: TimerUiState,
     actions: TimerActions,
     programs: List<WorkoutProgram>,
+    /** Catalog names by exercise id, so a linked program can say what it trains. */
+    exerciseNames: Map<Long, String>,
     onRunProgram: (WorkoutProgram) -> Unit,
     onEditProgram: (WorkoutProgram?) -> Unit,
     onDeleteProgram: (Long) -> Unit,
@@ -74,6 +82,8 @@ fun TimerScreen(
     val colors = LocalGachiColors.current
     // owns the pickers and the dialogs of exporting and importing; see ProgramTransfer.kt
     val transfer = rememberProgramTransfer(onImported = onImportPrograms)
+    val sections = remember(programs) { programSections(programs) }
+    var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -109,15 +119,45 @@ fun TimerScreen(
             )
         }
 
-        items(programs, key = { it.id }) { program ->
-            ProgramCard(
-                program = program,
-                enabled = state.enabled,
-                onRun = { onRunProgram(program) },
-                onEdit = { onEditProgram(program) },
-                onExport = { transfer.export(listOf(program)) },
-                onDelete = { onDeleteProgram(program.id) },
-            )
+        /*
+         * Filed under the headings the user wrote (domain/Program.kt). A list with nothing
+         * categorised comes back as one section with no title and draws exactly as it did
+         * before, so a phone with three programs is not made to look like a filing cabinet.
+         *
+         * Sections collapse, and which ones are collapsed is remembered across a rotation
+         * but not across a launch: a heading closed last week should not hide the program
+         * being looked for today.
+         */
+        sections.forEach { section ->
+            if (section.title.isNotEmpty()) {
+                item(key = "section-${section.title}") {
+                    SectionHeader(
+                        title = section.title,
+                        count = section.programs.size,
+                        collapsed = section.title in collapsed,
+                        onToggle = {
+                            collapsed = if (section.title in collapsed) {
+                                collapsed - section.title
+                            } else {
+                                collapsed + section.title
+                            }
+                        },
+                    )
+                }
+            }
+            if (section.title !in collapsed) {
+                items(section.programs, key = { it.id }) { program ->
+                    ProgramCard(
+                        program = program,
+                        enabled = state.enabled,
+                        exerciseName = exerciseNames[program.exerciseId],
+                        onRun = { onRunProgram(program) },
+                        onEdit = { onEditProgram(program) },
+                        onExport = { transfer.export(listOf(program)) },
+                        onDelete = { onDeleteProgram(program.id) },
+                    )
+                }
+            }
         }
 
         item {
@@ -261,10 +301,39 @@ private fun RunPanel(state: TimerUiState, actions: TimerActions) {
     }
 }
 
+/** A collapsible heading. The count is on it so a closed section still says how big it is. */
+@Composable
+private fun SectionHeader(
+    title: String,
+    count: Int,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .heightIn(min = 48.dp)
+            .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(
+            if (collapsed) "$count hidden - show" else "$count",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+    }
+    HorizontalDivider(color = colors.grid)
+}
+
 @Composable
 private fun ProgramCard(
     program: WorkoutProgram,
     enabled: Boolean,
+    exerciseName: String?,
     onRun: () -> Unit,
     onEdit: () -> Unit,
     onExport: () -> Unit,
@@ -275,7 +344,13 @@ private fun ProgramCard(
         Column(Modifier.padding(12.dp)) {
             Text(program.name, style = MaterialTheme.typography.titleMedium)
             Text(
-                "${program.workStepCount()} efforts   ${formatClock(program.totalSec())} total",
+                buildString {
+                    append("${program.workStepCount()} efforts   ")
+                    append("${formatClock(program.totalSec())} total")
+                    // stated on the card, because it is what decides whether finishing this
+                    // program offers to write the sets down
+                    exerciseName?.let { append("   logs as $it") }
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkMuted,
             )
