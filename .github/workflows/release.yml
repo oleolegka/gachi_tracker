@@ -49,10 +49,32 @@ jobs:
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
 
+      # Secrets pasted through a browser often pick up a trailing newline or stray
+      # whitespace, which surfaces later as a bare "keystore password was incorrect".
+      # Normalise it here and check the key opens before the build starts, so a wrong
+      # secret fails fast with a message that says what to fix.
+      - name: Check the signing password
+        env:
+          KEYSTORE_PASSWORD_RAW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          PASS=$(printf '%s' "$KEYSTORE_PASSWORD_RAW" | tr -d '[:space:]')
+          if [ -z "$PASS" ]; then
+            echo "The ANDROID_KEYSTORE_PASSWORD secret is empty." >&2
+            exit 1
+          fi
+          if ! keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass "$PASS" -alias gachi >/dev/null 2>&1; then
+            echo "ANDROID_KEYSTORE_PASSWORD does not open the keystore, or alias 'gachi' is missing." >&2
+            echo "Re-copy the password into the repository secret and make sure nothing is truncated." >&2
+            exit 1
+          fi
+          echo "The keystore opens and contains the 'gachi' key."
+          echo "::add-mask::$PASS"
+          echo "KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+
       - name: Build the signed APK
         env:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: gachi
         run: ./gradlew assembleRelease --no-daemon
 
