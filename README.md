@@ -8,6 +8,9 @@ no Google Play Services.
 
 This is an early version — the skeleton of the app:
 
+- a logging screen for use during a session: the entry card is pinned to the bottom of
+  the screen and prefilled from the last set of that exercise, so another set of the same
+  is a single tap; the exercise picker is a sheet ordered by what you used most recently;
 - a local training journal (append-only, SQLite via Room);
 - an exercise catalog with aliases, so "bench" and "bench press" are one exercise;
 - six activity forms: strength (weight x reps), holds and hangboard, cardio, duration,
@@ -19,7 +22,6 @@ This is an early version — the skeleton of the app:
 
 ## Planned
 
-- a logging screen to use during a session;
 - a rest timer with a notification;
 - progress charts;
 - calendar editing;
@@ -31,6 +33,13 @@ This is an early version — the skeleton of the app:
 on a 20 mm edge with a 7:3 work:rest protocol and hangs on a 15 mm edge are different
 exercises with separate histories. The tracked variable — and the personal record — is
 the added weight, not the duration.
+
+**Rest between sets is derived, not stored.** The pause after a set only becomes known
+when the next one is logged, by which time the earlier event is already in an append-only
+journal and cannot be amended. So the app measures the gap between the two write times
+instead, and defers to an explicit `rest_after_sec` whenever a record carries one (the
+Telegram bot writes it). Gaps longer than 20 minutes are treated as a break in the
+workout rather than a rest and are not reported.
 
 **No Google Play Services.** The app depends on no Google service and is meant to work
 on GrapheneOS and other builds without them.

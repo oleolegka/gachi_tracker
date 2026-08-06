@@ -11,6 +11,7 @@ import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
@@ -35,6 +36,8 @@ class ActivityRepository(private val db: AppDatabase) {
         db.events().observeAll().map { rows -> rows.map { it.toJournalEvent() } }
 
     val exercises: Flow<List<ExerciseEntity>> = db.exercises().observeAll()
+
+    val aliases: Flow<List<AliasEntity>> = db.aliases().observeAll()
 
     val slots: Flow<List<Slot>> = db.slots().observeAll().map { rows -> rows.map { it.toSlot() } }
 
@@ -148,6 +151,24 @@ class ActivityRepository(private val db: AppDatabase) {
     /** The plan is freely editable (append-only applies to facts, not to the plan). */
     suspend fun deleteSlots(ids: List<Long>) = db.slots().deleteByIds(ids)
 }
+
+/**
+ * The catalog row as the domain sees it. Screens build forms out of an [ExerciseRef] and
+ * never assemble a payload themselves, so an exercise cannot lose its identity — for
+ * holds that identity includes edge and protocol (§12-A).
+ *
+ * An unreadable form code degrades to a check-in rather than throwing: that is the only
+ * form whose entry card cannot write a wrong-shaped payload, so a corrupted row costs a
+ * useless card instead of a crash on the screen the user is standing in the gym with.
+ */
+fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
+    id = id,
+    name = name,
+    form = runCatching { ExerciseForm.fromCode(form) }.getOrDefault(ExerciseForm.TICK),
+    edgeMm = edgeMm,
+    workSec = protocolWorkSec,
+    restSec = protocolRestSec,
+)
 
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,

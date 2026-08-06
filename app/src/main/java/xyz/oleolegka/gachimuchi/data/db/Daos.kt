@@ -70,6 +70,10 @@ interface AliasDao {
     @Query("SELECT * FROM aliases WHERE space_id = :spaceId AND key = :key")
     suspend fun byKey(key: String, spaceId: Long = LOCAL_SPACE_ID): AliasEntity?
 
+    /** Live aliases: the exercise picker searches by them alongside the names. */
+    @Query("SELECT * FROM aliases WHERE space_id = :spaceId ORDER BY key")
+    fun observeAll(spaceId: Long = LOCAL_SPACE_ID): Flow<List<AliasEntity>>
+
     @Query("SELECT * FROM aliases WHERE space_id = :spaceId ORDER BY key")
     suspend fun all(spaceId: Long = LOCAL_SPACE_ID): List<AliasEntity>
 

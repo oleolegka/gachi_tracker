@@ -7,6 +7,7 @@ import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
+import xyz.oleolegka.gachimuchi.domain.activityName
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -59,13 +60,12 @@ fun fmtDay(d: LocalDate): String = d.format(dayFormat)
 fun fmtMonth(d: LocalDate): String = d.format(monthFormat)
 
 /** Activity name taken from the form (body weight has no name — its role is used instead). */
-fun ActivityForm.displayName(): String = when (this) {
-    is StrengthSet -> exercise
-    is HoldSet -> activity
-    is Duration -> activity
-    is Tick -> activity
-    is Cardio -> activity
-    is Bodyweight -> "Body weight"
+fun ActivityForm.displayName(): String = activityName()
+
+/** A rest between sets, in the compact "2:30" shape the session feed uses. */
+fun fmtRest(sec: Double): String {
+    val total = sec.roundToInt()
+    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
 }
 
 /** One-line description of an entry for lists: only what was actually recorded. */

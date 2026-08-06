@@ -2,6 +2,7 @@ package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -17,11 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import xyz.oleolegka.gachimuchi.domain.ActivityEvent
-import xyz.oleolegka.gachimuchi.domain.HoldSet
-import xyz.oleolegka.gachimuchi.domain.StrengthSet
-import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
-import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
+import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.displayName
@@ -56,6 +53,8 @@ fun TodayScreen(
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
+        // room under the last card for the "Start workout" button, which floats above the list
+        contentPadding = PaddingValues(bottom = 88.dp),
     ) {
         item {
             Row(
@@ -104,8 +103,8 @@ fun TodayScreen(
         if (todays.isEmpty()) {
             item {
                 Text(
-                    "Nothing recorded today yet. A workout logging screen is the next step; " +
-                        "for now the data comes from the demo history.",
+                    "Nothing recorded today yet. Start a workout with the button below and " +
+                        "the entries will show up here.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.inkMuted,
                     modifier = Modifier.padding(vertical = 8.dp),
@@ -118,33 +117,17 @@ fun TodayScreen(
 /**
  * Records set on the given day: (exercise, phrase).
  *
- * An honest simplification: today's own sets count as "previous" for the later sets of
- * the same day — exactly as in the bot. Sets without an exercise_id (written before the
- * catalog existed) are skipped: there is nothing to compare them against.
+ * The detection itself lives in the session reducer, which is the same code the logging
+ * screen shows a record badge from — the two screens cannot disagree about what counts
+ * as a record.
+ *
+ * An honest simplification carried over from the bot: today's own sets count as
+ * "previous" for the later sets of the same day. Sets without an exercise_id (written
+ * before the catalog existed) are skipped — there is nothing to compare them against.
+ * One note per exercise: the last, which is the strongest of the day.
  */
-private fun todaysRecords(state: UiState, iso: String): List<Pair<String, String>> {
-    val all = readActivities(state.events)
-    val out = mutableListOf<Pair<String, String>>()
-    for ((index, ev) in all.withIndex()) {
-        if (ev.opDate != iso) continue
-        val prior: List<ActivityEvent> = all.subList(0, index)
-        when (val form = ev.form) {
-            is StrengthSet -> {
-                val id = form.exerciseId ?: continue
-                val priorSets = prior.mapNotNull { (it.form as? StrengthSet)?.takeIf { s -> s.exerciseId == id } }
-                evaluateStrengthRecord(priorSets, form.weightKg, form.reps)
-                    ?.let { out += form.exercise to it.text }
-            }
-
-            is HoldSet -> {
-                val id = form.exerciseId ?: continue
-                val priorHolds = prior.mapNotNull { (it.form as? HoldSet)?.takeIf { h -> h.exerciseId == id } }
-                evaluateHoldRecord(priorHolds, form)?.let { out += form.activity to it.text }
-            }
-
-            else -> Unit
-        }
+private fun todaysRecords(state: UiState, iso: String): List<Pair<String, String>> =
+    buildSession(state.events, iso).groups.mapNotNull { group ->
+        val hit = group.sets.lastOrNull { it.record != null }?.record ?: return@mapNotNull null
+        group.name to hit.text
     }
-    // one note per exercise — the last one (the strongest of the day)
-    return out.groupBy { it.first }.map { (name, hits) -> name to hits.last().second }
-}
