@@ -30,6 +30,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
+import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
 import xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen
@@ -65,6 +66,9 @@ fun GachiApp(viewModel: MainViewModel) {
     var tab by rememberSaveable { mutableStateOf(Tab.TODAY) }
     var logging by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditorTarget?>(null) }
+    // the form detail screen is a MODE over the overview, like the logging screen: it has
+    // exactly one way out and nothing to navigate to from inside it
+    var detailExerciseId by rememberSaveable { mutableStateOf<Long?>(null) }
     val today = remember { viewModel.today }
     val iso = today.toString()
 
@@ -114,6 +118,16 @@ fun GachiApp(viewModel: MainViewModel) {
                 editing = null
             },
             onClose = { editing = null },
+        )
+        return
+    }
+
+    detailExerciseId?.let { id ->
+        FormDetailScreen(
+            state = state,
+            exerciseId = id,
+            today = today,
+            onClose = { detailExerciseId = null },
         )
         return
     }
@@ -168,7 +182,7 @@ fun GachiApp(viewModel: MainViewModel) {
         val inner = Modifier.padding(padding)
         when (tab) {
             Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
-            Tab.OVERVIEW -> OverviewScreen(state, today, inner)
+            Tab.OVERVIEW -> OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
             Tab.CALENDAR -> CalendarScreen(state, today, inner)
             Tab.TIMER -> {
                 // the settings row about spoken steps has to know the answer before it is

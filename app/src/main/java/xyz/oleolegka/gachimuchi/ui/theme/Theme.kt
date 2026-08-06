@@ -27,20 +27,27 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 /** Roles missing from the M3 ColorScheme: grid, axis, muted text, statuses, forms. */
 data class GachiColors(
     val plane: Color,
+    val recessed: Color,
+    val border: Color,
     val grid: Color,
     val axis: Color,
     val inkSecondary: Color,
     val inkMuted: Color,
     val accent: Color,
     val sequential: List<Color>,
+    val heatmap: List<Color>,
     val categorical: List<Color>,
     val good: Color,
+    val goodText: Color,
     val warning: Color,
     val serious: Color,
     val critical: Color,
 ) {
     /** Colour of an activity form (categorical scale, one fixed slot per form). */
     fun forForm(form: ExerciseForm): Color = categorical[(form.code - 1).coerceIn(categorical.indices)]
+
+    /** Fill of a heatmap cell at an intensity level; 0 is "nothing happened". */
+    fun forHeatmapLevel(level: Int): Color = heatmap[level.coerceIn(heatmap.indices)]
 
     /** Colour of a calendar day status (§12-B). Always paired with a label, never colour alone. */
     fun forDayState(state: DayState): Color = when (state) {
@@ -52,14 +59,25 @@ data class GachiColors(
     }
 }
 
-val LocalGachiColors = staticCompositionLocalOf {
-    GachiColors(
-        plane = PlaneLight, grid = GridLight, axis = AxisLight,
-        inkSecondary = InkSecondaryLight, inkMuted = InkMuted, accent = AccentLight,
-        sequential = Sequential, categorical = CategoricalLight,
-        good = StatusGood, warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
-    )
-}
+private val LightGachiColors = GachiColors(
+    plane = PlaneLight, recessed = SurfaceRecessedLight, border = BorderLight,
+    grid = GridLight, axis = AxisLight,
+    inkSecondary = InkSecondaryLight, inkMuted = InkMuted, accent = AccentLight,
+    sequential = Sequential, heatmap = HeatmapLight, categorical = CategoricalLight,
+    good = StatusGood, goodText = GoodTextLight,
+    warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
+)
+
+private val DarkGachiColors = GachiColors(
+    plane = PlaneDark, recessed = SurfaceRecessedDark, border = BorderDark,
+    grid = GridDark, axis = AxisDark,
+    inkSecondary = InkSecondaryDark, inkMuted = InkMuted, accent = AccentDark,
+    sequential = Sequential, heatmap = HeatmapDark, categorical = CategoricalDark,
+    good = StatusGood, goodText = GoodTextDark,
+    warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
+)
+
+val LocalGachiColors = staticCompositionLocalOf { LightGachiColors }
 
 private val LightScheme = lightColorScheme(
     primary = AccentLight,
@@ -109,21 +127,7 @@ fun GachimuchiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val extended = if (darkTheme) {
-        GachiColors(
-            plane = PlaneDark, grid = GridDark, axis = AxisDark,
-            inkSecondary = InkSecondaryDark, inkMuted = InkMuted, accent = AccentDark,
-            sequential = Sequential, categorical = CategoricalDark,
-            good = StatusGood, warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
-        )
-    } else {
-        GachiColors(
-            plane = PlaneLight, grid = GridLight, axis = AxisLight,
-            inkSecondary = InkSecondaryLight, inkMuted = InkMuted, accent = AccentLight,
-            sequential = Sequential, categorical = CategoricalLight,
-            good = StatusGood, warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
-        )
-    }
+    val extended = if (darkTheme) DarkGachiColors else LightGachiColors
     CompositionLocalProvider(LocalGachiColors provides extended) {
         MaterialTheme(
             colorScheme = if (darkTheme) DarkScheme else LightScheme,

@@ -1,0 +1,422 @@
+package xyz.oleolegka.gachimuchi.ui.components
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.DayPoint
+import xyz.oleolegka.gachimuchi.domain.ValueFormat
+import xyz.oleolegka.gachimuchi.ui.fmtAxis
+import xyz.oleolegka.gachimuchi.ui.fmtShortDay
+import xyz.oleolegka.gachimuchi.ui.theme.GachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import java.time.LocalDate
+
+/**
+ * The charts, drawn on a Compose [Canvas] with no charting library behind them.
+ *
+ * ── Why hand-drawn ──────────────────────────────────────────────────────────────
+ * A charting dependency would bring its own palette, its own type scale and its own idea
+ * of what an axis looks like, and the whole point of `research_visual.md` §6 is that those
+ * three are decided once for the app. Two of the four charts here (the heatmap and the
+ * sparkline) have no equivalent in the usual libraries anyway.
+ *
+ * ── Every chart has axes and every bar has its number ───────────────────────────
+ * A line without a labelled Y axis says "it went up" and nothing else — not from what, not
+ * to what, not by how much. A bar without its value is a coloured rectangle. So the
+ * chart bodies here reserve room for labels FIRST and draw the data into what is left,
+ * rather than drawing the data and hoping labels fit. Where labels genuinely cannot fit
+ * (dozens of bars on a phone), [barLabelIndices] thins them down to the ones a reader
+ * actually looks for instead of dropping all of them.
+ *
+ * The arithmetic lives in `ChartMath.kt` and is unit-tested; this file is only pixels.
+ */
+
+/** Text sizes of chart furniture. Small, but not below the 10 sp that stops being legible. */
+private val AXIS_TEXT_SIZE = 10.sp
+private val VALUE_TEXT_SIZE = 10.sp
+
+private fun axisTextStyle(color: Color) = TextStyle(fontSize = AXIS_TEXT_SIZE, color = color)
+
+private fun valueTextStyle(color: Color) = TextStyle(fontSize = VALUE_TEXT_SIZE, color = color)
+
+/** Measures a string once so the layout can reserve room for it before anything is drawn. */
+private fun TextMeasurer.width(text: String, style: TextStyle): Float =
+    measure(text, style).size.width.toFloat()
+
+private fun DrawScope.drawLabel(
+    measurer: TextMeasurer,
+    text: String,
+    style: TextStyle,
+    x: Float,
+    y: Float,
+    align: TextAlign = TextAlign.Start,
+) {
+    val layout: TextLayoutResult = measurer.measure(text, style)
+    val dx = when (align) {
+        TextAlign.End -> -layout.size.width.toFloat()
+        TextAlign.Center -> -layout.size.width / 2f
+        else -> 0f
+    }
+    drawText(layout, topLeft = Offset(x + dx, y))
+}
+
+// --- sparkline --------------------------------------------------------------------------
+
+/**
+ * A sparkline: the shape of a series and nothing else.
+ *
+ * Deliberately axis-free — that is what makes it a sparkline rather than a small chart.
+ * It lives inside a door tile whose headline already states the last value in words, so
+ * the line only has to answer "rising or falling", and axis furniture at this size would
+ * cost more pixels than the data.
+ *
+ * The last point gets a dot: without it a two-pixel line ending mid-tile reads as clipped.
+ */
+@Composable
+fun Sparkline(
+    values: List<Double>,
+    modifier: Modifier = Modifier,
+    color: Color = LocalGachiColors.current.accent,
+    height: Dp = 32.dp,
+    lowerIsBetter: Boolean = false,
+) {
+    val colors = LocalGachiColors.current
+    Canvas(modifier.fillMaxWidth().height(height)) {
+        if (values.isEmpty()) return@Canvas
+        val lo = values.min()
+        val hi = values.max()
+        val span = (hi - lo).takeIf { it > 0 } ?: 1.0
+        val inset = 3.dp.toPx()
+        val usableHeight = (size.height - inset * 2).coerceAtLeast(1f)
+
+        fun pointAt(index: Int): Offset {
+            val x = if (values.size == 1) size.width / 2f
+            else size.width * index / (values.size - 1).toFloat()
+            val y = inset + usableHeight * (1f - ((values[index] - lo) / span).toFloat())
+            return Offset(x.coerceIn(0f, size.width), y)
+        }
+
+        // a single point cannot make a line; a lone dot is the honest drawing of it
+        if (values.size == 1) {
+            drawCircle(color, radius = 3.dp.toPx(), center = pointAt(0))
+            return@Canvas
+        }
+
+        val path = Path().apply {
+            moveTo(pointAt(0).x, pointAt(0).y)
+            for (i in 1 until values.size) lineTo(pointAt(i).x, pointAt(i).y)
+        }
+        drawPath(path, color, style = Stroke(width = 1.5.dp.toPx()))
+
+        val lastIndex = values.lastIndex
+        val best = if (lowerIsBetter) values.min() else values.max()
+        // the closing dot is coloured only when the series ENDS on its best value: a
+        // highlight that fires on every tile stops carrying information
+        val dotColor = if (values[lastIndex] == best) colors.good else color
+        drawCircle(dotColor, radius = 2.5.dp.toPx(), center = pointAt(lastIndex))
+    }
+}
+
+// --- shared plot furniture ---------------------------------------------------------------
+
+/** The rectangle the data is drawn into, once the labels have taken their room. */
+private data class Plot(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    val width: Float get() = (right - left).coerceAtLeast(1f)
+    val height: Float get() = (bottom - top).coerceAtLeast(1f)
+}
+
+/**
+ * Horizontal gridlines and the Y labels beside them, plus the baseline.
+ *
+ * Gridlines are thin, SOLID and in the recessive grid colour, exactly as the design
+ * system draws them — a dashed grid at this line weight turns into visual noise on a
+ * phone. The bottom gridline doubles as the baseline and is drawn in the stronger axis
+ * colour, which is why there is no separate frame around the plot: the design deliberately
+ * has no left-hand axis rule, only labels.
+ */
+private fun DrawScope.drawYAxis(
+    measurer: TextMeasurer,
+    scale: AxisScale,
+    plot: Plot,
+    format: ValueFormat,
+    colors: GachiColors,
+) {
+    val style = axisTextStyle(colors.inkMuted)
+    val labelHalf = measurer.measure("0", style).size.height / 2f
+    for (tick in scale.ticks) {
+        val y = plot.bottom - plot.height * scale.fraction(tick)
+        if (y < plot.top - 1f || y > plot.bottom + 1f) continue
+        val isBase = kotlin.math.abs(y - plot.bottom) < 0.5f
+        drawLine(
+            color = if (isBase) colors.axis else colors.grid,
+            start = Offset(plot.left, y),
+            end = Offset(plot.right, y),
+            strokeWidth = 1.dp.toPx(),
+        )
+        drawLabel(
+            measurer, fmtAxis(tick, format), style,
+            x = plot.left - 4.dp.toPx(),
+            y = y - labelHalf,
+            align = TextAlign.End,
+        )
+    }
+}
+
+/** Date labels under the plot, thinned by [labelIndices] so they never overlap. */
+private fun DrawScope.drawXDates(
+    measurer: TextMeasurer,
+    points: List<DayPoint>,
+    plot: Plot,
+    colors: GachiColors,
+    maxLabels: Int,
+) {
+    val style = axisTextStyle(colors.inkMuted)
+    val y = plot.bottom + 5.dp.toPx()
+    for (index in labelIndices(points.size, maxLabels)) {
+        val x = if (points.size == 1) plot.left + plot.width / 2f
+        else plot.left + plot.width * index / (points.size - 1).toFloat()
+        val text = fmtShortDay(LocalDate.parse(points[index].opDate))
+        val half = measurer.width(text, style) / 2f
+        // the end labels are pulled inside the canvas instead of being clipped in half
+        val clamped = x.coerceIn(plot.left - 2.dp.toPx() + half, size.width - half)
+        drawLabel(measurer, text, style, clamped, y, TextAlign.Center)
+    }
+}
+
+/** How wide the Y labels of this scale get — the plot starts after that. */
+private fun DrawScope.yLabelWidth(
+    measurer: TextMeasurer,
+    scale: AxisScale,
+    format: ValueFormat,
+    colors: GachiColors,
+): Float {
+    val style = axisTextStyle(colors.inkMuted)
+    return scale.ticks.maxOfOrNull { measurer.width(fmtAxis(it, format), style) } ?: 0f
+}
+
+// --- line chart ---------------------------------------------------------------------------
+
+/** Opacity of the wash under a trend line (`--form-*` at 9 %, per the design system). */
+private const val AREA_ALPHA = 0.09f
+
+/**
+ * The trend chart: a line with a labelled Y axis, a dated X axis, recessive gridlines, a
+ * flat wash beneath the line and the latest value called out in words.
+ *
+ * Points get a dot only while there are few enough for dots to mean something. Past that
+ * only the first, the extreme and the latest point are marked, which are the three anyone
+ * looks for.
+ */
+@Composable
+fun LineChart(
+    points: List<DayPoint>,
+    format: ValueFormat,
+    modifier: Modifier = Modifier,
+    height: Dp = 180.dp,
+    lowerIsBetter: Boolean = false,
+    lineColor: Color = LocalGachiColors.current.accent,
+) {
+    val colors = LocalGachiColors.current
+    val measurer = rememberTextMeasurer()
+    val scale = remember(points) { niceScale(points.map { it.value }, targetTicks = 4) }
+
+    Canvas(modifier.fillMaxWidth().height(height)) {
+        if (points.isEmpty()) return@Canvas
+        val labelHeight = measurer.measure("0", axisTextStyle(colors.inkMuted)).size.height.toFloat()
+        val plot = Plot(
+            left = yLabelWidth(measurer, scale, format, colors) + 8.dp.toPx(),
+            // room above the line for the callout on the latest point
+            top = labelHeight + 8.dp.toPx(),
+            right = size.width - 4.dp.toPx(),
+            bottom = size.height - labelHeight - 8.dp.toPx(),
+        )
+        drawYAxis(measurer, scale, plot, format, colors)
+        drawXDates(measurer, points, plot, colors, maxLabels = 4)
+
+        fun pointAt(index: Int): Offset {
+            val x = if (points.size == 1) plot.left + plot.width / 2f
+            else plot.left + plot.width * index / (points.size - 1).toFloat()
+            val y = plot.bottom - plot.height * scale.fraction(points[index].value)
+            return Offset(x, y.coerceIn(plot.top, plot.bottom))
+        }
+
+        val line = Path()
+        val area = Path()
+        for (i in points.indices) {
+            val p = pointAt(i)
+            if (i == 0) {
+                line.moveTo(p.x, p.y)
+                area.moveTo(p.x, plot.bottom)
+                area.lineTo(p.x, p.y)
+            } else {
+                line.lineTo(p.x, p.y)
+                area.lineTo(p.x, p.y)
+            }
+        }
+        area.lineTo(pointAt(points.lastIndex).x, plot.bottom)
+        area.close()
+
+        // a flat wash, not a gradient: the design system fills the area with the line's own
+        // colour at 9 % so it reads as shading rather than as a second series
+        clipRect(plot.left, plot.top, plot.right, plot.bottom) {
+            drawPath(area, color = lineColor.copy(alpha = AREA_ALPHA))
+        }
+        drawPath(line, lineColor, style = Stroke(width = 2.dp.toPx()))
+
+        val best = if (lowerIsBetter) points.minBy { it.value } else points.maxBy { it.value }
+        val bestIndex = points.indexOf(best)
+        val marked = if (points.size <= 24) points.indices.toSet() else setOf(0, bestIndex, points.lastIndex)
+        for (i in marked) {
+            val p = pointAt(i)
+            // the dot is filled with the card surface so the line does not show through it
+            drawCircle(colors.plane, radius = 3.dp.toPx(), center = p)
+            drawCircle(lineColor, radius = 3.dp.toPx(), center = p, style = Stroke(1.5.dp.toPx()))
+        }
+        // the closing point is solid and larger, with a 2 px ring of the surface around it
+        val endPoint = pointAt(points.lastIndex)
+        drawCircle(lineColor, radius = 4.dp.toPx(), center = endPoint)
+        drawCircle(colors.plane, radius = 4.dp.toPx(), center = endPoint, style = Stroke(2.dp.toPx()))
+
+        // the latest value in words, above its point: the number the screen is opened for
+        val lastPoint = pointAt(points.lastIndex)
+        val text = fmtAxis(points.last().value, format)
+        val style = valueTextStyle(colors.inkSecondary)
+        val half = measurer.width(text, style) / 2f
+        drawLabel(
+            measurer, text, style,
+            x = lastPoint.x.coerceIn(plot.left + half, size.width - half),
+            y = (lastPoint.y - 6.dp.toPx() - measurer.measure(text, style).size.height)
+                .coerceAtLeast(0f),
+            align = TextAlign.Center,
+        )
+    }
+}
+
+// --- bar chart -----------------------------------------------------------------------------
+
+/**
+ * The volume chart: bars from a ZERO baseline, each carrying its value.
+ *
+ * The baseline is not negotiable. A bar chart is read by comparing lengths, so a truncated
+ * axis makes a 5 % difference look like a doubling — that is why [niceScale] is asked for
+ * `includeZero` here and not for the line above.
+ */
+@Composable
+fun BarChart(
+    points: List<DayPoint>,
+    format: ValueFormat,
+    modifier: Modifier = Modifier,
+    height: Dp = 170.dp,
+) {
+    val colors = LocalGachiColors.current
+    val measurer = rememberTextMeasurer()
+    val scale = remember(points) {
+        niceScale(points.map { it.value }, targetTicks = 4, includeZero = true)
+    }
+    val labelled = remember(points) { barLabelIndices(points.map { it.value }) }
+
+    Canvas(modifier.fillMaxWidth().height(height)) {
+        if (points.isEmpty()) return@Canvas
+        val axisStyle = axisTextStyle(colors.inkMuted)
+        val valueStyle = valueTextStyle(colors.inkSecondary)
+        val labelHeight = measurer.measure("0", axisStyle).size.height.toFloat()
+        val plot = Plot(
+            left = yLabelWidth(measurer, scale, format, colors) + 8.dp.toPx(),
+            top = labelHeight + 6.dp.toPx(),   // room for the number on top of the tallest bar
+            right = size.width - 4.dp.toPx(),
+            bottom = size.height - labelHeight - 8.dp.toPx(),
+        )
+        drawYAxis(measurer, scale, plot, format, colors)
+        drawXDates(measurer, points, plot, colors, maxLabels = 3)
+
+        val slot = plot.width / points.size
+        // the design caps a bar at 20 dp and asks for air between bars; below that the bar
+        // takes what the slot leaves, but never thins to nothing (90 bars on a phone)
+        val barWidth = minOf(20.dp.toPx(), (slot - 6.dp.toPx())).coerceAtLeast(1f)
+        val zeroY = plot.bottom - plot.height * scale.fraction(0.0)
+
+        for (i in points.indices) {
+            val value = points[i].value
+            val centerX = plot.left + slot * (i + 0.5f)
+            val valueY = plot.bottom - plot.height * scale.fraction(value)
+            val top = minOf(valueY, zeroY)
+            val bottom = maxOf(valueY, zeroY)
+            val barHeight = (bottom - top).coerceAtLeast(1f)
+            // rounded on top, SQUARE at the base: a bar that is rounded at the bottom too
+            // looks as if it floats, and the baseline is the whole point of a bar chart
+            val radius = minOf(4.dp.toPx(), barWidth / 2f, barHeight)
+            drawPath(
+                Path().apply {
+                    val l = centerX - barWidth / 2f
+                    val r = centerX + barWidth / 2f
+                    moveTo(l, bottom)
+                    lineTo(l, top + radius)
+                    quadraticTo(l, top, l + radius, top)
+                    lineTo(r - radius, top)
+                    quadraticTo(r, top, r, top + radius)
+                    lineTo(r, bottom)
+                    close()
+                },
+                color = colors.accent,
+            )
+            if (i in labelled) {
+                val text = fmtAxis(value, format)
+                val half = measurer.width(text, valueStyle) / 2f
+                // a number that would not fit above its own bar is dropped rather than
+                // drawn over its neighbour
+                if (half * 2 <= slot * 1.1f) {
+                    drawLabel(
+                        measurer, text, valueStyle,
+                        x = centerX.coerceIn(plot.left + half, size.width - half),
+                        y = (top - 3.dp.toPx() - measurer.measure(text, valueStyle).size.height)
+                            .coerceAtLeast(0f),
+                        align = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// --- activity heatmap ------------------------------------------------------------------------
+
+/**
+ * Geometry of the heatmap, shared by the grid, the ribbons and the scrolling container.
+ *
+ * These are the design-system numbers (11 px cell, 3 px gap, 3 px radius) read as dp, so
+ * the grid keeps its proportions on any density instead of its pixel size on one phone.
+ */
+object HeatmapMetrics {
+    val cell: Dp = 11.dp
+    val gap: Dp = 3.dp
+    val radius: Dp = 3.dp
+
+    /** Room on the left for the weekday ribbon (Mon / Wed / Fri / Sun). */
+    val weekdayGutter: Dp = 20.dp
+
+    /** Room on top for the month ribbon. */
+    val monthRibbon: Dp = 13.dp
+
+    val gridHeight: Dp = cell * 7 + gap * 6
+
+    fun widthFor(weeks: Int): Dp = cell * weeks + gap * (weeks - 1).coerceAtLeast(0)
+}

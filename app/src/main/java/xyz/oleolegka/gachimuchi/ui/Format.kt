@@ -7,10 +7,12 @@ import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
+import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import xyz.oleolegka.gachimuchi.domain.activityName
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -50,6 +52,8 @@ fun fmtDistance(m: Double): String =
 
 private val dayFormat = DateTimeFormatter.ofPattern("d MMMM", Locale.ENGLISH)
 private val monthFormat = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH)
+private val shortDayFormat = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
+private val shortMonthFormat = DateTimeFormatter.ofPattern("MMM", Locale.ENGLISH)
 
 /** Weekday headers of the calendar grid, Monday first (the grid starts on Monday). */
 val weekdayShort: List<String> =
@@ -61,6 +65,116 @@ fun fmtMonth(d: LocalDate): String = d.format(monthFormat)
 
 /** Activity name taken from the form (body weight has no name — its role is used instead). */
 fun ActivityForm.displayName(): String = activityName()
+
+/**
+ * A series value in its own units, for tile headlines and record lines.
+ *
+ * The domain says what KIND a number is ([ValueFormat]); printing it is a UI concern, so
+ * the two never have to agree on wording — only on the kind.
+ */
+fun fmtValue(value: Double, format: ValueFormat): String = when (format) {
+    ValueFormat.KILOGRAMS -> fmtKg(value)
+    ValueFormat.SECONDS -> fmtDuration(value.roundToInt())
+    ValueFormat.PACE -> fmtPace(value)
+    ValueFormat.DISTANCE -> fmtDistance(value)
+    ValueFormat.COUNT -> fmtCount(value)
+}
+
+/**
+ * A value split into the number and its unit, for the tiles that typeset the two at
+ * different sizes ("108" large, "kg" small beside it). The unit is null when the number
+ * carries its own (a pace reads "5:00 /km", a count reads as itself).
+ */
+fun fmtValueParts(value: Double, format: ValueFormat): Pair<String, String?> = when (format) {
+    ValueFormat.KILOGRAMS -> fmtCount((value * 10).roundToInt() / 10.0) to "kg"
+    ValueFormat.SECONDS -> when {
+        value >= 3600 -> fmtCount((value / 360).roundToInt() / 10.0) to "h"
+        value >= 60 -> fmtCount((value / 60).roundToInt().toDouble()) to "min"
+        else -> fmtCount(value) to "s"
+    }
+    ValueFormat.PACE -> fmtAxis(value, format) to "/km"
+    ValueFormat.DISTANCE -> if (value >= 1000) {
+        fmtCount((value / 100).roundToInt() / 10.0) to "km"
+    } else {
+        fmtCount(value.roundToInt().toDouble()) to "m"
+    }
+    ValueFormat.COUNT -> fmtCount(value) to null
+}
+
+/**
+ * A signed change for a delta caption: "+6 kg", "-1.7 kg", "12 s faster".
+ *
+ * Plain ASCII signs rather than the mock-up's triangles: the project bans emoji outright,
+ * and a glyph that some fonts render in colour is not worth the argument. The word beside
+ * it, not the sign, is what says whether the change is good.
+ */
+fun fmtDelta(change: Double, format: ValueFormat): String {
+    val (number, unit) = fmtValueParts(kotlin.math.abs(change), format)
+    val sign = if (change >= 0) "+" else "-"
+    return if (unit == null) "$sign$number" else "$sign$number $unit"
+}
+
+/** A count: whole numbers have no decimal tail, so "12" rather than "12.0". */
+fun fmtCount(value: Double): String {
+    val r = (value * 10).roundToInt() / 10.0
+    return if (r == r.toLong().toDouble()) r.toLong().toString() else r.toString()
+}
+
+/**
+ * A value for an AXIS TICK — the same units, but as short as the axis can get away with.
+ *
+ * Axis labels compete for a few dozen pixels: "1 h 12 min" next to "58 min" makes the
+ * gridlines unreadable, so time on an axis is one unit throughout and weights lose their
+ * unit suffix (which the axis title carries instead).
+ */
+fun fmtAxis(value: Double, format: ValueFormat): String = when (format) {
+    ValueFormat.KILOGRAMS -> fmtCount(value)
+    ValueFormat.SECONDS -> if (value >= 3600) "${fmtCount(value / 3600)}h"
+        else if (value >= 120) "${(value / 60).roundToInt()}m"
+        else "${value.roundToInt()}s"
+    ValueFormat.PACE -> {
+        val total = value.roundToInt()
+        "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
+    }
+    ValueFormat.DISTANCE -> if (value >= 1000) fmtCount((value / 100).roundToInt() / 10.0) else fmtCount(value)
+    ValueFormat.COUNT -> fmtCount(value)
+}
+
+/** The unit an axis title should carry, or "" when the numbers speak for themselves. */
+fun axisUnit(format: ValueFormat, maxValue: Double): String = when (format) {
+    ValueFormat.KILOGRAMS -> "kg"
+    ValueFormat.SECONDS -> if (maxValue >= 3600) "h" else if (maxValue >= 120) "min" else "s"
+    ValueFormat.PACE -> "/km"
+    ValueFormat.DISTANCE -> if (maxValue >= 1000) "km" else "m"
+    ValueFormat.COUNT -> ""
+}
+
+/** A short day for a chart axis or a badge: "6 Aug". */
+fun fmtShortDay(d: LocalDate): String = d.format(shortDayFormat)
+
+/**
+ * How long ago a day was, in words: the caption under a tile title.
+ *
+ * Anything beyond a week gets an absolute date instead of "23 days ago" — past about a
+ * week nobody counts days, and the date is the more useful of the two.
+ */
+fun fmtRelativeDay(d: LocalDate, today: LocalDate): String {
+    val days = ChronoUnit.DAYS.between(d, today)
+    return when {
+        days == 0L -> "today"
+        days == 1L -> "yesterday"
+        days in 2..6 -> "$days days ago"
+        days < 0 -> fmtShortDay(d)
+        else -> fmtShortDay(d)
+    }
+}
+
+/** A record's date for a badge: "Record - 5 Aug" never appears without the day (§12-C). */
+fun fmtRecordDate(d: LocalDate, today: LocalDate): String =
+    if (ChronoUnit.DAYS.between(d, today) <= 1) fmtRelativeDay(d, today) else fmtShortDay(d)
+
+/** A month for the heatmap ribbon: "Aug". */
+fun fmtShortMonth(d: LocalDate): String = d.format(shortMonthFormat)
 
 /** A rest between sets, in the compact "2:30" shape the session feed uses. */
 fun fmtRest(sec: Double): String {

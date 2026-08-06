@@ -151,6 +151,8 @@ const val MAX_REST_SEC: Double = 20 * 60.0
 /** One recorded set in the feed, with everything the row needs already computed. */
 data class SessionSet(
     val eventId: Long,
+    /** Write time of the event — what the Today feed prints a session's time range from. */
+    val ts: String,
     val form: ActivityForm,
     /** Set as it was written: the record this set broke, or null. */
     val record: RecordHit?,
@@ -214,6 +216,7 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
 
         bucket += SessionSet(
             eventId = ev.id,
+            ts = ev.ts,
             form = ev.form,
             record = recordAt(all, index),
             restBeforeSec = rest,
