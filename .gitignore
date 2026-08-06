@@ -16,3 +16,6 @@ local.properties
 .idea/
 *.iml
 .DS_Store
+
+# agent worktrees and local tooling
+.claude/

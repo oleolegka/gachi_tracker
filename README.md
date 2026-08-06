@@ -19,6 +19,10 @@ This is an early version — the skeleton of the app:
   count, and maximum added weight on hangs;
 - a training calendar with repeating slots (view only for now);
 - an interval workout timer that keeps running with the screen off (see below);
+- programs exported to and imported from JSON files, through the system file picker and
+  with no storage permission ([the format](docs/program-file-format.md));
+- an offer, when a run started from a catalog exercise ends, to write what it counted into
+  the journal as sets (see below);
 - a demo history and two starter programs written on first launch, so the screens are
   not empty;
 - celebration pictures: your own images, added from the system picker, flashed over the
@@ -26,8 +30,6 @@ This is an early version — the skeleton of the app:
 
 ## Planned
 
-- exporting and importing programs as files;
-- writing the sets of a finished program into the journal;
 - progress charts;
 - calendar editing;
 - sync with a self-hosted server for backups.
@@ -71,6 +73,15 @@ stream is the one Android does not silence in that state — which also means th
 loud and ignore the ringer switch, deliberately. Spoken announcements are optional and
 are only offered once a speech engine has actually been found; on a phone without Google
 services there often is none, and the app says so instead of failing quietly.
+
+**A finished run offers to log itself, and never logs by itself.** When a program was
+built from a catalog exercise, ending the run raises a summary — "three sets of six, the
+last one of three" — with every set editable and two buttons. Nothing reaches the journal
+until it is confirmed, because a timer that quietly recorded sets you did not do would
+poison the only record of what was trained. Stopping half way offers only the part that
+ran; skipping forward, though, counts the skipped efforts as done, which is why the
+numbers are shown before they are written. The pause between sets comes from the program,
+where it is known exactly rather than derived.
 
 **Rest between sets is derived, not stored.** The pause after a set only becomes known
 when the next one is logged, by which time the earlier event is already in an append-only

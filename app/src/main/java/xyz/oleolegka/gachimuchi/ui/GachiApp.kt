@@ -26,7 +26,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
+import xyz.oleolegka.gachimuchi.ui.components.RunLogDialog
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
@@ -65,6 +67,7 @@ fun GachiApp(viewModel: MainViewModel) {
     val timerEnabled by viewModel.timerEnabled.collectAsStateWithLifecycle()
     val speech by viewModel.speechStatus.collectAsStateWithLifecycle()
     val programs by viewModel.programs.collectAsStateWithLifecycle()
+    val runOutcome by viewModel.runOutcome.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.TODAY) }
     var logging by rememberSaveable { mutableStateOf(false) }
@@ -112,6 +115,32 @@ fun GachiApp(viewModel: MainViewModel) {
     // the permission conversation, hoisted once so both the tab and the logging screen use
     // the same one and the dialog cannot appear twice
     val enableTimer = rememberTimerEnabler(onEnabled = viewModel::enableTimer)
+
+    /*
+     * The offer to write a finished run into the journal is raised HERE, above the tabs and
+     * above the logging screen, rather than on the timer tab: a run ends while the phone is
+     * in a pocket and the screen it comes back to is whichever one was open. It is a dialog,
+     * so it draws over whatever that turns out to be.
+     *
+     * It waits for the catalog to arrive first: on the frame after the Activity is rebuilt
+     * the exercise list is momentarily empty, and a dialog that cannot find its exercise
+     * closes itself — which would throw the offer away before it was ever seen.
+     */
+    runOutcome?.takeIf { state.exercises.isNotEmpty() }?.let { outcome ->
+        val exercise = state.refById(outcome.exerciseId)
+        RunLogDialog(
+            outcome = outcome,
+            exercise = exercise,
+            suggestedAddedKg = remember(outcome, state.events) {
+                outcome.exerciseId?.let { lastHoldSet(state.events, it)?.addedKg }
+            },
+            onLog = { sets, addedKg ->
+                if (exercise == null) viewModel.dismissRunOutcome()
+                else viewModel.logRunSets(exercise, sets, addedKg)
+            },
+            onDismiss = viewModel::dismissRunOutcome,
+        )
+    }
 
     editing?.let { target ->
         ProgramEditorScreen(
@@ -198,6 +227,7 @@ fun GachiApp(viewModel: MainViewModel) {
                     onRunProgram = viewModel::runProgram,
                     onEditProgram = { editing = EditorTarget(it) },
                     onDeleteProgram = viewModel::deleteProgram,
+                    onImportPrograms = viewModel::importPrograms,
                     onSettings = viewModel::updateTimerSettings,
                     onEnable = enableTimer,
                     onDisable = viewModel::disableTimer,

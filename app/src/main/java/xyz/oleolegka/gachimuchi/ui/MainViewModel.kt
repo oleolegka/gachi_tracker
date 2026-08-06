@@ -22,11 +22,14 @@ import xyz.oleolegka.gachimuchi.data.seed.DemoSeed
 import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.CelebrationCue
+import xyz.oleolegka.gachimuchi.domain.CompletedSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.RecordHit
+import xyz.oleolegka.gachimuchi.domain.RunOrigin
+import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
@@ -36,6 +39,7 @@ import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
 import xyz.oleolegka.gachimuchi.domain.holdSetsByExerciseId
+import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
@@ -43,6 +47,7 @@ import xyz.oleolegka.gachimuchi.domain.restProgram
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsByExerciseId
+import xyz.oleolegka.gachimuchi.domain.withUniqueNames
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
@@ -261,7 +266,7 @@ class MainViewModel(
         viewModelScope.launch {
             val events = repo.allEvents()
             val seconds = resolveRestSec(timerSettings.value, events, exerciseId)
-            timer.start(restProgram(seconds), exerciseId)
+            timer.start(restProgram(seconds), exerciseId, RunOrigin.REST)
         }
     }
 
@@ -283,7 +288,7 @@ class MainViewModel(
                 restBetweenSetsSec = resolveRestSec(settings, events, exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch
-            timer.start(program, exercise.id)
+            timer.start(program, exercise.id, RunOrigin.EXERCISE)
         }
     }
 
@@ -302,6 +307,40 @@ class MainViewModel(
 
     fun deleteProgram(id: Long) {
         viewModelScope.launch { programRepo.delete(id) }
+    }
+
+    /**
+     * Stores programs read out of a file. Nothing is replaced: a name that is already taken
+     * gets a mark rather than overwriting the program that has it (see [withUniqueNames]).
+     */
+    fun importPrograms(programs: List<WorkoutProgram>) {
+        viewModelScope.launch {
+            val existing = programRepo.allPrograms().map { it.name }
+            withUniqueNames(programs, existing).forEach { programRepo.save(it) }
+        }
+    }
+
+    // --- writing a finished run into the journal ---------------------------------------
+
+    /** The run waiting to be offered as sets, or null. Nothing is written until confirmed. */
+    val runOutcome: StateFlow<RunOutcome?> = timer.outcome
+
+    /** "Not this time": the offer goes away and the journal is untouched. */
+    fun dismissRunOutcome() = timer.clearOutcome()
+
+    /**
+     * Writes the confirmed sets, one journal event per set, through the same repository and
+     * the same domain builders the entry card uses.
+     *
+     * Deliberately NOT through [addSet]: that starts a rest timer, which is right after a
+     * set done by hand and wrong here — the run has just ended and there is nothing left to
+     * rest between.
+     */
+    fun logRunSets(exercise: ExerciseRef, sets: List<CompletedSet>, addedKg: Double? = null) {
+        viewModelScope.launch {
+            holdSetsFromRun(exercise, today.toString(), sets, addedKg).forEach { repo.record(it) }
+            timer.clearOutcome()
+        }
     }
 
     /** Writes the starter programs on first launch, alongside the demo history. */

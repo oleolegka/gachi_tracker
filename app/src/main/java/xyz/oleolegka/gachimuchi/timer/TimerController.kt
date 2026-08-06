@@ -21,6 +21,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.TimerStore
 import xyz.oleolegka.gachimuchi.domain.NUDGE_SEC
+import xyz.oleolegka.gachimuchi.domain.RunOrigin
+import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.RunPhase
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.StepKind
@@ -35,6 +37,7 @@ import xyz.oleolegka.gachimuchi.domain.pauseRun
 import xyz.oleolegka.gachimuchi.domain.phase
 import xyz.oleolegka.gachimuchi.domain.previousStep
 import xyz.oleolegka.gachimuchi.domain.resumeRun
+import xyz.oleolegka.gachimuchi.domain.runOutcome
 import xyz.oleolegka.gachimuchi.domain.settleRun
 import xyz.oleolegka.gachimuchi.domain.skipStep
 import xyz.oleolegka.gachimuchi.domain.startRun
@@ -96,6 +99,20 @@ class TimerController internal constructor(context: Context) {
     /** The live run, or null when nothing is counting. */
     val run: StateFlow<RunSnapshot?> = _run.asStateFlow()
 
+    private val _outcome = MutableStateFlow<RunOutcome?>(null)
+
+    /**
+     * The last run that ended with something worth writing into the journal, waiting for the
+     * screen to offer it (domain/RunLog.kt). Only runs generated from a catalog exercise
+     * ever land here; a rest and a plain program leave it null.
+     *
+     * Deliberately NOT persisted. An offer is a conversation about what just happened, and
+     * one that survives the process being killed would surface hours later, out of context,
+     * proposing sets the user has long since forgotten doing. Losing it with the process is
+     * the right failure — the journal is still exactly what was confirmed.
+     */
+    val outcome: StateFlow<RunOutcome?> = _outcome.asStateFlow()
+
     private var loop: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -137,12 +154,18 @@ class TimerController internal constructor(context: Context) {
      * "are you sure" between sets is worse than the occasional lost countdown, and the
      * thing that was running was almost certainly a rest that has been superseded.
      */
-    fun start(program: WorkoutProgram, exerciseId: Long? = null) {
+    fun start(
+        program: WorkoutProgram,
+        exerciseId: Long? = null,
+        origin: RunOrigin = RunOrigin.PROGRAM,
+    ) {
         val steps = program.flatten()
         if (steps.isEmpty()) return
         val now = SystemClock.elapsedRealtime()
         signalledStep = -1
         lastTickSecond = -1
+        // an offer from the previous run is stale the moment a new one starts
+        _outcome.value = null
         val snapshot = RunSnapshot(
             programId = program.id,
             programName = program.name,
@@ -150,6 +173,7 @@ class TimerController internal constructor(context: Context) {
             state = startRun(steps, now),
             bootRef = currentBootRef(),
             exerciseId = exerciseId,
+            origin = origin,
         )
         NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_ALERT)
         if (store.settings.value.speak) speaker.prepare()
@@ -177,8 +201,15 @@ class TimerController internal constructor(context: Context) {
         snapshot.copy(state = adjustStep(snapshot.steps, snapshot.state, now, deltaSec * 1000L))
     }
 
-    /** Ends the run and takes everything down with it: service, lock, alarm, notification. */
+    /**
+     * Ends the run and takes everything down with it: service, lock, alarm, notification.
+     *
+     * A run stopped by hand still produces an offer, built from the part that DID run —
+     * three sets out of four is the ordinary way a hangboard session ends, and it is worth
+     * as much in the journal as a complete one.
+     */
     fun stop() {
+        _run.value?.let { keepOutcome(it) }
         loop?.cancel()
         loop = null
         _run.value = null
@@ -192,6 +223,11 @@ class TimerController internal constructor(context: Context) {
 
     /** Re-reads the clock and redraws, without changing anything. */
     fun refresh() = mutate { snapshot, _ -> snapshot }
+
+    /** The offer was answered (either way). Nothing is written here. */
+    fun clearOutcome() {
+        _outcome.value = null
+    }
 
     // --- what the service and the receiver call ----------------------------------------
 
@@ -249,6 +285,7 @@ class TimerController internal constructor(context: Context) {
         val phase = stamped.state.phase()
 
         if (phase == RunPhase.FINISHED) {
+            keepOutcome(stamped)
             _run.value = stamped
             store.clearRun()
             cancelAlarm()
@@ -269,6 +306,16 @@ class TimerController internal constructor(context: Context) {
         postNotification(stamped)
         if (startService) startService()
         restartLoop()
+    }
+
+    /**
+     * Remembers what a run got through, but only when it is worth offering: a rest, a
+     * program belonging to no exercise, and a run that completed no effort all leave the
+     * offer untouched rather than raising a dialog with nothing in it.
+     */
+    private fun keepOutcome(snapshot: RunSnapshot) {
+        val outcome = runOutcome(snapshot, SystemClock.elapsedRealtime())
+        if (outcome.offersLogging) _outcome.value = outcome
     }
 
     /** Fires the boundary signal once per step, whoever caused the step to change. */

@@ -24,9 +24,10 @@ import kotlinx.serialization.Serializable
  *
  * ── Not the journal ─────────────────────────────────────────────────────────────
  * Programs are reference data, like the exercise catalog and the calendar slots: they
- * are edited and deleted freely. They are NOT events, and running one records nothing.
- * Writing sets from a finished run is a separate feature and is deliberately not here —
- * a timer that silently logs sets you did not actually do would poison the journal.
+ * are edited and deleted freely. They are NOT events, and running one still records
+ * nothing by itself: a finished run turns into an OFFER to write sets, which the user
+ * corrects and confirms (domain/RunLog.kt). A timer that silently logged sets you did not
+ * actually do would poison the journal.
  */
 
 /** Default countdown before the first work step, in seconds. */
