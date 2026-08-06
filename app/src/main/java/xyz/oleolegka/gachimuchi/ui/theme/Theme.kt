@@ -82,6 +82,14 @@ val LocalGachiColors = staticCompositionLocalOf { LightGachiColors }
 private val LightScheme = lightColorScheme(
     primary = AccentLight,
     onPrimary = Color.White,
+    // Material fills the FAB from primaryContainer and a selected chip from
+    // secondaryContainer. Leaving them unset does not fall back to `primary` — it falls
+    // back to the baseline Material lavender, which is off-palette and, on a near-white
+    // plane, barely reads as a control at all. Both are tints from our own blue ramp.
+    primaryContainer = Sequential[0],
+    onPrimaryContainer = Sequential[6],
+    secondaryContainer = Sequential[0],
+    onSecondaryContainer = Sequential[6],
     background = PlaneLight,
     onBackground = InkLight,
     surface = SurfaceLight,
@@ -96,6 +104,12 @@ private val LightScheme = lightColorScheme(
 private val DarkScheme = darkColorScheme(
     primary = AccentDark,
     onPrimary = Color(0xFF06121F),
+    // Same reasoning as the light scheme, mirrored: a deep step of the ramp carries the
+    // fill and a light one carries the text on top of it.
+    primaryContainer = Sequential[6],
+    onPrimaryContainer = Sequential[0],
+    secondaryContainer = Sequential[6],
+    onSecondaryContainer = Sequential[0],
     background = PlaneDark,
     onBackground = InkDark,
     surface = SurfaceDark,
