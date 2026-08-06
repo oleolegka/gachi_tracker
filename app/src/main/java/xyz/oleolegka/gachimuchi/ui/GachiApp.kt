@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -33,6 +34,7 @@ import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
 import xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen
+import xyz.oleolegka.gachimuchi.ui.screens.SettingsScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TimerScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TodayScreen
 
@@ -50,6 +52,7 @@ private enum class Tab(val title: String, val icon: ImageVector) {
     OVERVIEW("Overview", Icons.AutoMirrored.Filled.List),
     CALENDAR("Calendar", Icons.Filled.DateRange),
     TIMER("Timer", Icons.Filled.PlayArrow),
+    SETTINGS("Settings", Icons.Filled.Settings),
 }
 
 @Composable
@@ -187,6 +190,8 @@ fun GachiApp(viewModel: MainViewModel) {
                     modifier = inner,
                 )
             }
+
+            Tab.SETTINGS -> SettingsScreen(inner)
         }
     }
 }

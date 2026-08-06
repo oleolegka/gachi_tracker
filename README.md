@@ -20,7 +20,9 @@ This is an early version — the skeleton of the app:
 - a training calendar with repeating slots (view only for now);
 - an interval workout timer that keeps running with the screen off (see below);
 - a demo history and two starter programs written on first launch, so the screens are
-  not empty.
+  not empty;
+- celebration pictures: your own images, added from the system picker, flashed over the
+  screen when a set is logged — on every set, on records only, or never.
 
 ## Planned
 
@@ -77,6 +79,12 @@ instead, and defers to an explicit `rest_after_sec` whenever a record carries on
 Telegram bot writes it). Gaps longer than 20 minutes are treated as a break in the
 workout rather than a rest and are not reported.
 
+**Celebration pictures are yours and are copied in.** No image ships with the app: they
+are picked with the system photo picker, which needs no storage permission and hands back
+only the files that were tapped. Each one is copied into the app's own storage, so moving
+or deleting the original later changes nothing. With an empty gallery the feature is
+simply silent.
+
 **No Google Play Services.** The app depends on no Google service and is meant to work
 on GrapheneOS and other builds without them.
 
@@ -102,6 +110,14 @@ You need JDK 21 and the Android SDK (compileSdk 37).
 
 The SDK path goes into `local.properties` (`sdk.dir=...`); that file is not part of the
 repository.
+
+The launcher icon is generated, not hand-written: it is a 32x32 pixel-art map inside
+`tools/pixel_icon.py`. Edit the map or the palette there and run
+
+```
+python3 tools/pixel_icon.py               # rewrites the icon resources
+python3 tools/pixel_icon.py --preview /tmp/icon.png   # and renders what it made
+```
 
 ## License
 
