@@ -393,7 +393,7 @@ private fun EntryPanel(
 private fun contextLine(exercise: ExerciseRef): String = buildString {
     append(exercise.form.title.lowercase())
     if (exercise.form == ExerciseForm.HOLD) {
-        exercise.edgeMm?.let { append(" - ${formatNumber(it)} mm edge") }
+        exercise.edge?.let { append(" - ${formatNumber(it)} mm edge") }
         exercise.protocol?.let { append(" - ${formatNumber(it.first)}:${formatNumber(it.second)} protocol") }
     }
 }

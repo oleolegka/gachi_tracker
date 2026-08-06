@@ -32,9 +32,26 @@ data class ExerciseRef(
     val workSec: Double? = null,
     val restSec: Double? = null,
 ) {
-    /** A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists). */
+    /**
+     * A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists),
+     * and both halves have to be POSITIVE.
+     *
+     * The zero check is not belt-and-braces: a catalog row can carry a zero (an exercise
+     * created before the entry form rejected one, or a row that arrives from the bot's
+     * journal), and the validator rejects a non-positive `work_sec` by throwing. Since
+     * `holdSetOf` builds its form inside the Add button's own click handler, that throw
+     * would come out as a crash on the one button this app is built around. A zero here is
+     * "no protocol was ever set", which is exactly what a null means.
+     */
     val protocol: Pair<Double, Double>? =
-        if (workSec != null && restSec != null) workSec to restSec else null
+        if (workSec != null && workSec > 0 && restSec != null && restSec > 0) {
+            workSec to restSec
+        } else {
+            null
+        }
+
+    /** Same rule for the edge: a non-positive one was never filled in. */
+    val edge: Double? = edgeMm?.takeIf { it > 0 }
 }
 
 /** The activity name carried by a form; body weight has none, so its role is used. */
@@ -101,7 +118,10 @@ fun holdSetOf(
     holdSec = holdSec?.takeIf { it > 0 },
     workSec = exercise.protocol?.first,
     restSec = exercise.protocol?.second,
-    edgeMm = exercise.edgeMm,
+    // through [ExerciseRef.edge], for the same reason the reps above go through takeIf:
+    // a zero on the catalog row would be rejected by the validator and take the screen
+    // down at the moment the Add button is pressed
+    edgeMm = exercise.edge,
     addedKg = addedKg?.takeIf { it > 0 },
     ownWeight = true,
     exerciseId = exercise.id,
@@ -387,3 +407,27 @@ fun matchesExerciseQuery(name: String, aliases: List<String>, query: String): Bo
     if (normPhrase(name)?.contains(q) == true) return true
     return aliases.any { normPhrase(it)?.contains(q) == true }
 }
+
+/**
+ * Whether the picker should fall back to the WHOLE catalog for a word that matched nothing.
+ *
+ * This is the alias-learning branch of §11, and without it that branch is unreachable. The
+ * app learns a word by watching which exercise is tapped while it is in the search box
+ * (`onPick(id, query)` -> `ActivityRepository.learnAlias`), so a word can only ever be
+ * taught to an exercise the list is still showing. A search that filters the list down to
+ * nothing therefore takes the one word that most needs teaching — a genuinely new one,
+ * "jim" for "Bench press" — and removes every exercise it could be attached to, leaving
+ * "create a new exercise" as the only way out and a duplicate of an exercise that already
+ * exists as the result.
+ *
+ * §11 settled this: an unknown word shows the exercises that ARE known, plus "add new".
+ * That is not a guess and not fuzzy matching — nothing is preselected and nothing is
+ * relearned behind the user's back; the full list is simply offered again so that the tap
+ * which teaches the word is available at the moment it is worth something.
+ *
+ * The fallback is deliberately not applied to an empty catalog (there is nothing to fall
+ * back to; the screen offers creation instead) nor to an empty query (the list is already
+ * everything).
+ */
+fun offersWholeCatalog(query: String, matchCount: Int, catalogSize: Int): Boolean =
+    normPhrase(query) != null && matchCount == 0 && catalogSize > 0

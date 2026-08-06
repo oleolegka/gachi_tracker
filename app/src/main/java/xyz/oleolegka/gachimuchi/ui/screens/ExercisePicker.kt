@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
+import xyz.oleolegka.gachimuchi.domain.offersWholeCatalog
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -62,6 +63,14 @@ import java.time.LocalDate
  * There is DELIBERATELY no fuzzy matching or "did you mean": §11 settled that an unknown
  * word must never be guessed at. Either you pick from the list or you create a new
  * exercise on purpose.
+ *
+ * Which is why a word that matches NOTHING falls back to the whole catalog rather than to
+ * an empty list (see [xyz.oleolegka.gachimuchi.domain.offersWholeCatalog]). That is the
+ * opposite of guessing: nothing is preselected, and it is the only moment at which the
+ * alias mechanism can be used at all, because a word is learned by being in the search box
+ * when an exercise is tapped. A list narrowed to nothing removes every exercise the word
+ * could be attached to and leaves "create a new one" as the only exit — which is how a
+ * second "Bench press" gets into a catalog that already has one.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,9 +139,18 @@ private fun PickExisting(
     val colors = LocalGachiColors.current
     val order = remember(state.events) { pickerOrder(exerciseUsage(state.events)) }
     val usage = remember(state.events) { exerciseUsage(state.events) }
-    val items = remember(state.exercises, state.aliases, query, order) {
+    /*
+     * A word that matches nothing falls back to the whole catalog rather than to an empty
+     * list — that is where a synonym is taught (see [offersWholeCatalog]). The flag is kept
+     * so the text below can say why the list did not narrow.
+     */
+    val teaching = remember(state.exercises, state.aliases, query) {
+        val matches = state.exercises.count { matchesExerciseQuery(it.name, state.aliasesOf(it.id), query) }
+        offersWholeCatalog(query, matches, state.exercises.size)
+    }
+    val items = remember(state.exercises, state.aliases, query, order, teaching) {
         state.exercises
-            .filter { matchesExerciseQuery(it.name, state.aliasesOf(it.id), query) }
+            .filter { teaching || matchesExerciseQuery(it.name, state.aliasesOf(it.id), query) }
             .sortedWith { a, b -> order.compare(a.id, b.id) }
     }
 
@@ -163,13 +181,27 @@ private fun PickExisting(
 
     HorizontalDivider()
 
-    if (items.isEmpty()) {
+    /*
+     * The list did not narrow, and the reason has to be said: an unexplained full list
+     * after typing reads as a broken search. It is also the moment the two ways forward
+     * have to be spelled out, because they are not interchangeable — tapping teaches the
+     * word to something that already exists, creating starts a separate history.
+     */
+    if (teaching || items.isEmpty()) {
         Text(
-            if (catalogEmpty) {
-                "Nothing in the catalog yet. An exercise is created once and then reused " +
-                    "for every set of it."
-            } else {
-                "Nothing matches. Create it as a new exercise, and the typed word becomes its alias."
+            when {
+                catalogEmpty ->
+                    "Nothing in the catalog yet. An exercise is created once and then reused " +
+                        "for every set of it."
+
+                teaching ->
+                    "Nothing is called \"$query\" yet. Tap the exercise you mean and the word " +
+                        "becomes one of its names, so it finds it next time - or create it as a " +
+                        "new exercise, with a history of its own."
+
+                else ->
+                    "Nothing matches. Create it as a new exercise, and the typed word becomes " +
+                        "its alias."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = colors.inkMuted,
@@ -282,14 +314,24 @@ private fun CreateExerciseForm(
         Button(
             onClick = {
                 val hold = form == ExerciseForm.HOLD
-                // the protocol is a pair or nothing at all: half of it would be rejected by
-                // the HoldSet validator on the very first set
-                val w = if (hold) parseNumber(work) else null
-                val r = if (hold) parseNumber(rest) else null
+                /*
+                 * Every number here is "positive, or it was never filled in". A zero (or a
+                 * minus, which some keyboards offer on the decimal layout) is not a 0 mm
+                 * edge or a 0-second hang, it is an empty field with a character in it —
+                 * and the HoldSet validator rejects a non-positive edge or protocol by
+                 * throwing, which on the logging screen would surface as a crash on the Add
+                 * button rather than as a message. Stored as null, the field simply stays
+                 * unset, which is a state the whole app already handles.
+                 *
+                 * The protocol is a pair or nothing at all: half of it would be rejected by
+                 * the same validator on the very first set.
+                 */
+                val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else null
+                val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else null
                 val pair = if (w != null && r != null) w to r else null
                 onCreate(
                     name.trim(), form,
-                    if (hold) parseNumber(edge) else null,
+                    if (hold) parseNumber(edge)?.takeIf { it > 0 } else null,
                     pair?.first, pair?.second,
                 )
             },

@@ -221,7 +221,7 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
             Text(candidate.name, style = MaterialTheme.typography.bodyMedium)
             Text(
                 buildString {
-                    candidate.edgeMm?.let { append("${formatNumber(it)} mm") }
+                    candidate.edge?.let { append("${formatNumber(it)} mm") }
                     candidate.protocol?.let {
                         if (isNotEmpty()) append("   ")
                         append("${formatNumber(it.first)}:${formatNumber(it.second)}")

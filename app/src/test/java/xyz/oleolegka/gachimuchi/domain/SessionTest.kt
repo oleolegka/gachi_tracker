@@ -271,4 +271,66 @@ class SessionTest {
         assertTrue(matchesExerciseQuery("Hangs 20 mm", listOf("hang20", "fingers"), "finger"))
         assertTrue(!matchesExerciseQuery("Bench press", listOf("bench"), "squat"))
     }
+
+    @Test
+    fun `a word that matches nothing still offers the catalog, which is where it is taught`() {
+        // the whole alias mechanism hangs on this: a word becomes an alias by being in the
+        // search box when an exercise is tapped, so a list filtered down to nothing leaves
+        // no exercise to teach it to and a duplicate as the only way forward
+        assertTrue(offersWholeCatalog(query = "jim", matchCount = 0, catalogSize = 4))
+    }
+
+    @Test
+    fun `a word that matches something narrows the list as usual`() {
+        assertTrue(!offersWholeCatalog(query = "bench", matchCount = 1, catalogSize = 4))
+    }
+
+    @Test
+    fun `an empty query and an empty catalog have nothing to fall back to`() {
+        // an empty query already lists everything, and an empty catalog offers creation
+        assertTrue(!offersWholeCatalog(query = "", matchCount = 0, catalogSize = 4))
+        assertTrue(!offersWholeCatalog(query = "   ", matchCount = 0, catalogSize = 4))
+        assertTrue(!offersWholeCatalog(query = "jim", matchCount = 0, catalogSize = 0))
+    }
+
+    // --- a catalog row that carries a zero ---------------------------------------------
+
+    @Test
+    fun `a hold exercise with a zero edge and protocol can still be logged`() {
+        /*
+         * The regression this pins: the create form used to store whatever `parseNumber`
+         * returned, so "0" in the edge or protocol field became a 0.0 on the catalog row.
+         * `holdSetOf` then handed that straight to the HoldSet validator, which rejects a
+         * non-positive edge by throwing — inside the Add button's click handler, i.e. as a
+         * crash of the app on its primary action rather than as a message.
+         */
+        val broken = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, edgeMm = 0.0, workSec = 0.0, restSec = 0.0)
+        assertNull(broken.edge)
+        assertNull(broken.protocol)
+
+        val set = holdSetOf(broken, day, addedKg = 5.0, reps = 4)
+        assertNull(set.edgeMm)
+        assertNull(set.workSec)
+        assertNull(set.restSec)
+        assertEquals(5.0, set.addedKg!!, 0.0)
+    }
+
+    @Test
+    fun `half a protocol is no protocol, whichever half is missing or zero`() {
+        // the validator insists on a pair, so a half-filled one must not reach it
+        assertNull(ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 0.0).protocol)
+        assertNull(ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = 0.0, restSec = 3.0).protocol)
+        assertNull(ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = 7.0).protocol)
+        assertNull(ExerciseRef(9, "Hangs", ExerciseForm.HOLD, restSec = 3.0).protocol)
+        assertNotNull(ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0).protocol)
+    }
+
+    @Test
+    fun `a negative edge is treated as never filled in rather than written`() {
+        val negative = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, edgeMm = -5.0, workSec = 7.0, restSec = 3.0)
+        assertNull(negative.edge)
+        // the protocol beside it is untouched: only the broken value is dropped
+        assertNotNull(negative.protocol)
+        assertNull(holdSetOf(negative, day, reps = 3).edgeMm)
+    }
 }
