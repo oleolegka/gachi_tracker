@@ -72,7 +72,8 @@ fun TodayScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 96.dp),
+        // no allowance for the log button here: the scaffold reserves it for every tab
+        contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         item {
@@ -122,10 +123,12 @@ fun TodayScreen(
 
         if (session.isEmpty) {
             item {
+                // the hint names the button by its label, so looking for it is reading
+                // rather than searching
                 EmptyState(
                     title = "Nothing logged today",
-                    hint = "Start a workout with the button below and every set lands here as " +
-                        "you record it.",
+                    hint = "Just did a set? Tap \"Log a set\" at the bottom of the screen. " +
+                        "Everything you record lands here straight away.",
                 )
             }
         }

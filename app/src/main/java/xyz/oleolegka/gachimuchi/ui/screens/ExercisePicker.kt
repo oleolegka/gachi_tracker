@@ -71,10 +71,16 @@ fun ExercisePickerSheet(
     onPick: (Long, String?) -> Unit,
     onCreate: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
     onDismiss: () -> Unit,
+    /**
+     * Skip the list and open on the create form. Set when the catalog is empty: a search
+     * box above an empty list is a dead end dressed up as a choice, and the only useful
+     * action on it would be the button underneath.
+     */
+    startInCreate: Boolean = false,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by rememberSaveable { mutableStateOf("") }
-    var creating by rememberSaveable { mutableStateOf(false) }
+    var creating by rememberSaveable { mutableStateOf(startInCreate) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -130,31 +136,38 @@ private fun PickExisting(
             .sortedWith { a, b -> order.compare(a.id, b.id) }
     }
 
+    val catalogEmpty = state.exercises.isEmpty()
+
     Text("Exercise", style = MaterialTheme.typography.titleMedium)
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQuery,
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-        placeholder = { Text("Search by name or alias") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-    )
+    // nothing to search through on a first run, and a search box would only invite typing
+    // that can never match
+    if (!catalogEmpty) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQuery,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            placeholder = { Text("Search by name or alias") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+        )
+    }
 
     Button(
         onClick = onNew,
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
     ) {
         Icon(Icons.Filled.Add, contentDescription = null)
-        Text("  New exercise")
+        Text(if (catalogEmpty) "  Create your first exercise" else "  New exercise")
     }
 
     HorizontalDivider()
 
     if (items.isEmpty()) {
         Text(
-            if (state.exercises.isEmpty()) {
-                "The catalog is empty. Create the first exercise."
+            if (catalogEmpty) {
+                "Nothing in the catalog yet. An exercise is created once and then reused " +
+                    "for every set of it."
             } else {
                 "Nothing matches. Create it as a new exercise, and the typed word becomes its alias."
             },

@@ -183,6 +183,22 @@ fun fmtRecordDate(d: LocalDate, today: LocalDate): String =
 /** A month for the heatmap ribbon: "Aug". */
 fun fmtShortMonth(d: LocalDate): String = d.format(shortMonthFormat)
 
+/**
+ * The label on the app's primary button — the one that opens the logging screen.
+ *
+ * It says LOG, and it says it first. The button used to read "Start workout" / "Continue
+ * workout", which describes the wrong half of the app: it is pressed AFTER a set has been
+ * done, to write it down, and "start" invites the reading "start the countdown" — which is
+ * a real feature here, sitting on a tab of its own two icons away. Naming the button after
+ * the thing it records rather than after a session it does not actually start also matches
+ * the data model, where a session has no beginning and no end (see domain/Session.kt).
+ *
+ * The two wordings differ only to say whether today already has entries; both begin with
+ * the same verb, so the target never changes meaning under the thumb.
+ */
+fun logButtonLabel(sessionIsEmpty: Boolean): String =
+    if (sessionIsEmpty) "Log a set" else "Log another set"
+
 /** A rest between sets, in the compact "2:30" shape the session feed uses. */
 fun fmtRest(sec: Double): String {
     val total = sec.roundToInt()

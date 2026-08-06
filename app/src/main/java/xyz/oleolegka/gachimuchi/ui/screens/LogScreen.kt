@@ -120,6 +120,14 @@ fun LogScreen(
     val active = state.refById(activeExerciseId)
     var picking by remember { mutableStateOf(false) }
 
+    /*
+     * A first run has nothing to log against, and every prompt on this screen would
+     * otherwise say "choose" — an instruction with nothing to choose from. When the catalog
+     * is empty the screen asks for an exercise to be CREATED instead, and the picker opens
+     * straight on its create form rather than on a search box over an empty list.
+     */
+    val catalogEmpty = state.exercises.isEmpty()
+
     BackHandler { onClose() }
 
     Scaffold(
@@ -171,6 +179,7 @@ fun LogScreen(
                     state = state,
                     exercise = active,
                     opDate = iso,
+                    catalogEmpty = catalogEmpty,
                     onPick = { picking = true },
                     onAddSet = onAddSet,
                 )
@@ -180,6 +189,7 @@ fun LogScreen(
         SessionFeed(
             session = session,
             activeExerciseId = activeExerciseId,
+            catalogEmpty = catalogEmpty,
             onSelectExercise = { onSelectExercise(it, null) },
             onPick = { picking = true },
             modifier = Modifier.padding(padding),
@@ -190,6 +200,7 @@ fun LogScreen(
         ExercisePickerSheet(
             state = state,
             today = today,
+            startInCreate = catalogEmpty,
             onPick = onSelectExercise,
             onCreate = onCreateExercise,
             onDismiss = { picking = false },
@@ -207,6 +218,7 @@ fun LogScreen(
 private fun SessionFeed(
     session: Session,
     activeExerciseId: Long?,
+    catalogEmpty: Boolean,
     onSelectExercise: (Long) -> Unit,
     onPick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -219,16 +231,28 @@ private fun SessionFeed(
         if (session.isEmpty) {
             item {
                 Column(Modifier.padding(top = 24.dp)) {
-                    Text("Nothing logged today yet.", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Pick an exercise below and record the first set. Everything you add " +
-                            "shows up here, newest at the bottom.",
+                        if (catalogEmpty) "Nothing to log against yet." else "Nothing logged today yet.",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        if (catalogEmpty) {
+                            // said in full, because the word does a lot of work here and the
+                            // screen is being read by someone who has never seen it before
+                            "An exercise is the thing sets are recorded against - \"Bench " +
+                                "press\", \"Boulder gym\", \"Hangs 20 mm\". Create one and the " +
+                                "card below turns into the fields that suit it: weight and " +
+                                "reps, a distance, or a single check-in."
+                        } else {
+                            "Pick an exercise below and record the first set. Everything you " +
+                                "add shows up here, newest at the bottom."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkMuted,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                     TextButton(onClick = onPick, modifier = Modifier.padding(top = 8.dp)) {
-                        Text("Choose an exercise")
+                        Text(if (catalogEmpty) "Create your first exercise" else "Choose an exercise")
                     }
                 }
             }
@@ -315,6 +339,7 @@ private fun EntryPanel(
     state: UiState,
     exercise: ExerciseRef?,
     opDate: String,
+    catalogEmpty: Boolean,
     onPick: () -> Unit,
     onAddSet: (ActivityForm) -> Unit,
 ) {
@@ -332,23 +357,27 @@ private fun EntryPanel(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        exercise?.name ?: "No exercise chosen",
+                        exercise?.name
+                            ?: if (catalogEmpty) "No exercises yet" else "No exercise chosen",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        exercise?.let { contextLine(it) } ?: "tap to choose",
+                        exercise?.let { contextLine(it) }
+                            ?: if (catalogEmpty) "add the first one to start logging" else "tap to choose",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.inkSecondary,
                     )
                 }
-                TextButton(onClick = onPick) { Text(if (exercise == null) "Choose" else "Change") }
+                if (exercise != null) {
+                    TextButton(onClick = onPick) { Text("Change") }
+                }
             }
 
             if (exercise == null) {
                 Button(
                     onClick = onPick,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-                ) { Text("Choose an exercise") }
+                ) { Text(if (catalogEmpty) "Create your first exercise" else "Choose an exercise") }
             } else {
                 when (exercise.form) {
                     ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet)

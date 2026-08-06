@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -23,9 +24,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.ui.components.RunLogDialog
@@ -49,6 +52,22 @@ import xyz.oleolegka.gachimuchi.ui.screens.TodayScreen
  * editor are not routes but MODES: each takes over the whole window, has nothing to
  * navigate to, and leaving it is a single action. A back stack library would buy nothing
  * here and would cost a dependency plus saved-state plumbing.
+ *
+ * ── Where logging is entered from, and why it is a button and not a tab ─────────────
+ * The log button is shown on EVERY tab, not just Today. Recording what was just done is
+ * the thing this app is for, and until now it could only be reached from one of five
+ * screens: stand on Overview, Calendar, Timer or Settings and there was no way in at all.
+ *
+ * It is a floating button rather than a sixth destination in the bottom bar for two
+ * reasons. The bar already carries five, which is the ceiling Material sets before labels
+ * start being clipped, and "Overview", "Calendar" and "Settings" are exactly the labels
+ * that would go first on a narrow phone. And the logging screen cannot become a tab
+ * without losing the one thing it is built around: its entry card is pinned to the bottom
+ * of the window so the buttons tapped between sets stay inside the arc of a thumb, and a
+ * navigation bar underneath it would push that card up and out of reach. Making the bar
+ * item open the mode instead of showing a tab would work, but it would be a destination
+ * that never appears selected — a lie told by the control that exists to say where you
+ * are.
  */
 private enum class Tab(val title: String, val icon: ImageVector) {
     TODAY("Today", Icons.Filled.Star),
@@ -196,22 +215,39 @@ fun GachiApp(viewModel: MainViewModel) {
             }
         },
         floatingActionButton = {
-            if (tab == Tab.TODAY) {
-                ExtendedFloatingActionButton(
-                    onClick = {
-                        // point the entry card at the exercise the workout left off on
-                        if (activeExerciseId == null) {
-                            viewModel.selectExercise(session.groups.lastOrNull()?.exerciseId)
-                        }
-                        logging = true
-                    },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text(if (session.isEmpty) "Start workout" else "Continue workout") },
-                )
-            }
+            ExtendedFloatingActionButton(
+                onClick = {
+                    // open the entry card on something usable rather than on "no exercise
+                    // chosen"; the picker is still one tap away on the card itself
+                    if (activeExerciseId == null) {
+                        viewModel.selectExercise(
+                            exerciseToLogNext(state.events, iso, state.exercises.map { it.id })
+                        )
+                    }
+                    logging = true
+                },
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text(logButtonLabel(session.isEmpty)) },
+                /*
+                 * The colours are stated rather than defaulted. A floating button takes its
+                 * fill from `primaryContainer`, a role this theme never defines (see
+                 * ui/theme/Theme.kt), so it fell back to the Material baseline — a pale
+                 * lavender pill on an off-white plane, off-palette and barely separated
+                 * from the background it floats over. The accent is the colour the rest of
+                 * the app already uses to mean "this is the thing to press".
+                 */
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            )
         },
     ) { padding ->
-        val inner = Modifier.padding(padding)
+        /*
+         * Room under every tab for the log button to float over. It is reserved here, once,
+         * rather than in each screen's own content padding: the button belongs to this
+         * scaffold, and a screen that forgot the allowance would hide its own last row
+         * behind it.
+         */
+        val inner = Modifier.padding(padding).padding(bottom = LogButtonClearance)
         when (tab) {
             Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
             Tab.OVERVIEW -> OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
@@ -245,6 +281,9 @@ fun GachiApp(viewModel: MainViewModel) {
         }
     }
 }
+
+/** Height an extended floating button occupies, plus its margin — see [GachiApp]. */
+private val LogButtonClearance = 72.dp
 
 /**
  * Wrapper so that "edit nothing yet" (a new program) is distinguishable from "not editing"

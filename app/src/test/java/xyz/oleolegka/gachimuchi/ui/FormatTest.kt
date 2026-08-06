@@ -1,7 +1,9 @@
 package xyz.oleolegka.gachimuchi.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import java.time.LocalDate
@@ -83,5 +85,18 @@ class FormatTest {
         assertEquals("12", fmtCount(12.0))
         assertEquals("12.5", fmtCount(12.46))
         assertEquals("0", fmtCount(0.0))
+    }
+
+    @Test
+    fun `the primary button says what it records, not what it starts`() {
+        assertEquals("Log a set", logButtonLabel(sessionIsEmpty = true))
+        assertEquals("Log another set", logButtonLabel(sessionIsEmpty = false))
+        // both wordings begin with the same verb: the target must not change meaning under
+        // the thumb between one set and the next
+        assertTrue(logButtonLabel(true).startsWith("Log"))
+        assertTrue(logButtonLabel(false).startsWith("Log"))
+        // "start" is what sent someone to the timer looking for the journal
+        assertFalse(logButtonLabel(true).contains("Start", ignoreCase = true))
+        assertFalse(logButtonLabel(false).contains("workout", ignoreCase = true))
     }
 }

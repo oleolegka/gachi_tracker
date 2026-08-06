@@ -333,6 +333,51 @@ fun pickerOrder(usage: Map<Long, ExerciseUsage>): Comparator<Long> = Comparator 
 }
 
 /**
+ * Which exercise the entry card should open on when the logging screen is entered without
+ * one already chosen.
+ *
+ * The point is that "I just did a set, write it down" must not begin with a hunt. Opening
+ * on "No exercise chosen" costs two taps and a decision before a single number can be
+ * typed, and it is the state a fresh install lands in — the one place where the app can
+ * least afford to look like it is asking a question it could answer itself.
+ *
+ * In order of preference:
+ *  1. the exercise today's session left off on — carrying on with the same one is the
+ *     overwhelmingly common case between sets;
+ *  2. otherwise the most recently used exercise still in the catalog, which is exactly
+ *     what [pickerOrder] would have put at the top of the picker anyway;
+ *  3. otherwise the only exercise in the catalog, if there is exactly one — a new install
+ *     with one exercise and no history should still open ready to type.
+ *
+ * Null when the catalog is empty, and when it holds several exercises none of which has
+ * ever been used: picking between untouched strangers would be a guess, and a wrong guess
+ * that silently prefills a weight is worse than an honest question. Whatever comes back is
+ * a starting point, never a commitment — the picker is one tap away on the same card.
+ *
+ * Exercises missing from [catalogIds] are ignored throughout: the journal outlives the
+ * catalog (entries survive an exercise being deleted), and the entry card cannot open on
+ * an exercise whose form it can no longer look up.
+ */
+fun exerciseToLogNext(
+    events: List<JournalEvent>,
+    opDate: String,
+    catalogIds: Collection<Long>,
+): Long? {
+    val known = catalogIds.toSet()
+    if (known.isEmpty()) return null
+
+    val leftOffOn = buildSession(events, opDate).groups
+        .mapNotNull { it.exerciseId }
+        .lastOrNull { it in known }
+    if (leftOffOn != null) return leftOffOn
+
+    val usage = exerciseUsage(events).filterKeys { it in known }
+    if (usage.isNotEmpty()) return usage.keys.minWithOrNull(pickerOrder(usage))
+
+    return known.singleOrNull()
+}
+
+/**
  * Whether an exercise matches what was typed into the search field. Both the name and
  * the learned aliases are matched, normalized the same way the journal keys are, so
  * "bench" finds "Bench press" through either route. An empty query matches everything.
