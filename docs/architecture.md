@@ -122,6 +122,35 @@ Nothing in the app depends on a Google service: no FCM, no Play-backed location,
 Play-only libraries. It is meant to work on GrapheneOS and other builds without them,
 which is also why notifications, alarms and speech all go through plain platform APIs.
 
+## Back is one function, not a stack
+
+There is no navigation library. The app is five tabs with three full-window modes over
+them (the logging screen, the form detail screen, the program editor), and which one is in
+front is three flags.
+
+Back is decided by one pure function over those same flags, `backStep` in
+`ui/Navigation.kt`, written in the same order the screen is drawn in: close the editor,
+else close the detail screen, else close the logging screen, else go to Today, else let the
+system background the app. Closing a mode leaves the tab underneath untouched, which is
+what makes "back out of logging" return to whichever tab opened it.
+
+Back goes to Today rather than to the previously visited tab. Tabs are switched idly and
+back and forth, so a tab history would mostly record glances nobody remembers making, and
+the number of presses needed to leave the app would depend on how much browsing happened.
+This way it is at most two from anywhere.
+
+Dialogs and bottom sheets are not in the rule. Each is hosted in its own window and takes
+the gesture before the app sees it.
+
+## Logging is entered from anywhere, but only offered where it means something
+
+The button lives on the Today tab alone. Screens that know what would be recorded — a
+planned session on the calendar, a finished run on the timer — offer their own way in
+through `LocalOpenLogging`, so no screen needs a new parameter to do it. Putting the button
+on all five tabs was tried and reverted: it turned the app's primary action into furniture
+that followed the user onto Settings and onto the yearly heatmap, where there is nothing to
+record.
+
 ## Known limits
 
 - **Plan versus fact is judged per day, not per slot.** Two sessions planned on one day
@@ -132,3 +161,7 @@ which is also why notifications, alarms and speech all go through plain platform
   would push every gym day into the darkest bucket and flatten the year.
 - **Repeat rules are once, daily or weekly.** No end date, no skipped occurrence, no
   "every second Tuesday".
+- **Back does not undo a hop between hold siblings.** The form detail screen can switch to
+  a sibling edge or protocol in place; back closes the screen rather than stepping back
+  through the siblings visited. That in-screen move is the one thing the navigation rule
+  does not see.

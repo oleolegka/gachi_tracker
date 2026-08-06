@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -16,10 +17,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -27,7 +30,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
-import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
@@ -44,39 +46,44 @@ import xyz.oleolegka.gachimuchi.ui.screens.SettingsScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TimerScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TodayScreen
 
-/**
- * Four tabs in the bottom bar (§12-C: Today is a tab of its own), plus the logging screen
- * and the program editor on top of them.
- *
- * Navigation is still plain state, without navigation-compose. The logging screen and the
- * editor are not routes but MODES: each takes over the whole window, has nothing to
- * navigate to, and leaving it is a single action. A back stack library would buy nothing
- * here and would cost a dependency plus saved-state plumbing.
- *
- * ── Where logging is entered from, and why it is a button and not a tab ─────────────
- * The log button is shown on EVERY tab, not just Today. Recording what was just done is
- * the thing this app is for, and until now it could only be reached from one of five
- * screens: stand on Overview, Calendar, Timer or Settings and there was no way in at all.
- *
- * It is a floating button rather than a sixth destination in the bottom bar for two
- * reasons. The bar already carries five, which is the ceiling Material sets before labels
- * start being clipped, and "Overview", "Calendar" and "Settings" are exactly the labels
- * that would go first on a narrow phone. And the logging screen cannot become a tab
- * without losing the one thing it is built around: its entry card is pinned to the bottom
- * of the window so the buttons tapped between sets stay inside the arc of a thumb, and a
- * navigation bar underneath it would push that card up and out of reach. Making the bar
- * item open the mode instead of showing a tab would work, but it would be a destination
- * that never appears selected — a lie told by the control that exists to say where you
- * are.
- */
-private enum class Tab(val title: String, val icon: ImageVector) {
-    TODAY("Today", Icons.Filled.Star),
-    OVERVIEW("Overview", Icons.AutoMirrored.Filled.List),
-    CALENDAR("Calendar", Icons.Filled.DateRange),
-    TIMER("Timer", Icons.Filled.PlayArrow),
-    SETTINGS("Settings", Icons.Filled.Settings),
-}
+/** The bottom-bar icon of each tab. The tabs themselves are plain data — see Navigation.kt. */
+private val Tab.icon: ImageVector
+    get() = when (this) {
+        Tab.TODAY -> Icons.Filled.Star
+        Tab.OVERVIEW -> Icons.AutoMirrored.Filled.List
+        Tab.CALENDAR -> Icons.Filled.DateRange
+        Tab.TIMER -> Icons.Filled.PlayArrow
+        Tab.SETTINGS -> Icons.Filled.Settings
+    }
 
+/**
+ * Five tabs in the bottom bar (§12-C: Today is a tab of its own), plus the logging screen,
+ * the form detail screen and the program editor on top of them.
+ *
+ * Navigation is plain state, without navigation-compose. The three screens above the tabs
+ * are not routes but MODES: each takes over the whole window, has nothing to navigate to,
+ * and leaving it is a single action. Which one is in front is decided by the `when` below,
+ * and where BACK leads is decided by [backStep] over the same flags, in the same order —
+ * see ui/Navigation.kt for why that is a function rather than a stack.
+ *
+ * ── Where logging is entered from ───────────────────────────────────────────────────
+ * The button lives on Today and only on Today. It was briefly on all five tabs, on the
+ * argument that recording a set is what the app is for; that turned the app's primary
+ * action into furniture that followed the user around, present on Settings and on the
+ * yearly heatmap where there is nothing to record. Today is the screen about the workout
+ * happening now, which is the screen the button is an answer to.
+ *
+ * The other ways in are CONTEXTUAL, offered by screens that know what would be logged: a
+ * planned session tapped on the calendar, a finished run on the timer. They all go through
+ * [LocalOpenLogging], published here, so a screen needs no new parameter to offer one.
+ *
+ * It is a floating button rather than a sixth destination in the bottom bar because the
+ * bar already carries five, which is the ceiling Material sets before labels start being
+ * clipped. And the logging screen cannot become a tab without losing the one thing it is
+ * built around: its entry card is pinned to the bottom of the window so the buttons tapped
+ * between sets stay inside the arc of a thumb, and a navigation bar underneath it would
+ * push that card up and out of reach.
+ */
 @Composable
 fun GachiApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -88,7 +95,7 @@ fun GachiApp(viewModel: MainViewModel) {
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val runOutcome by viewModel.runOutcome.collectAsStateWithLifecycle()
 
-    var tab by rememberSaveable { mutableStateOf(Tab.TODAY) }
+    var tab by rememberSaveable { mutableStateOf(HomeTab) }
     var logging by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditorTarget?>(null) }
     // the form detail screen is a MODE over the overview, like the logging screen: it has
@@ -96,10 +103,6 @@ fun GachiApp(viewModel: MainViewModel) {
     var detailExerciseId by rememberSaveable { mutableStateOf<Long?>(null) }
     val today = remember { viewModel.today }
     val iso = today.toString()
-
-    // "start" or "continue" is decided by the journal, not by a flag: a session is simply
-    // everything recorded today, so a crash or a closed app never loses one
-    val session = remember(state.events, iso) { buildSession(state.events, iso) }
 
     /*
      * The offered rest length is derived from the whole journal, so it is computed once
@@ -136,6 +139,52 @@ fun GachiApp(viewModel: MainViewModel) {
     val enableTimer = rememberTimerEnabler(onEnabled = viewModel::enableTimer)
 
     /*
+     * The one way into the logging screen, for the button below and for any screen that
+     * offers it in context (see [LocalOpenLogging]).
+     *
+     * The published object is remembered ONCE and forwards to a lambda kept current by
+     * rememberUpdatedState. Handing out a fresh instance per recomposition would push a
+     * new value through the composition local several times a second while the timer runs,
+     * and every screen reading it would be recomposed for a callback that never changed.
+     */
+    val openLoggingNow by rememberUpdatedState<(Long?) -> Unit> { exerciseId ->
+        when {
+            // the tap said which exercise it was about — a planned session, a finished run
+            exerciseId != null -> viewModel.selectExercise(exerciseId)
+            // open the entry card on something usable rather than on "no exercise chosen";
+            // the picker is still one tap away on the card itself
+            activeExerciseId == null -> viewModel.selectExercise(
+                exerciseToLogNext(state.events, iso, state.exercises.map { it.id })
+            )
+        }
+        logging = true
+    }
+    val openLogging = remember { OpenLogging { openLoggingNow(it) } }
+
+    /*
+     * Back, for the whole app, decided in one place.
+     *
+     * Disabled — not absent — when there is nothing to go back to: a disabled handler lets
+     * the gesture fall through to the system, which backgrounds the app. Handling it and
+     * doing nothing would trap the user inside.
+     */
+    val step = backStep(
+        editingProgram = editing != null,
+        showingFormDetail = detailExerciseId != null,
+        logging = logging,
+        tab = tab,
+    )
+    BackHandler(enabled = step != BackStep.LeaveApp) {
+        when (step) {
+            BackStep.CloseEditor -> editing = null
+            BackStep.CloseFormDetail -> detailExerciseId = null
+            BackStep.CloseLogging -> logging = false
+            is BackStep.SwitchTab -> tab = step.tab
+            BackStep.LeaveApp -> Unit // unreachable: the handler is disabled in that state
+        }
+    }
+
+    /*
      * The offer to write a finished run into the journal is raised HERE, above the tabs and
      * above the logging screen, rather than on the timer tab: a run ends while the phone is
      * in a pocket and the screen it comes back to is whichever one was open. It is a dialog,
@@ -161,123 +210,124 @@ fun GachiApp(viewModel: MainViewModel) {
         )
     }
 
-    editing?.let { target ->
-        ProgramEditorScreen(
-            initial = target.program,
-            onSave = {
-                viewModel.saveProgram(it)
-                editing = null
-            },
-            onClose = { editing = null },
-        )
-        return
-    }
+    // held in locals so the branches below smart-cast, and so the order of the branches is
+    // literally the order of [backStep]
+    val editorTarget = editing
+    val detailId = detailExerciseId
 
-    detailExerciseId?.let { id ->
-        FormDetailScreen(
-            state = state,
-            exerciseId = id,
-            today = today,
-            onClose = { detailExerciseId = null },
-        )
-        return
-    }
-
-    if (logging) {
-        LogScreen(
-            state = state,
-            today = today,
-            activeExerciseId = activeExerciseId,
-            timer = timerState,
-            timerActions = timerActions,
-            onEnableTimer = enableTimer,
-            onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
-            onSelectExercise = viewModel::selectExercise,
-            onCreateExercise = viewModel::createExercise,
-            onAddSet = viewModel::addSet,
-            onUndoSet = viewModel::undoSet,
-            onClose = { logging = false },
-        )
-        return
-    }
-
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                Tab.entries.forEach { t ->
-                    NavigationBarItem(
-                        selected = tab == t,
-                        onClick = { tab = t },
-                        icon = { Icon(t.icon, contentDescription = t.title) },
-                        label = { Text(t.title) },
-                    )
-                }
-            }
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    // open the entry card on something usable rather than on "no exercise
-                    // chosen"; the picker is still one tap away on the card itself
-                    if (activeExerciseId == null) {
-                        viewModel.selectExercise(
-                            exerciseToLogNext(state.events, iso, state.exercises.map { it.id })
-                        )
-                    }
-                    logging = true
+    CompositionLocalProvider(LocalOpenLogging provides openLogging) {
+        when {
+            editorTarget != null -> ProgramEditorScreen(
+                initial = editorTarget.program,
+                onSave = {
+                    viewModel.saveProgram(it)
+                    editing = null
                 },
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text(logButtonLabel(session.isEmpty)) },
-                /*
-                 * The colours are stated rather than defaulted. A floating button takes its
-                 * fill from `primaryContainer`, a role this theme never defines (see
-                 * ui/theme/Theme.kt), so it fell back to the Material baseline — a pale
-                 * lavender pill on an off-white plane, off-palette and barely separated
-                 * from the background it floats over. The accent is the colour the rest of
-                 * the app already uses to mean "this is the thing to press".
-                 */
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                onClose = { editing = null },
             )
-        },
-    ) { padding ->
-        /*
-         * Room under every tab for the log button to float over. It is reserved here, once,
-         * rather than in each screen's own content padding: the button belongs to this
-         * scaffold, and a screen that forgot the allowance would hide its own last row
-         * behind it.
-         */
-        val inner = Modifier.padding(padding).padding(bottom = LogButtonClearance)
-        when (tab) {
-            Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
-            Tab.OVERVIEW -> OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
-            Tab.CALENDAR -> CalendarScreen(
+
+            detailId != null -> FormDetailScreen(
+                state = state,
+                exerciseId = detailId,
+                today = today,
+                onClose = { detailExerciseId = null },
+            )
+
+            logging -> LogScreen(
                 state = state,
                 today = today,
-                modifier = inner,
-                onSaveSlot = viewModel::saveSlot,
-                onDeleteSlot = viewModel::deleteSlot,
+                activeExerciseId = activeExerciseId,
+                timer = timerState,
+                timerActions = timerActions,
+                onEnableTimer = enableTimer,
+                onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
+                onSelectExercise = viewModel::selectExercise,
+                onCreateExercise = viewModel::createExercise,
+                onAddSet = viewModel::addSet,
+                onUndoSet = viewModel::undoSet,
+                onClose = { logging = false },
             )
-            Tab.TIMER -> {
-                // the settings row about spoken steps has to know the answer before it is
-                // touched, so the engine is looked for when the screen appears
-                LaunchedEffect(Unit) { viewModel.prepareSpeech() }
-                TimerScreen(
-                    state = timerState,
-                    actions = timerActions,
-                    programs = programs,
-                    onRunProgram = viewModel::runProgram,
-                    onEditProgram = { editing = EditorTarget(it) },
-                    onDeleteProgram = viewModel::deleteProgram,
-                    onImportPrograms = viewModel::importPrograms,
-                    onSettings = viewModel::updateTimerSettings,
-                    onEnable = enableTimer,
-                    onDisable = viewModel::disableTimer,
-                    modifier = inner,
-                )
-            }
 
-            Tab.SETTINGS -> SettingsScreen(inner)
+            else -> Scaffold(
+                bottomBar = {
+                    NavigationBar {
+                        Tab.entries.forEach { t ->
+                            NavigationBarItem(
+                                selected = tab == t,
+                                onClick = { tab = t },
+                                icon = { Icon(t.icon, contentDescription = t.title) },
+                                label = { Text(t.title) },
+                            )
+                        }
+                    }
+                },
+                floatingActionButton = {
+                    if (tab == HomeTab) {
+                        ExtendedFloatingActionButton(
+                            onClick = { openLogging() },
+                            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                            text = { Text(LOG_BUTTON_LABEL) },
+                            /*
+                             * The colours are stated rather than defaulted. A floating
+                             * button takes its fill from `primaryContainer`, which the
+                             * theme now sets to the palest step of the blue ramp (see
+                             * ui/theme/Theme.kt) — right for a selected chip, too quiet
+                             * for the one button this app is built around. The accent is
+                             * the colour the rest of the app already uses to mean "this is
+                             * the thing to press".
+                             */
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                },
+            ) { padding ->
+                /*
+                 * Room for the log button to float over — on the tab that HAS one, and
+                 * nowhere else. Reserving it on every tab left a blank strip under the last
+                 * row of four screens with nothing floating above them.
+                 */
+                val inner = Modifier
+                    .padding(padding)
+                    .then(
+                        if (tab == HomeTab) Modifier.padding(bottom = LogButtonClearance)
+                        else Modifier
+                    )
+                when (tab) {
+                    Tab.TODAY -> TodayScreen(state, today, inner, onReseed = viewModel::reseed)
+                    Tab.OVERVIEW ->
+                        OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
+
+                    Tab.CALENDAR -> CalendarScreen(
+                        state = state,
+                        today = today,
+                        modifier = inner,
+                        onSaveSlot = viewModel::saveSlot,
+                        onDeleteSlot = viewModel::deleteSlot,
+                    )
+
+                    Tab.TIMER -> {
+                        // the settings row about spoken steps has to know the answer before
+                        // it is touched, so the engine is looked for when the screen appears
+                        LaunchedEffect(Unit) { viewModel.prepareSpeech() }
+                        TimerScreen(
+                            state = timerState,
+                            actions = timerActions,
+                            programs = programs,
+                            onRunProgram = viewModel::runProgram,
+                            onEditProgram = { editing = EditorTarget(it) },
+                            onDeleteProgram = viewModel::deleteProgram,
+                            onImportPrograms = viewModel::importPrograms,
+                            onSettings = viewModel::updateTimerSettings,
+                            onEnable = enableTimer,
+                            onDisable = viewModel::disableTimer,
+                            modifier = inner,
+                        )
+                    }
+
+                    Tab.SETTINGS -> SettingsScreen(inner)
+                }
+            }
         }
     }
 }

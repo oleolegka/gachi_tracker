@@ -1,6 +1,5 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -127,8 +126,6 @@ fun LogScreen(
      * straight on its create form rather than on a search box over an empty list.
      */
     val catalogEmpty = state.exercises.isEmpty()
-
-    BackHandler { onClose() }
 
     Scaffold(
         modifier = Modifier.imePadding(),

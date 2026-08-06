@@ -2,6 +2,21 @@
 <resources>
     <!-- Placeholder theme for the window before Compose starts: the colours live in the
          Compose theme (ui/theme/Color.kt, the research_visual.md §6 palette). All this
-         sets is the window background, so it does not flash white on a dark system. -->
-    <style name="Theme.Gachimuchi" parent="android:Theme.DeviceDefault.DayNight" />
+         sets is the window background, so it does not flash white on a dark system.
+
+         NO ACTION BAR. The DeviceDefault parent brings one, and it drew a strip across the
+         top of every screen carrying the word "gachimuchi" — the launcher icon that was
+         just tapped, repeated. It cost a whole bar of height for nothing, and because the
+         window is edge-to-edge (enableEdgeToEdge in MainActivity) it overlapped the first
+         thing under it: the topmost card of the timer tab, whose list starts flush against
+         the top of the content area.
+
+         Titles that MEAN something are drawn by Compose, per screen, and stay: the exercise
+         on the form detail screen with its back arrow, the date and "Undo last" on the
+         logging screen, the name and length of a program in the editor. Those say where you
+         are inside the app. The name of the app does not. -->
+    <style name="Theme.Gachimuchi" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

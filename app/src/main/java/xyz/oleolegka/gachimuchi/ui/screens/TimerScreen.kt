@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -77,6 +78,10 @@ fun TimerScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        // the same 8/24 the other tabs use. Without it this list began flush against the
+        // top of the window, which is why the app-name bar clipped the first card HERE
+        // first, and ended flush against the navigation bar at the bottom
+        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!state.enabled) {

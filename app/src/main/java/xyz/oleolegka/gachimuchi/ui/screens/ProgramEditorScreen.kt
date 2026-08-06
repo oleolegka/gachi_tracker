@@ -1,6 +1,5 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -79,8 +78,6 @@ fun ProgramEditorScreen(
             )
         )
     }
-
-    BackHandler { onClose() }
 
     Scaffold(
         modifier = Modifier.imePadding(),

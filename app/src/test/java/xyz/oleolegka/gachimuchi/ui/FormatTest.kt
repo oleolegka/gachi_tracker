@@ -89,14 +89,15 @@ class FormatTest {
 
     @Test
     fun `the primary button says what it records, not what it starts`() {
-        assertEquals("Log a set", logButtonLabel(sessionIsEmpty = true))
-        assertEquals("Log another set", logButtonLabel(sessionIsEmpty = false))
-        // both wordings begin with the same verb: the target must not change meaning under
-        // the thumb between one set and the next
-        assertTrue(logButtonLabel(true).startsWith("Log"))
-        assertTrue(logButtonLabel(false).startsWith("Log"))
-        // "start" is what sent someone to the timer looking for the journal
-        assertFalse(logButtonLabel(true).contains("Start", ignoreCase = true))
-        assertFalse(logButtonLabel(false).contains("workout", ignoreCase = true))
+        assertEquals("Log a set", LOG_BUTTON_LABEL)
+        // it names the act of recording, first word
+        assertTrue(LOG_BUTTON_LABEL.startsWith("Log"))
+        // "start" is what sent someone to the timer looking for the journal, and "continue"
+        // promised a difference between the first entry of the day and the rest that the
+        // button does not have
+        assertFalse(LOG_BUTTON_LABEL.contains("Start", ignoreCase = true))
+        assertFalse(LOG_BUTTON_LABEL.contains("Continue", ignoreCase = true))
+        assertFalse(LOG_BUTTON_LABEL.contains("another", ignoreCase = true))
+        assertFalse(LOG_BUTTON_LABEL.contains("workout", ignoreCase = true))
     }
 }

@@ -193,11 +193,13 @@ fun fmtShortMonth(d: LocalDate): String = d.format(shortMonthFormat)
  * the thing it records rather than after a session it does not actually start also matches
  * the data model, where a session has no beginning and no end (see domain/Session.kt).
  *
- * The two wordings differ only to say whether today already has entries; both begin with
- * the same verb, so the target never changes meaning under the thumb.
+ * ONE wording, always. It briefly had two — "Log a set" before the day's first entry and
+ * "Log another set" after — which told the user something they could already see (the
+ * entries are on the screen underneath) while implying a difference that does not exist:
+ * both open the same screen in the same state. A control that rewords itself for no change
+ * in behaviour makes the reader stop and look for the change.
  */
-fun logButtonLabel(sessionIsEmpty: Boolean): String =
-    if (sessionIsEmpty) "Log a set" else "Log another set"
+const val LOG_BUTTON_LABEL = "Log a set"
 
 /** A rest between sets, in the compact "2:30" shape the session feed uses. */
 fun fmtRest(sec: Double): String {
