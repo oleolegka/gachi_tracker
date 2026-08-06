@@ -51,6 +51,82 @@ data class RunState(
 /** Where a run stands, for the screens and the notification to branch on. */
 enum class RunPhase { RUNNING, PAUSED, FINISHED }
 
+/** How many whole seconds at the end of a step get a countdown tick. */
+const val TICK_SECONDS = 3
+
+/**
+ * What the countdown loop must do at this instant, and when it has to look again.
+ *
+ * ── Why this is a value and not a loop full of arithmetic ───────────────────────
+ * The signals used to be decided inside the coroutine that sleeps between them, which made
+ * them untestable on the JVM and hid a bug that only shows up on SHORT steps (see
+ * [timerCue]). Pulling the decision out leaves the coroutine with two jobs — sleep, and do
+ * what it is told — and puts the timing under the same kind of test as the countdown.
+ */
+data class TimerCue(
+    /** The current step is over: settle the run and signal the next one. */
+    val boundary: Boolean,
+    /** The whole second the countdown is standing on and should tick, or null for silence. */
+    val tickSecond: Int?,
+    /** The monotonic moment the loop must wake at next. Never in the past. */
+    val wakeAtMs: Long,
+)
+
+/**
+ * Whether the tick for "[second] seconds left" may be sounded inside a step of
+ * [stepDurationSec].
+ *
+ * The last condition is the whole point: a tick is only allowed STRICTLY INSIDE the step.
+ * On a step three seconds long the "three" tick would land on the very moment the step
+ * begins — the same moment the boundary signal fires — and both the tone generator and the
+ * vibrator play one thing at a time, so the tick would cut the boundary signal off after a
+ * few milliseconds. That is the missing "next step" beep on 7:3 repeaters: every three
+ * second rest silenced its own boundary. A step gets ticks for the seconds it has room for
+ * and no others.
+ */
+private fun tickAllowed(second: Int, stepDurationSec: Int, countdownTicks: Boolean): Boolean =
+    countdownTicks && second in 1..TICK_SECONDS && second < stepDurationSec
+
+/**
+ * Reads the clock and says what the countdown owes the user right now.
+ *
+ * Everything is derived from [now] against [RunState.stepEndAtMs], the same monotonic
+ * reading the countdown itself is expressed in — the signals are not a second timeline that
+ * can drift away from the first one. A run that is paused, finished or empty owes nothing
+ * and asks to be woken immediately, because it is a caller's mistake to be looping at all.
+ */
+fun timerCue(
+    steps: List<WorkoutStep>,
+    state: RunState,
+    countdownTicks: Boolean,
+    now: Long,
+): TimerCue {
+    if (steps.isEmpty() || state.finished || !state.running) {
+        return TimerCue(boundary = false, tickSecond = null, wakeAtMs = now)
+    }
+    val settled = settleRun(steps, state, now)
+    if (settled.finished || now >= settled.stepEndAtMs) {
+        return TimerCue(boundary = true, tickSecond = null, wakeAtMs = now)
+    }
+
+    val end = settled.stepEndAtMs
+    val durationSec = steps[settled.stepIndex].durationSec
+    // the second a countdown would be showing: 2500 ms left reads as "3"
+    val second = ((end - now + 999) / 1000).toInt()
+
+    val due = second.takeIf { tickAllowed(it, durationSec, countdownTicks) }
+    // the next tick is the one below the current second, but never above the window: a step
+    // entered with twenty seconds left owes its first tick at three, not at nineteen
+    val nextTick = minOf(second - 1, TICK_SECONDS)
+        .takeIf { tickAllowed(it, durationSec, countdownTicks) }
+
+    return TimerCue(
+        boundary = false,
+        tickSecond = due,
+        wakeAtMs = if (nextTick != null) end - nextTick * 1000L else end,
+    )
+}
+
 fun RunState.phase(): RunPhase = when {
     finished -> RunPhase.FINISHED
     running -> RunPhase.RUNNING

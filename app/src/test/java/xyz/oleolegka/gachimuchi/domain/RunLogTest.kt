@@ -158,12 +158,19 @@ class RunLogTest {
     }
 
     @Test
-    fun `a plain program belongs to no exercise and is not offered`() {
+    fun `a plain program is offered too, without knowing which exercise it was`() {
         val state = RunState(stepIndex = steps.lastIndex, running = false, finished = true)
 
         val outcome = runOutcome(snapshot(state, RunOrigin.PROGRAM, exerciseId = null), now = 0)
 
-        assertFalse(outcome.offersLogging)
+        /*
+         * The reversal that fixes the lost session: a protocol saved in the editor used to
+         * count its sets and offer nothing, purely because it had no exercise attached. The
+         * sets are what matter; which exercise they were is a question the offer can ask.
+         */
+        assertTrue(outcome.offersLogging)
+        assertNull(outcome.exerciseId)
+        assertEquals(listOf(6, 6, 6, 6), outcome.sets.map { it.reps })
     }
 
     @Test

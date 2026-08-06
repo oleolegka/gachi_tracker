@@ -20,6 +20,12 @@ import xyz.oleolegka.gachimuchi.domain.TimerSettings
  * timer that only beeps is a timer that is missed, so every signal vibrates when
  * vibration is on, and the tone is the addition rather than the other way round.
  *
+ * That ordering is now literal: the vibrator is asked FIRST in every method here. The
+ * vibrator call is a binder message that returns immediately; the tone can involve opening
+ * an audio track, which on a cold audio stack takes long enough to be felt. Buzzing first
+ * means a problem on the audio side can make the tone late but can no longer make the buzz
+ * late with it — two channels, and the important one does not wait for the other.
+ *
  * ── Everything goes out on the ALARM stream ─────────────────────────────────────
  * [AudioManager.STREAM_ALARM], and vibration is tagged with the alarm usage. That is the
  * one channel Android does not silence when the ringer is set to silent, which is exactly
@@ -36,6 +42,13 @@ import xyz.oleolegka.gachimuchi.domain.TimerSettings
  * and adds no dependency. The tones are the plain telephony ones; they are not pretty,
  * they are unmistakable, and they are three distinct shapes so that "three, two, one",
  * "that step is over" and "the workout is over" are told apart without looking.
+ *
+ * ── One tone at a time, so two are never asked for at once ──────────────────────
+ * A [ToneGenerator] plays a single tone: `startTone` while something is sounding cuts the
+ * previous one off, and [Vibrator] behaves the same way with waveforms. This class does not
+ * try to hide that — mixing a tick into a boundary beep would only produce a noise neither
+ * of them is. Instead the CALLER never asks for two at the same instant; that rule lives
+ * with the countdown, in `timerCue` (domain/Runner.kt), where it can be tested.
  */
 class Signals(context: Context) {
 
@@ -49,20 +62,43 @@ class Signals(context: Context) {
     }
 
     /**
-     * Created lazily and kept: constructing a [ToneGenerator] opens an audio track, which
-     * is slow enough to be audible as a delay if done at every boundary. It is released
-     * when the run ends ([release]).
+     * Created ahead of time by [prime] and kept for the whole run: constructing a
+     * [ToneGenerator] opens an audio track, which is slow enough to be audible as a delay if
+     * it happens at a boundary — and it used to, because the generator was built lazily on
+     * the first tone and thrown away at the end of every run.
      *
      * Nullable and every use is guarded: ToneGenerator throws when the audio hardware is
      * busy, and a timer must not die because something else held the alarm stream.
      */
     private var tones: ToneGenerator? = null
 
+    /**
+     * Set when construction has already failed once, so a boundary does not pay for a fresh
+     * attempt every time. Cleared by [prime], i.e. once per run: a device that was busy when
+     * the last run started deserves another try, but not twenty-four more within one run.
+     */
+    private var toneUnavailable = false
+
+    /**
+     * Builds the audio engine now, so that the first boundary does not.
+     *
+     * Called when a run starts. Safe to call repeatedly and safe to call off the main
+     * thread; the synchronization is here because the countdown loop and the caller that
+     * starts a run are different threads and both can reach the generator.
+     */
+    @Synchronized
+    fun prime() {
+        toneUnavailable = false
+        tones()
+    }
+
+    @Synchronized
     private fun tones(): ToneGenerator? {
         tones?.let { return it }
-        return runCatching {
-            ToneGenerator(AudioManager.STREAM_ALARM, TONE_VOLUME)
-        }.getOrNull()?.also { tones = it }
+        if (toneUnavailable) return null
+        val built = runCatching { ToneGenerator(AudioManager.STREAM_ALARM, TONE_VOLUME) }.getOrNull()
+        if (built == null) toneUnavailable = true else tones = built
+        return built
     }
 
     /** The alarm-usage tag, so the vibration is not muted along with notifications. */
@@ -81,10 +117,9 @@ class Signals(context: Context) {
 
     /** The last few seconds of a step: a short tap, deliberately small next to a boundary. */
     fun tick(settings: TimerSettings) {
-        if (settings.countdownTicks) {
-            if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP, 90)
-            if (settings.vibrate) vibrate(longArrayOf(0, 40))
-        }
+        if (!settings.countdownTicks) return
+        if (settings.vibrate) vibrate(longArrayOf(0, 40))
+        if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP, 90)
     }
 
     /**
@@ -94,21 +129,21 @@ class Signals(context: Context) {
     fun boundary(settings: TimerSettings, starting: StepKind) {
         when (starting) {
             StepKind.WORK -> {
-                if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP2, 350)
                 if (settings.vibrate) vibrate(longArrayOf(0, 250, 120, 250))
+                if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP2, 350)
             }
 
             StepKind.REST, StepKind.PREPARE -> {
-                if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP, 250)
                 if (settings.vibrate) vibrate(longArrayOf(0, 400))
+                if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP, 250)
             }
         }
     }
 
     /** The end of the whole program: longer and unlike any boundary within it. */
     fun finish(settings: TimerSettings) {
-        if (settings.sound) tone(ToneGenerator.TONE_PROP_ACK, 750)
         if (settings.vibrate) vibrate(longArrayOf(0, 500, 200, 500, 200, 700))
+        if (settings.sound) tone(ToneGenerator.TONE_PROP_ACK, FINISH_TONE_MS)
     }
 
     private fun tone(type: Int, durationMs: Int) {
@@ -132,14 +167,29 @@ class Signals(context: Context) {
         }
     }
 
-    /** Frees the audio track. Called when a run ends; the next run rebuilds it. */
+    /**
+     * Frees the audio track.
+     *
+     * Releasing a [ToneGenerator] stops whatever it is playing, so this must NOT be called
+     * in the same breath as a tone — which is what used to happen at the end of a program:
+     * the three-quarter-second finishing chime was cut off a millisecond into itself. The
+     * caller defers it past [SIGNAL_TAIL_MS] instead (see TimerController).
+     */
+    @Synchronized
     fun release() {
         runCatching { tones?.release() }
         tones = null
+        toneUnavailable = false
     }
 
-    private companion object {
+    companion object {
         /** Out of 100. Loud, because the phone is across the room or in a bag. */
-        const val TONE_VOLUME = 90
+        private const val TONE_VOLUME = 90
+
+        /** Length of the end-of-program chime. */
+        const val FINISH_TONE_MS = 750
+
+        /** How long to leave the engine alive after the last signal, so nothing is cut off. */
+        const val SIGNAL_TAIL_MS = 2_000L
     }
 }

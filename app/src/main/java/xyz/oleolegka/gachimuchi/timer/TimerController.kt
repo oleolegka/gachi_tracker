@@ -42,7 +42,9 @@ import xyz.oleolegka.gachimuchi.domain.settleRun
 import xyz.oleolegka.gachimuchi.domain.skipStep
 import xyz.oleolegka.gachimuchi.domain.startRun
 import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
+import xyz.oleolegka.gachimuchi.domain.timerCue
 import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
+import java.time.LocalDate
 
 /**
  * The one object that owns a running timer, for the whole process.
@@ -103,13 +105,13 @@ class TimerController internal constructor(context: Context) {
 
     /**
      * The last run that ended with something worth writing into the journal, waiting for the
-     * screen to offer it (domain/RunLog.kt). Only runs generated from a catalog exercise
-     * ever land here; a rest and a plain program leave it null.
+     * screen to offer it (domain/RunLog.kt). Everything but a rest between sets lands here.
      *
-     * Deliberately NOT persisted. An offer is a conversation about what just happened, and
-     * one that survives the process being killed would surface hours later, out of context,
-     * proposing sets the user has long since forgotten doing. Losing it with the process is
-     * the right failure — the journal is still exactly what was confirmed.
+     * PERSISTED, unlike in the first version of this feature. A run ends with the phone in a
+     * pocket; by the time the screen is looked at, Android may well have killed the process,
+     * and an offer that lived in memory went with it — taking the only record of a session
+     * that actually happened. The stored copy carries the moment the run ended so a late
+     * offer can say so, and the date it ended on so its sets are written under the right day.
      */
     val outcome: StateFlow<RunOutcome?> = _outcome.asStateFlow()
 
@@ -121,6 +123,12 @@ class TimerController internal constructor(context: Context) {
 
     /** Whole seconds remaining at the last countdown tick, so each second ticks once. */
     private var lastTickSecond: Int = -1
+
+    /**
+     * Bumped by anything that makes the audio engine worth keeping or worth dropping, so a
+     * deferred release cannot tear down the engine a newer run has started using.
+     */
+    private var signalEra: Int = 0
 
     init {
         restore()
@@ -165,7 +173,11 @@ class TimerController internal constructor(context: Context) {
         signalledStep = -1
         lastTickSecond = -1
         // an offer from the previous run is stale the moment a new one starts
-        _outcome.value = null
+        clearOutcome()
+        // cancel any pending teardown and open the audio track NOW, so the first boundary
+        // pays for a beep and not for building the thing that beeps
+        signalEra++
+        scope.launch { signals.prime() }
         val snapshot = RunSnapshot(
             programId = program.id,
             programName = program.name,
@@ -216,7 +228,7 @@ class TimerController internal constructor(context: Context) {
         store.clearRun()
         cancelAlarm()
         releaseWakeLock()
-        signals.release()
+        releaseSignalsAfterTheirTail()
         TimerNotifications.cancelAll(app)
         app.stopService(Intent(app, TimerService::class.java))
     }
@@ -227,6 +239,7 @@ class TimerController internal constructor(context: Context) {
     /** The offer was answered (either way). Nothing is written here. */
     fun clearOutcome() {
         _outcome.value = null
+        store.clearOutcome()
     }
 
     // --- what the service and the receiver call ----------------------------------------
@@ -253,6 +266,7 @@ class TimerController internal constructor(context: Context) {
      * arbitrary number. A rest between sets does not outlive a reboot in any case.
      */
     private fun restore() {
+        restoreOutcome()
         val saved = store.loadRun() ?: return
         if (isRunStale(saved.bootRef, currentBootRef())) {
             store.clearRun()
@@ -261,6 +275,23 @@ class TimerController internal constructor(context: Context) {
         signalledStep = saved.state.stepIndex
         val now = SystemClock.elapsedRealtime()
         apply(saved.copy(state = settleRun(saved.steps, saved.state, now)), startService = false)
+    }
+
+    /**
+     * Picks up an offer left behind by a process that did not survive to show it.
+     *
+     * Unlike a run, an offer is expressed in WALL time and therefore does survive a reboot —
+     * what it cannot survive is age. Past a day it is dropped: by then the day it belongs to
+     * has been written by hand or not at all, and proposing sets against it would be the app
+     * guessing about history rather than recording it.
+     */
+    private fun restoreOutcome() {
+        val saved = store.loadOutcome() ?: return
+        if (saved.isExpired(System.currentTimeMillis())) {
+            store.clearOutcome()
+            return
+        }
+        _outcome.value = saved
     }
 
     private inline fun mutate(
@@ -276,31 +307,41 @@ class TimerController internal constructor(context: Context) {
     }
 
     /**
-     * The single write path: store the state, fire whatever signal the change implies,
+     * The single write path: fire whatever signal the change implies, store the state,
      * re-arm the alarm and the wake lock, redraw the notification and restart the ticking
      * loop. Every command above funnels through here.
+     *
+     * ── The signal goes first, and that is the fix, not a tidy-up ───────────────
+     * It used to come after `store.saveRun`, which is a SYNCHRONOUS SharedPreferences
+     * `commit()` — a disk write — and before that after nothing at all only because the
+     * notification came later still. Every step boundary therefore queued its beep behind
+     * however long the write took, on the same thread. On a seven-second interval that is
+     * invisible; on a three-second one, with the phone busy, it is the difference between a
+     * signal on the beat and a signal that arrives after the step it announces has started.
+     * Persisting matters, but it does not matter within the same fifty milliseconds, and the
+     * beep does.
      */
     private fun apply(snapshot: RunSnapshot, startService: Boolean) {
         val stamped = snapshot.copy(bootRef = currentBootRef())
         val phase = stamped.state.phase()
 
         if (phase == RunPhase.FINISHED) {
-            keepOutcome(stamped)
             _run.value = stamped
+            fireFinish(stamped)
+            keepOutcome(stamped)
             store.clearRun()
             cancelAlarm()
             releaseWakeLock()
             loop?.cancel()
             loop = null
-            fireFinish(stamped)
             _run.value = null
             app.stopService(Intent(app, TimerService::class.java))
             return
         }
 
         _run.value = stamped
-        store.saveRun(stamped)
         maybeSignalBoundary(stamped)
+        store.saveRun(stamped)
         scheduleAlarm(stamped)
         if (phase == RunPhase.RUNNING) acquireWakeLock(stamped) else releaseWakeLock()
         postNotification(stamped)
@@ -309,13 +350,23 @@ class TimerController internal constructor(context: Context) {
     }
 
     /**
-     * Remembers what a run got through, but only when it is worth offering: a rest, a
-     * program belonging to no exercise, and a run that completed no effort all leave the
-     * offer untouched rather than raising a dialog with nothing in it.
+     * Remembers what a run got through, and writes it down. A rest between sets and a run
+     * that completed no effort leave the offer untouched rather than raising a dialog with
+     * nothing in it; everything else is a workout that happened.
      */
     private fun keepOutcome(snapshot: RunSnapshot) {
-        val outcome = runOutcome(snapshot, SystemClock.elapsedRealtime())
-        if (outcome.offersLogging) _outcome.value = outcome
+        val outcome = runOutcome(
+            snapshot = snapshot,
+            now = SystemClock.elapsedRealtime(),
+            wallMs = System.currentTimeMillis(),
+            opDate = LocalDate.now().toString(),
+        )
+        if (!outcome.offersLogging) return
+        // memory first, disk second, and the disk write cannot take the offer down with it:
+        // this runs on the path that ends a run, and an offer that exists is worth more than
+        // an offer that is durable
+        _outcome.value = outcome
+        runCatching { store.saveOutcome(outcome) }
     }
 
     /** Fires the boundary signal once per step, whoever caused the step to change. */
@@ -332,7 +383,7 @@ class TimerController internal constructor(context: Context) {
         val settings = store.settings.value
         signals.finish(settings)
         if (settings.speak) speaker.speak("Done")
-        signals.release()
+        releaseSignalsAfterTheirTail()
         if (TimerNotifications.canPost(app)) {
             runCatching {
                 NotificationManagerCompat.from(app).notify(
@@ -357,9 +408,15 @@ class TimerController internal constructor(context: Context) {
     }
 
     /**
-     * Wakes at the next thing that matters — the end of the step, or the start of the
-     * final few seconds where the countdown ticks — rather than once a second for the
-     * whole workout. Between boundaries the coroutine is simply not scheduled.
+     * Wakes at the next thing that matters — the end of the step, or a second the countdown
+     * has to tick — rather than once a second for the whole workout. Between those moments
+     * the coroutine is simply not scheduled.
+     *
+     * The loop decides nothing: `timerCue` (domain/Runner.kt) reads the same monotonic clock
+     * the countdown is expressed in and says what is due and when to look again. All this
+     * does is sleep and obey, which is why the timing of the signals — including the case
+     * this used to get wrong, a step shorter than the countdown window — is testable on the
+     * JVM rather than only audible on a phone.
      */
     private fun restartLoop() {
         loop?.cancel()
@@ -369,28 +426,45 @@ class TimerController internal constructor(context: Context) {
             while (isActive) {
                 val current = _run.value ?: return@launch
                 if (!current.state.running) return@launch
-                val now = SystemClock.elapsedRealtime()
-                val remaining = stepRemainingMs(current.steps, current.state, now)
+                val settings = store.settings.value
+                val cue = timerCue(
+                    steps = current.steps,
+                    state = current.state,
+                    countdownTicks = settings.countdownTicks,
+                    now = SystemClock.elapsedRealtime(),
+                )
 
-                if (remaining <= 0) {
+                if (cue.boundary) {
                     mutate { snap, _ -> snap }
                     announceStep(_run.value ?: return@launch)
                     return@launch
                 }
 
-                val settings = store.settings.value
-                if (settings.countdownTicks && remaining <= TICK_WINDOW_MS) {
-                    val second = ((remaining + 999) / 1000).toInt()
-                    if (second != lastTickSecond && second in 1..TICK_SECONDS) {
+                cue.tickSecond?.let { second ->
+                    if (second != lastTickSecond) {
                         lastTickSecond = second
                         signals.tick(settings)
                     }
-                    delay(((remaining - 1) % 1000 + 1).coerceAtLeast(20))
-                } else {
-                    val until = if (settings.countdownTicks) remaining - TICK_WINDOW_MS else remaining
-                    delay(until.coerceIn(20, MAX_SLEEP_MS))
                 }
+
+                delay((cue.wakeAtMs - SystemClock.elapsedRealtime()).coerceIn(MIN_SLEEP_MS, MAX_SLEEP_MS))
             }
+        }
+    }
+
+    /**
+     * Lets the audio engine go once whatever it is playing has had time to finish.
+     *
+     * Releasing a [Signals] stops the tone mid-note, which is how the end-of-program chime
+     * used to be cut off a millisecond into its three quarters of a second. The era counter
+     * is what makes deferring safe: if a new run starts inside the delay, the pending
+     * release belongs to a previous era and does nothing.
+     */
+    private fun releaseSignalsAfterTheirTail() {
+        val era = ++signalEra
+        scope.launch {
+            delay(Signals.SIGNAL_TAIL_MS)
+            if (era == signalEra) signals.release()
         }
     }
 
@@ -486,12 +560,14 @@ class TimerController internal constructor(context: Context) {
         private const val ALARM_REQUEST = 7001
         private const val WAKE_LOCK_TAG = "gachimuchi:workout-timer"
 
-        /** The countdown ticks over the last three seconds of a step. */
-        private const val TICK_SECONDS = 3
-        private const val TICK_WINDOW_MS = TICK_SECONDS * 1000L
-
         /** Never sleep longer than this without re-checking against the clock. */
         private const val MAX_SLEEP_MS = 30_000L
+
+        /**
+         * Floor on a sleep, so that a wake moment already in the past cannot turn the loop
+         * into a spin. Four milliseconds is under a frame and far under anything audible.
+         */
+        private const val MIN_SLEEP_MS = 4L
 
         /** Even a very long program cannot hold the CPU for more than this. */
         private const val MAX_WAKE_LOCK_MS = 3 * 60 * 60 * 1000L

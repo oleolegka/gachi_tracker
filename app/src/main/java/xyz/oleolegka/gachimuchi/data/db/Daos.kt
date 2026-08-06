@@ -110,6 +110,16 @@ interface ProgramDao {
     @Query("SELECT * FROM programs WHERE id = :id")
     suspend fun programById(id: Long): ProgramEntity?
 
+    /**
+     * Points a program at a catalog exercise without touching anything else about it.
+     *
+     * A one-column update rather than a [ProgramRepository.save], because this is called
+     * from the offer that appears when a run ends: rewriting the program's groups and blocks
+     * from a value the offer never loaded would be a way to lose an edit made in between.
+     */
+    @Query("UPDATE programs SET exercise_id = :exerciseId WHERE id = :id")
+    suspend fun setProgramExercise(id: Long, exerciseId: Long?)
+
     @Query("SELECT COUNT(*) FROM programs WHERE space_id = :spaceId")
     suspend fun countPrograms(spaceId: Long = LOCAL_SPACE_ID): Int
 

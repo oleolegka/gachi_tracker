@@ -12,9 +12,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import xyz.oleolegka.gachimuchi.data.TimerStore
+import xyz.oleolegka.gachimuchi.domain.CompletedSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.OUTCOME_MAX_AGE_MS
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
+import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.restProgram
 
@@ -34,7 +38,7 @@ import xyz.oleolegka.gachimuchi.domain.restProgram
 class TimerOutcomeTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
-    private var controller: TimerController? = null
+    private val controllers = mutableListOf<TimerController>()
 
     private val hangs = ExerciseRef(
         id = 42, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
@@ -46,11 +50,12 @@ class TimerOutcomeTest {
         exercise = hangs, reps = 2, sets = 2, restBetweenSetsSec = 60, prepareSec = 0,
     )!!
 
-    private fun newController(): TimerController = TimerController(context).also { controller = it }
+    private fun newController(): TimerController =
+        TimerController(context).also { controllers += it }
 
     @After
     fun tearDown() {
-        controller?.stop()
+        controllers.forEach { it.stop() }
         context.getSharedPreferences("timer", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
@@ -110,13 +115,19 @@ class TimerOutcomeTest {
     }
 
     @Test
-    fun `a plain program leaves no offer, because it belongs to no exercise`() {
+    fun `a program that belongs to no exercise still leaves an offer`() {
         val timer = newController()
         timer.start(program) // no exercise, default origin
 
         repeat(7) { timer.skip() }
 
-        assertNull(timer.outcome.value)
+        // this is the case the user hit twice: a saved protocol, run from the timer tab,
+        // counting a whole session and then offering nothing at all
+        val outcome = timer.outcome.value
+        assertNotNull(outcome)
+        assertTrue(outcome!!.offersLogging)
+        assertNull("it does not claim to know which exercise it was", outcome.exerciseId)
+        assertEquals(listOf(2, 2), outcome.sets.map { it.reps })
     }
 
     @Test
@@ -129,6 +140,49 @@ class TimerOutcomeTest {
         timer.clearOutcome()
 
         assertNull(timer.outcome.value)
+    }
+
+    @Test
+    fun `an offer older than a day is dropped instead of raised against a written day`() {
+        val store = TimerStore(context)
+        store.saveOutcome(
+            RunOutcome(
+                programName = "Repeaters",
+                origin = RunOrigin.EXERCISE,
+                exerciseId = hangs.id,
+                interrupted = false,
+                sets = listOf(CompletedSet(1, reps = 6, plannedReps = 6, workSec = 7, restAfterSec = null)),
+                endedAtWallMs = System.currentTimeMillis() - OUTCOME_MAX_AGE_MS - 1_000,
+                opDate = "2026-01-01",
+            )
+        )
+
+        val revived = newController()
+
+        assertNull("by now that day is either written or lost, and guessing is worse", revived.outcome.value)
+        assertNull(TimerStore(context).loadOutcome())
+    }
+
+    @Test
+    fun `an offer from last night is still raised, and says which day it belongs to`() {
+        val store = TimerStore(context)
+        store.saveOutcome(
+            RunOutcome(
+                programName = "Repeaters",
+                origin = RunOrigin.EXERCISE,
+                exerciseId = hangs.id,
+                interrupted = false,
+                sets = listOf(CompletedSet(1, reps = 6, plannedReps = 6, workSec = 7, restAfterSec = null)),
+                endedAtWallMs = System.currentTimeMillis() - 10 * 60 * 60 * 1000L,
+                opDate = "2026-08-05",
+            )
+        )
+
+        val outcome = newController().outcome.value
+
+        assertNotNull(outcome)
+        assertEquals("2026-08-05", outcome!!.opDate)
+        assertFalse("and it must not pretend it just happened", outcome.isFresh(System.currentTimeMillis()))
     }
 
     @Test

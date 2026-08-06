@@ -79,6 +79,17 @@ data class UiState(
         aliases.filter { it.value == exerciseId && !it.blocked }.map { it.key }
 }
 
+/**
+ * Proof that a run went into the journal: what was written, under which day, and the event
+ * ids it became so the write can be taken back without going looking for it.
+ */
+data class LogReceipt(
+    val exerciseName: String,
+    val setCount: Int,
+    val opDate: String,
+    val eventIds: List<Long>,
+)
+
 class MainViewModel(
     private val repo: ActivityRepository,
     private val programRepo: ProgramRepository,
@@ -310,7 +321,20 @@ class MainViewModel(
         }
     }
 
-    fun runProgram(program: WorkoutProgram) = timer.start(program)
+    /**
+     * Runs a saved program.
+     *
+     * The origin follows the program's own link to a catalog exercise, so that a protocol
+     * typed into the editor and a protocol generated from the exercise behave the same way
+     * when they finish. They used not to: this passed the defaults, which made every saved
+     * program a run that belonged to nothing and therefore offered nothing, however many
+     * sets it had just counted.
+     */
+    fun runProgram(program: WorkoutProgram) = timer.start(
+        program = program,
+        exerciseId = program.exerciseId,
+        origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
+    )
 
     fun pauseTimer() = timer.pause()
     fun resumeTimer() = timer.resume()
@@ -353,12 +377,72 @@ class MainViewModel(
      * Deliberately NOT through [addSet]: that starts a rest timer, which is right after a
      * set done by hand and wrong here — the run has just ended and there is nothing left to
      * rest between.
+     *
+     * The day comes from the OUTCOME, not from today. An offer now survives the process
+     * (timer/TimerController.kt), so it can be answered the morning after the session it
+     * describes, and filing an evening workout under the next day would quietly corrupt the
+     * one record the app exists to keep.
+     *
+     * Answering also teaches the program which exercise it trains, so a protocol run from
+     * the timer tab has to be told once and never again.
      */
     fun logRunSets(exercise: ExerciseRef, sets: List<CompletedSet>, addedKg: Double? = null) {
+        val outcome = timer.outcome.value
         viewModelScope.launch {
-            holdSetsFromRun(exercise, today.toString(), sets, addedKg).forEach { repo.record(it) }
-            timer.clearOutcome()
+            val day = outcome?.opDate?.takeIf { it.isNotBlank() } ?: today.toString()
+            val written = ArrayList<Long>()
+            /*
+             * Wrapped, and the ids collected as they go, because the failure mode being
+             * avoided is silence. A form the validator rejects would otherwise throw inside
+             * this coroutine, kill it, and leave the offer up with no explanation and no
+             * write — which reads exactly like the bug this whole change exists to fix. If
+             * it throws, whatever did land is still undoable and the offer stays up to be
+             * tried again.
+             */
+            val ok = runCatching {
+                holdSetsFromRun(exercise, day, sets, addedKg).forEach { written += repo.record(it) }
+            }.isSuccess
+
+            if (ok) {
+                outcome?.programId?.takeIf { it != 0L && outcome.exerciseId != exercise.id }
+                    ?.let { runCatching { programRepo.linkExercise(it, exercise.id) } }
+                timer.clearOutcome()
+            }
+            _logReceipt.value = LogReceipt(
+                exerciseName = exercise.name,
+                setCount = written.size,
+                opDate = day,
+                eventIds = written,
+            )
         }
+    }
+
+    // --- saying what was written -------------------------------------------------------
+    //
+    // A write the user cannot see is a write the user does not believe in, and disbelief is
+    // expensive here: a session logged by the timer and not noticed gets typed in a second
+    // time, which puts twice the training in the journal that produced it. So the write
+    // reports itself, and the report carries the ids it wrote so that "no, not that" is one
+    // tap rather than a hunt through the feed.
+
+    private val _logReceipt = MutableStateFlow<LogReceipt?>(null)
+
+    /** What the last run-log write put in the journal, until it is acknowledged. */
+    val logReceipt: StateFlow<LogReceipt?> = _logReceipt.asStateFlow()
+
+    fun dismissReceipt() {
+        _logReceipt.value = null
+    }
+
+    /**
+     * Takes back a run that was just written. The journal is append-only, so this appends
+     * reversing events exactly as the feed's own undo does — the sets stay in the history
+     * and stop counting, and nothing about this path is special-cased.
+     */
+    fun undoRunSets() {
+        val receipt = _logReceipt.value ?: return
+        _logReceipt.value = null
+        viewModelScope.launch { receipt.eventIds.forEach { repo.cancelSet(it) } }
     }
 
     /** Writes the starter programs on first launch, alongside the demo history. */

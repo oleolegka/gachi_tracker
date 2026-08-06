@@ -60,6 +60,8 @@ class ProgramRepository(private val db: AppDatabase) {
                     prepareSec = program.prepareSec,
                     position = db.programs().countPrograms(),
                     createdAt = now(),
+                    exerciseId = program.exerciseId,
+                    category = program.category.trim(),
                 )
             )
         } else {
@@ -71,6 +73,8 @@ class ProgramRepository(private val db: AppDatabase) {
                     prepareSec = program.prepareSec,
                     position = existing?.position ?: 0,
                     createdAt = existing?.createdAt ?: now(),
+                    exerciseId = program.exerciseId,
+                    category = program.category.trim(),
                 )
             )
             db.programs().deleteGroupsOf(program.id)
@@ -106,6 +110,16 @@ class ProgramRepository(private val db: AppDatabase) {
 
     suspend fun delete(id: Long) = db.programs().deleteProgram(id)
 
+    /**
+     * Remembers which catalog exercise a program trains, so that finishing it offers to log
+     * straight away instead of asking again. Called both from the editor and from the offer
+     * itself, which is where the answer is most likely to be given.
+     */
+    suspend fun linkExercise(programId: Long, exerciseId: Long?) {
+        if (programId == 0L) return
+        db.programs().setProgramExercise(programId, exerciseId)
+    }
+
     suspend fun count(): Int = db.programs().countPrograms()
 
     /**
@@ -132,6 +146,8 @@ class ProgramRepository(private val db: AppDatabase) {
                 id = program.id,
                 name = program.name,
                 prepareSec = program.prepareSec,
+                exerciseId = program.exerciseId,
+                category = program.category,
                 groups = groupsByProgram[program.id].orEmpty().map { group ->
                     ProgramGroup(
                         name = group.name,

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import xyz.oleolegka.gachimuchi.domain.MAX_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.payloadJson
@@ -42,6 +43,7 @@ private const val KEY_SPEAK = "speak"
 private const val KEY_SETS = "default_sets"
 private const val KEY_ENABLED = "timer_enabled"
 private const val KEY_RUN = "run_snapshot"
+private const val KEY_OUTCOME = "run_outcome"
 
 class TimerStore(context: Context) {
 
@@ -124,6 +126,29 @@ class TimerStore(context: Context) {
         val raw = prefs.getString(KEY_RUN, null) ?: return null
         return runCatching { payloadJson.decodeFromString<RunSnapshot>(raw) }
             .onFailure { clearRun() }
+            .getOrNull()
+    }
+
+    // --- the run waiting to be written down --------------------------------------------
+    //
+    // A finished run leaves an OFFER (domain/RunLog.kt), and the offer outlives the process
+    // for the same reason the run does: it is produced with the screen off and answered
+    // whenever the phone is next picked up, which may be after Android has killed the app.
+    // Same store, same synchronous commit, same reasoning as above.
+
+    fun saveOutcome(outcome: RunOutcome) {
+        prefs.edit().putString(KEY_OUTCOME, payloadJson.encodeToString(outcome)).commit()
+    }
+
+    fun clearOutcome() {
+        prefs.edit().remove(KEY_OUTCOME).commit()
+    }
+
+    /** The stored offer, or null when there is none or it cannot be read. */
+    fun loadOutcome(): RunOutcome? {
+        val raw = prefs.getString(KEY_OUTCOME, null) ?: return null
+        return runCatching { payloadJson.decodeFromString<RunOutcome>(raw) }
+            .onFailure { clearOutcome() }
             .getOrNull()
     }
 }

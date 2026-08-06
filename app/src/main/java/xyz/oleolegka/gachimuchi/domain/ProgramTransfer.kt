@@ -62,12 +62,26 @@ data class ProgramFile(
     @SerialName("exported_at") val exportedAt: String = "",
 )
 
-/** A program as it travels: everything [WorkoutProgram] has except the row id. */
+/**
+ * A program as it travels: everything [WorkoutProgram] has except the two things that mean
+ * nothing on another phone.
+ *
+ * The row id is one (see the note above). The link to a catalog exercise is the other: it
+ * is a local row id, and carrying it to a device where that id is a different exercise -
+ * or nothing at all - would attach somebody's hangs to somebody's squats. An imported
+ * program arrives unlinked and asks once, which is the same thing a program typed in by
+ * hand does.
+ *
+ * [category] DOES travel, because it is text the user wrote and it means the same thing
+ * everywhere. It is optional on the way in, so a file written before categories existed
+ * still reads.
+ */
 @Serializable
 data class PortableProgram(
     @SerialName("name") val name: String,
     @SerialName("groups") val groups: List<ProgramGroup>,
     @SerialName("prepare_sec") val prepareSec: Int = PREPARE_DEFAULT_SEC,
+    @SerialName("category") val category: String = "",
 )
 
 /**
@@ -84,11 +98,16 @@ val programFileJson: Json = Json {
 }
 
 fun WorkoutProgram.toPortable(): PortableProgram =
-    PortableProgram(name = name, groups = groups, prepareSec = prepareSec)
+    PortableProgram(name = name, groups = groups, prepareSec = prepareSec, category = category)
 
 /** Back to a program with NO id: an imported program is always a new row, never an update. */
-fun PortableProgram.toProgram(): WorkoutProgram =
-    WorkoutProgram(id = 0, name = name.trim(), groups = groups, prepareSec = prepareSec)
+fun PortableProgram.toProgram(): WorkoutProgram = WorkoutProgram(
+    id = 0,
+    name = name.trim(),
+    groups = groups,
+    prepareSec = prepareSec,
+    category = category.trim(),
+)
 
 /** The text of an export file. [exportedAt] is decoration; leave it empty if unknown. */
 fun writeProgramFile(programs: List<WorkoutProgram>, exportedAt: String = ""): String =
