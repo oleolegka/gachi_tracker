@@ -125,7 +125,15 @@ class ColorRolesTest : ScreenTest() {
         for ((dark, scheme) in schemes) {
             val ours = rolesOf(scheme)
             val baseline = rolesOf(if (dark) darkColorScheme() else lightColorScheme())
-            val forgotten = painted.filter { ours[it] == baseline[it] }.sorted()
+            /*
+             * White text on the light accent, which is what this app wants and also what
+             * Material's default happens to be. A check that works by comparing against the
+             * baseline cannot tell "chosen" from "forgotten" when the two agree, so this one
+             * role is beyond it — the membership test above is what covers it instead.
+             */
+            val forgotten = painted.filter { ours[it] == baseline[it] }
+                .filterNot { !dark && it == "OnPrimary" }
+                .sorted()
             assertEquals(
                 "roles still at their Material default in the ${if (dark) "dark" else "light"} scheme",
                 emptyList<String>(), forgotten,
@@ -151,6 +159,26 @@ class ColorRolesTest : ScreenTest() {
     }
 
     private companion object {
-        val UNCLAIMED_ROLES = listOf<String>()
+        /**
+         * Thirty-three roles this app has never set. Every one of them is baseline Material
+         * lavender in both themes, and any control that reads one draws in it — which is
+         * exactly what the floating button did.
+         *
+         * `OnPrimary` is on the list by coincidence rather than by omission: the light scheme
+         * sets it to white deliberately, and Material's own default is white too, so no test
+         * that works by comparing against the baseline can tell the two apart. Said out loud
+         * because it is the one entry here that is NOT a gap.
+         */
+        val UNCLAIMED_ROLES = listOf(
+            "ErrorContainer", "InverseOnSurface", "InversePrimary", "InverseSurface",
+            "OnError", "OnErrorContainer", "OnPrimary", "OnPrimaryFixed",
+            "OnPrimaryFixedVariant", "OnSecondary", "OnSecondaryFixed",
+            "OnSecondaryFixedVariant", "OnTertiary", "OnTertiaryContainer", "OnTertiaryFixed",
+            "OnTertiaryFixedVariant", "PrimaryFixed", "PrimaryFixedDim", "Scrim", "Secondary",
+            "SecondaryFixed", "SecondaryFixedDim", "SurfaceBright", "SurfaceContainer",
+            "SurfaceContainerHigh", "SurfaceContainerHighest", "SurfaceContainerLow",
+            "SurfaceContainerLowest", "SurfaceDim", "Tertiary", "TertiaryContainer",
+            "TertiaryFixed", "TertiaryFixedDim",
+        )
     }
 }
