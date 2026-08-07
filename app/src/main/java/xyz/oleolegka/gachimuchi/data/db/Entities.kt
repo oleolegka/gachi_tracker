@@ -159,6 +159,31 @@ data class ExerciseEntity(
     @androidx.room.ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
     /** Stable identity of this exercise across devices and exports — see [newUid]. */
     val uid: String = newUid(),
+    /**
+     * Whether this exercise is trained ONE LIMB AT A TIME (schema version 13): a one-arm
+     * hang, a pistol squat, a single-leg deadlift.
+     *
+     * ── Why the flag is here and the side is on the set ─────────────────────────
+     * Which hand a particular hang used is a fact about that hang
+     * ([xyz.oleolegka.gachimuchi.domain.HoldSet.side]). Whether the exercise is done one hand
+     * at a time is a fact about the exercise, and it has to be answerable BEFORE any set
+     * exists — the entry card has to know to ask which hand, and the timer has to know to
+     * announce the change of hands between sets. Neither can wait for a set to be logged.
+     *
+     * It is also what makes a MISSING side a defect rather than a shrug: on an exercise
+     * marked one-sided, a set that named no hand is a hole in the data, and the reducers say
+     * so out loud instead of filing it as "both"
+     * (see [xyz.oleolegka.gachimuchi.domain.holdRecord]).
+     *
+     * NOT NULL with false as the answer for every row that predates it, which is the true
+     * one: nothing in the catalog was one-sided before there was a way to say so. It is
+     * non-null rather than a `Boolean?` because, unlike [ledByProtocol], there is no third
+     * state to represent — an exercise either is trained one limb at a time or it is not, and
+     * a null would be a second spelling of false that every reader would have to remember.
+     * The price is paid in the migration, which rebuilds the table rather than adding a
+     * column with a DEFAULT a fresh install would not have (see MIGRATION_12_13).
+     */
+    @androidx.room.ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
 )
 
 /**

@@ -189,6 +189,10 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun setLedByProtocol(exerciseId: Long, ledByProtocol: Boolean?) =
         db.exercises().setLedByProtocol(exerciseId, ledByProtocol)
 
+    /** "This one is done one hand at a time" — see [ExerciseDao.setOneSided]. */
+    suspend fun setOneSided(exerciseId: Long, oneSided: Boolean) =
+        db.exercises().setOneSided(exerciseId, oneSided)
+
     /**
      * Cancels a set: the journal is append-only, so a REVERSING event is written while
      * the set itself stays in the history (the reducers exclude it).
@@ -363,6 +367,7 @@ fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
     restSec = protocolRestSec,
     defaultRestSec = defaultRestSec,
     ledByProtocolFlag = ledByProtocol,
+    oneSided = oneSided,
 )
 
 fun EventEntity.toJournalEvent() = JournalEvent(

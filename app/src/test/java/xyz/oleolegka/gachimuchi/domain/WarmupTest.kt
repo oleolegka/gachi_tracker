@@ -117,8 +117,8 @@ class WarmupTest {
             hold(addedKg = 20.0, warmup = true, day = "2026-08-01"),
             hold(addedKg = 8.0, day = "2026-08-02"),
         )
-        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5))
-        assertEquals(8.0, record!!.value, 1e-9)
+        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5)).single()
+        assertEquals(8.0, record.value, 1e-9)
         assertEquals("2026-08-02", record.opDate)
     }
 

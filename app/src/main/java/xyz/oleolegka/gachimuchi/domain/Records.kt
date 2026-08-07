@@ -139,7 +139,10 @@ fun evaluateStrengthRecord(
  */
 fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
     if (hold.warmup) return null
-    val working = priorHolds.filter { !it.warmup }
+    // ONE HAND'S HISTORY IS THE ONLY THING THIS HAND COMPETES WITH. On a fingerboard the two
+    // sides are years apart in strength, and comparing across them would mean the weaker hand
+    // never breaks a record while the stronger one breaks every one it is told about.
+    val working = priorHolds.filter { !it.warmup && it.sideOf == hold.sideOf }
     val priorSeconds = working.mapNotNull { it.holdSec }
 
     // A hold with nothing added is a real point on the added-weight axis, at zero, and it has
@@ -179,6 +182,28 @@ data class ExerciseRecord(
     val value: Double,
     val opDate: String,
     val text: String,
+    /**
+     * Which side this record belongs to, for work trained one limb at a time ([HoldSide]).
+     *
+     * Null means the record covers the exercise as a whole — either because it is two-handed
+     * work, or because the sets it was computed from named no side. Those two are told apart
+     * by [sideMissing], not by this field.
+     */
+    val side: HoldSide? = null,
+    /**
+     * THE SETS BEHIND THIS RECORD SHOULD HAVE NAMED A SIDE AND DID NOT.
+     *
+     * A defect in the data, reported rather than papered over. It means one of two things,
+     * and both are the same mistake: the exercise is marked one-sided and some of its sets
+     * predate that (or were logged without picking a hand), or the exercise is not marked
+     * one-sided yet some of its sets do name a hand.
+     *
+     * The honest reading of such a record is "this is the best of some sets, and nobody knows
+     * which hand did them" — which is emphatically NOT "the best of both hands together". A
+     * screen showing this flag should say so; silently folding these sets in with the
+     * two-handed ones would let a left-hand best be reported as the exercise's best.
+     */
+    val sideMissing: Boolean = false,
 )
 
 /**
@@ -202,23 +227,74 @@ fun strengthRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseR
 }
 
 /**
- * The record of a hold exercise over the whole history: MAXIMUM ADDED WEIGHT (§12-A)
- * and its date. If the history carries no weight at all (a plank), the maximum hold in
- * seconds is used instead.
+ * The records of a hold exercise over the whole history: MAXIMUM ADDED WEIGHT (§12-A) and
+ * its date, or the longest hold in seconds where the history carries no weight at all.
+ *
+ * ── A LIST, because one exercise can hold more than one record ──────────────────
+ * Work done one limb at a time has a record PER SIDE: the left hand's best added weight is
+ * not in competition with the right hand's, and merging them reports the stronger hand as
+ * though it were the exercise. So the answer is one record per side that was trained, in a
+ * fixed order (left, right, then the sets that named no side).
+ *
+ * An exercise with no sides anywhere in its history and [oneSided] false gets exactly one
+ * record, as it always did — that is the two-handed case and it is the common one.
+ *
+ * ── The defect case is reported, not resolved ───────────────────────────────────
+ * [oneSided] is what the CATALOG says about the exercise; the sides are what the SETS say.
+ * When the two disagree — a one-sided exercise with sets that named no hand, or a two-handed
+ * exercise with sets that did — the sets that named nothing get their own record, flagged
+ * with [ExerciseRecord.sideMissing]. They are not folded into either hand and they are not
+ * called "both": nobody knows which hand did them, and inventing an answer here would put a
+ * left-hand best on the exercise as a whole.
  */
-fun holdRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
+fun holdRecord(
+    sets: List<ActivityEvent>,
+    exercise: ExerciseLink,
+    oneSided: Boolean = false,
+): List<ExerciseRecord> {
     val mine = sets.mapNotNull { ev ->
         (ev.form as? HoldSet)?.takeIf { it.exerciseLink()?.matches(exercise) == true && !it.warmup }
             ?.let { it to ev.opDate }
     }
-    if (mine.isEmpty()) return null
+    if (mine.isEmpty()) return emptyList()
+
+    // the history is judged per side as soon as EITHER source says sides exist here: the
+    // catalog flag, or a set that named one. A flag set today must split a history logged
+    // before it, and a side logged on an exercise nobody has flagged is still a side.
+    val bySide = mine.any { it.first.sideOf != null } || oneSided
+    if (!bySide) return listOfNotNull(holdRecordOf(mine, exercise, side = null, sideMissing = false))
+
+    val buckets = mine.groupBy { it.first.sideOf }
+    // a fixed order, with the sets that named nothing last: a screen showing these should not
+    // have the defect at the top, and it must not have it silently first among equals either
+    val order: List<HoldSide?> = listOf(HoldSide.LEFT, HoldSide.RIGHT, null)
+    return order.mapNotNull { side ->
+        val ofSide = buckets[side] ?: return@mapNotNull null
+        holdRecordOf(ofSide, exercise, side = side, sideMissing = side == null)
+    }
+}
+
+/** One side's (or the whole exercise's) best hold: the added-weight axis, else seconds. */
+private fun holdRecordOf(
+    mine: List<Pair<HoldSet, String>>,
+    exercise: ExerciseLink,
+    side: HoldSide?,
+    sideMissing: Boolean,
+): ExerciseRecord? {
+    fun label(text: String): String = when {
+        sideMissing -> "$text (side not recorded)"
+        side != null -> "$text (${side.code})"
+        else -> text
+    }
+
     if (mine.any { it.first.addedKg != null }) {
         // every hold of the exercise competes, the clean ones at zero — see [evaluateHoldRecord]
         // for why a null has to be a point on this axis and not an absence from it
         val (best, day) = mine.maxBy { it.first.addedKg ?: 0.0 }
         val value = best.addedKg ?: 0.0
         return ExerciseRecord(
-            exercise, RecordHit.Axis.HOLD_WEIGHT, value, day, addedWeightPhrase(value),
+            exercise, RecordHit.Axis.HOLD_WEIGHT, value, day,
+            label(addedWeightPhrase(value)), side, sideMissing,
         )
     }
     val withSeconds = mine.filter { it.first.holdSec != null }
@@ -226,6 +302,6 @@ fun holdRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecor
     val (best, day) = withSeconds.maxBy { it.first.holdSec!! }
     return ExerciseRecord(
         exercise, RecordHit.Axis.HOLD_SECONDS, best.holdSec!!, day,
-        "hold ${fmtNum(best.holdSec)} s",
+        label("hold ${fmtNum(best.holdSec)} s"), side, sideMissing,
     )
 }

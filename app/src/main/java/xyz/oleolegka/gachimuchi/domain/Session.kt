@@ -50,6 +50,14 @@ data class ExerciseRef(
      */
     val defaultRestSec: Int? = null,
     val ledByProtocolFlag: Boolean? = null,
+    /**
+     * Trained ONE LIMB AT A TIME (schema version 13) — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
+     *
+     * On the entry card this is what makes the side worth asking for; the side itself is
+     * recorded on the set ([HoldSet.side]) and not here.
+     */
+    val oneSided: Boolean = false,
 ) {
     /**
      * A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists),
@@ -140,6 +148,16 @@ fun holdSetOf(
     restAfterSec: Double? = null,
     /** Ramp-up rather than a working hang — see [StrengthSet.warmup]. */
     warmup: Boolean = false,
+    /**
+     * Which hand this was, for an exercise trained one at a time ([ExerciseRef.oneSided]).
+     *
+     * NOT validated against that flag, deliberately. This builder runs inside the Add
+     * button's own click handler, and a `require` here would come out as a crash on the one
+     * button the app is built around — the same reasoning the edge and the protocol are
+     * sanitised for rather than rejected. A one-sided exercise logged without a side is a
+     * defect the READERS report, out loud, where nobody is mid-set (see [holdRecord]).
+     */
+    side: HoldSide? = null,
 ): HoldSet = HoldSet(
     activity = exercise.name,
     // zero is "not filled in", not a set of zero reps: the validator would reject it and
@@ -157,6 +175,7 @@ fun holdSetOf(
     addedKg = addedKg?.takeIf { it != 0.0 },
     ownWeight = true,
     warmup = warmup,
+    side = side?.code,
     exerciseId = exercise.id,
     exerciseUid = exercise.uid,
     restAfterSec = restAfterSec?.takeIf { it > 0 },

@@ -35,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -716,6 +716,93 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 12 -> 13: the catalog can say that an exercise is trained ONE LIMB AT A TIME.
+         *
+         * One column, and it takes a whole table rebuild to add it. `one_sided` is NOT NULL
+         * (see [ExerciseEntity.oneSided] for why there is no third state worth a nullable
+         * column), and SQLite refuses to add a NOT NULL column to a populated table without a
+         * DEFAULT — a default that would then stay on the column forever, leaving an upgraded
+         * phone with `one_sided INTEGER NOT NULL DEFAULT 0` where a fresh install has
+         * `one_sided INTEGER NOT NULL`. Room's identity hash does not include default clauses,
+         * so both shapes would pass every check the app makes on open; data/SchemaParityTest
+         * is what catches it, and this rebuild is the answer, exactly as in [MIGRATION_2_3].
+         *
+         * ── What every existing row comes through as, and why that is true ──────────
+         * False: nothing in the catalog was one-sided before there was a way to say so. This
+         * is not a placeholder standing in for an unknown — the fact genuinely did not exist,
+         * and the user marking a fingerboard exercise one-sided next week is new information
+         * rather than a correction.
+         *
+         * What that marking then exposes is the sets already in the journal, which named no
+         * hand because nothing asked them to. They do not become "both hands" and they are not
+         * rewritten: the reducers report them as a record whose side is unknown
+         * ([xyz.oleolegka.gachimuchi.domain.ExerciseRecord.sideMissing]). Guessing here would
+         * mean writing a hand into history that nobody recorded.
+         *
+         * ── The two hazards of a rebuild, and why neither bites ─────────────────────
+         * `exercises` is nobody's foreign-key parent — the plan and the programs deliberately
+         * point at it WITHOUT one (see [SlotExerciseEntity] and [ProgramEntity]), so dropping
+         * it deletes nothing by cascade. The AUTOINCREMENT counter is carried across by hand
+         * for the reason [MIGRATION_6_7] spells out: a rebuilt table restarts its counter at
+         * the highest surviving id, and a reissued exercise id would silently adopt the
+         * journal entries of an exercise the user deleted.
+         *
+         * The unique index on `uid` is recreated with the rest. It is not decoration: it is
+         * the thing that would fail the upgrade loudly if the copy ever lost an identity.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v13` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'exercises'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`edge_mm` REAL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`one_sided` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`edge_mm`, `protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`) " +
+                        "SELECT `id`, `space_id`, `name`, `form`, `created_at`, `edge_mm`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, 0 FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_uid` ON `exercises` (`uid`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v13`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v13`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v13`")
+            }
+        }
+
+        /**
          * One `workout_started` payload with `name` filled in from the plan it names, or null
          * when there is nothing to do — no plan named, a name already there, a plan that is
          * gone, or a payload that will not parse.
@@ -868,7 +955,7 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12,
+            MIGRATION_11_12, MIGRATION_12_13,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

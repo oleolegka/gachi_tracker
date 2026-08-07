@@ -123,7 +123,7 @@ class AssistedWeightTest {
             hold(addedKg = -10.0, day = "2026-08-02"),
             hold(addedKg = -18.0, day = "2026-08-03"),
         )
-        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5))!!
+        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5)).single()
         assertEquals(-10.0, record.value, 1e-9)
         assertEquals("2026-08-02", record.opDate)
         assertEquals("assistance 10 kg", record.text)
@@ -135,7 +135,7 @@ class AssistedWeightTest {
             hold(addedKg = -25.0, day = "2026-08-01"),
             hold(holdSec = 9.0, day = "2026-08-02"),
         )
-        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5))!!
+        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5)).single()
         assertEquals(0.0, record.value, 1e-9)
         assertEquals("2026-08-02", record.opDate)
     }
@@ -169,7 +169,7 @@ class AssistedWeightTest {
             hold(addedKg = 6.0, day = "2026-08-01"),
             hold(addedKg = 12.0, day = "2026-08-02"),
         )
-        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5))!!
+        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5)).single()
         assertEquals(12.0, record.value, 1e-9)
         assertEquals("added weight 12 kg", record.text)
 

@@ -16,6 +16,7 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -646,6 +647,69 @@ interface LegacyCatalogDaoV7 {
 )
 abstract class SchemaV7Database : RoomDatabase() {
     abstract fun catalog(): LegacyCatalogDaoV7
+}
+
+/*
+ * SNAPSHOT OF VERSION 12 — the shape of the database immediately before the catalog could say
+ * that an exercise is trained one limb at a time.
+ *
+ * ONLY `exercises` NEEDS ONE. Versions 8 through 12 have identical DDL (9, 10, 11 and 12 are
+ * rewrites of stored JSON and change no column), and of those tables the 12 -> 13 step touches
+ * `exercises` alone. The rule at the top of this file allows the CURRENT entity to stand in for
+ * a table that has not changed since, which is every other table here — and that is not a
+ * shortcut, it is the rule doing its job: the day one of them changes, this database stops
+ * describing version 12 and the compiler or these assertions say so.
+ */
+
+/** The catalog of versions 8 to 12: identity, preferences, and nothing about sides. */
+@Entity(
+    tableName = "exercises",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class ExerciseEntityV12(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+)
+
+@Dao
+interface LegacyCatalogDaoV12 {
+    @Insert
+    suspend fun insertEvent(event: EventEntity): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV12): Long
+
+    @Query("DELETE FROM exercises WHERE id = :id")
+    suspend fun deleteExercise(id: Long)
+}
+
+@Database(
+    entities = [
+        EventEntity::class,
+        ExerciseEntityV12::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 12,
+    exportSchema = false,
+)
+abstract class SchemaV12Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV12
 }
 
 /**
@@ -1870,6 +1934,152 @@ class MigrationTest {
 
         assertNull(startedPayload(repo.allEvents(), strayId).name)
         assertNull(buildWorkout(repo.allEvents(), strayId)!!.name)
+    }
+
+    // --- version 12 -> 13: the catalog can say an exercise is one-sided ----------------------
+
+    /** What a version 12 phone was left holding, so the assertions can name it afterwards. */
+    private data class PhoneV12(val exerciseId: Long, val goneId: Long, val hangId: Long)
+
+    /**
+     * A version 12 database with a hangboard exercise, one hang logged against it, and a gap
+     * at the top of the catalog left by a deleted exercise.
+     *
+     * The gap is the point of the second row: `exercises` is REBUILT by this migration, and a
+     * rebuilt AUTOINCREMENT table restarts its counter at the highest surviving id.
+     */
+    private suspend fun writeVersion12(): PhoneV12 {
+        val v12 = Room.databaseBuilder(context, SchemaV12Database::class.java, dbName).build()
+        opened = v12
+
+        val exerciseId = v12.catalog().insertExercise(
+            ExerciseEntityV12(
+                name = "One-arm hang 20 mm", form = ExerciseForm.HOLD.code,
+                createdAt = "2026-08-01T10:00:00", edgeMm = 20.0,
+                protocolWorkSec = 7.0, protocolRestSec = 3.0,
+                defaultRestSec = 180, ledByProtocol = false,
+            )
+        )
+        val goneId = v12.catalog().insertExercise(
+            ExerciseEntityV12(
+                name = "Deleted later", form = ExerciseForm.HOLD.code,
+                createdAt = "2026-08-01T10:05:00",
+            )
+        )
+        v12.catalog().deleteExercise(goneId)
+
+        val hang = """{"activity":"One-arm hang 20 mm","added_kg":-15.0,"own_weight":true,""" +
+            """"exercise_id":$exerciseId,"op_date":"2026-08-02",""" +
+            """"activity_key":"one arm hang 20 mm"}"""
+        val hangId = v12.catalog().insertEvent(
+            EventEntity(ts = "2026-08-02T10:00:00", type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET, payload = hang)
+        )
+
+        v12.close()
+        opened = null
+        return PhoneV12(exerciseId, goneId, hangId)
+    }
+
+    @Test
+    fun `every exercise on the phone comes through the rebuild, two-handed`() = runTest {
+        val phone = writeVersion12()
+
+        val db = openCurrent()
+        val exercise = db.exercises().byId(phone.exerciseId)
+
+        assertNotNull("the catalog row was lost in the rebuild", exercise)
+        assertEquals("One-arm hang 20 mm", exercise!!.name)
+        assertEquals(20.0, exercise.edgeMm!!, 1e-9)
+        assertEquals(180, exercise.defaultRestSec)
+        assertEquals(false, exercise.ledByProtocol)
+        assertTrue("the identity did not survive the rebuild", isUid(exercise.uid))
+
+        /*
+         * False, and it is a TRUE statement rather than a placeholder: nothing in the catalog
+         * was one-sided before there was a way to say so. Marking it next week is new
+         * information, not a correction of this.
+         */
+        assertFalse(exercise.oneSided)
+    }
+
+    @Test
+    fun `an id handed out before the catalog rebuild is never handed out again`() = runTest {
+        val phone = writeVersion12()
+
+        val db = openCurrent()
+        val fresh = db.exercises().insert(
+            xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                name = "Added after the upgrade", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-03T10:00:00",
+            )
+        )
+
+        // the journal outlives the catalog, so a reissued id would silently re-attach the
+        // entries of the deleted exercise to this new one
+        assertTrue(
+            "the rebuilt catalog reused id ${phone.goneId}",
+            fresh > phone.goneId,
+        )
+    }
+
+    @Test
+    fun `the one-sided column passes Room's schema check on the next open`() = runTest {
+        writeVersion12()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(1, again.exercises().all().size)
+    }
+
+    @Test
+    fun `a hang logged before sides existed keeps its history and names no side`() = runTest {
+        val phone = writeVersion12()
+
+        val repo = ActivityRepository(openCurrent())
+        val events = repo.allEvents()
+        val hang = events.single { it.id == phone.hangId }
+        val form = formFromEventOrNull(hang.type, hang.payload) as xyz.oleolegka.gachimuchi.domain.HoldSet
+
+        // the payload is untouched by this migration: no side is written into history that
+        // nobody recorded
+        assertNull(form.side)
+        assertEquals(-15.0, form.addedKg!!, 1e-9)
+
+        // and while the exercise stays two-handed the record reads exactly as it always did
+        val records = xyz.oleolegka.gachimuchi.domain.holdRecord(
+            xyz.oleolegka.gachimuchi.domain.readActivities(events),
+            ExerciseLink.ofId(phone.exerciseId),
+        )
+        assertEquals(1, records.size)
+        assertNull(records.single().side)
+        assertFalse(records.single().sideMissing)
+    }
+
+    @Test
+    fun `marking an exercise one-sided turns its sideless history into a stated defect`() = runTest {
+        val phone = writeVersion12()
+
+        val repo = ActivityRepository(openCurrent())
+        repo.setOneSided(phone.exerciseId, true)
+        assertTrue(repo.exercise(phone.exerciseId)!!.oneSided)
+
+        /*
+         * THE POINT OF THE FLAG BEING A COLUMN AND THE SIDE BEING A PAYLOAD FIELD. Turning it
+         * on cannot rewrite the sets already logged — they genuinely do not say which hand did
+         * them — so the reducers report a record whose side is unknown rather than filing it
+         * as "both hands", which is the one answer that is certainly wrong.
+         */
+        val records = xyz.oleolegka.gachimuchi.domain.holdRecord(
+            xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
+            ExerciseLink.ofId(phone.exerciseId),
+            oneSided = true,
+        )
+        assertEquals(1, records.size)
+        assertNull(records.single().side)
+        assertTrue(records.single().sideMissing)
+        assertTrue(records.single().text, records.single().text.contains("side not recorded"))
     }
 
     @Test

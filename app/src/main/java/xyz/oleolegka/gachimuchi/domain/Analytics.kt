@@ -365,13 +365,20 @@ fun recordsOf(
     activities: List<ActivityEvent>,
     exercise: ExerciseLink,
     form: ExerciseForm,
+    /**
+     * What the CATALOG says about the exercise being trained one limb at a time — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided]. Defaulted to false so that
+     * a caller holding no catalog row still gets the two-handed answer, which is what every
+     * caller got before the flag existed.
+     */
+    oneSided: Boolean = false,
 ): List<ExerciseRecord> = when (form) {
     ExerciseForm.STRENGTH -> listOfNotNull(
         strengthRecord(activities, exercise),
         heaviestSet(activities, exercise),
     )
 
-    ExerciseForm.HOLD -> listOfNotNull(holdRecord(activities, exercise))
+    ExerciseForm.HOLD -> holdRecord(activities, exercise, oneSided)
 
     else -> emptyList()
 }
@@ -651,6 +658,8 @@ data class CatalogExercise(
     val name: String,
     val form: ExerciseForm,
     val uid: String? = null,
+    /** Trained one limb at a time — see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided]. */
+    val oneSided: Boolean = false,
 ) {
     val link: ExerciseLink get() = ExerciseLink(uid, id)
 }
@@ -683,7 +692,10 @@ fun doorTiles(
             name = name,
             form = form,
             series = series,
-            record = recordsOf(activities, link, form).firstOrNull(),
+            // the first of them, which for one-sided work is the LEFT hand's rather than
+            // "the exercise's": a tile has room for one badge and the detail screen is where
+            // both hands are shown side by side
+            record = recordsOf(activities, link, form, row.oneSided).firstOrNull(),
             lastDate = last.opDate,
             entries = formsOf(activities, link, form).size,
         )
