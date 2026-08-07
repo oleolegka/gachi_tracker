@@ -46,13 +46,13 @@ class AnalyticsTest {
             strength("2026-08-01", 62.5, 3),   // 1RM 68.75 -- lower than 60x5 = 70
             strength("2026-08-03", 65.0, 5),
         )
-        val series = trendSeries(acts(events), 1, ExerciseForm.STRENGTH)!!
+        val series = trendSeries(acts(events), ExerciseLink.ofId(1), ExerciseForm.STRENGTH)!!
         assertEquals("Estimated 1RM", series.spec.label)
         assertEquals(2, series.points.size)
         assertEquals(est1rm(60.0, 5), series.points[0].value, 1e-9)
         assertEquals("2026-08-03", series.points[1].opDate)
         // the trend uses the same formula as the record, so the two cannot disagree
-        assertEquals(strengthRecord(acts(events), 1)!!.value, series.best!!.value, 1e-9)
+        assertEquals(strengthRecord(acts(events), ExerciseLink.ofId(1))!!.value, series.best!!.value, 1e-9)
     }
 
     @Test
@@ -61,10 +61,10 @@ class AnalyticsTest {
             strength("2026-08-01", 60.0, 5),
             strength("2026-08-02", null, 12),  // no weight, so no 1RM to compute
         )
-        val series = trendSeries(acts(events), 1, ExerciseForm.STRENGTH)!!
+        val series = trendSeries(acts(events), ExerciseLink.ofId(1), ExerciseForm.STRENGTH)!!
         assertEquals(listOf("2026-08-01"), series.points.map { it.opDate })
         // the volume chart still sees that day, but as tonnage the body-weight set is zero
-        val volume = volumeSeries(acts(events), 1, ExerciseForm.STRENGTH)!!
+        val volume = volumeSeries(acts(events), ExerciseLink.ofId(1), ExerciseForm.STRENGTH)!!
         assertEquals("Volume, reps x weight", volume.spec.label)
         assertEquals(listOf("2026-08-01", "2026-08-02"), volume.points.map { it.opDate })
         assertEquals(300.0, volume.points[0].value, 1e-9)
@@ -78,7 +78,7 @@ class AnalyticsTest {
             hold("2026-08-01", 8.0),
             hold("2026-08-03", 7.0),
         )
-        val series = trendSeries(acts(weighted), 2, ExerciseForm.HOLD)!!
+        val series = trendSeries(acts(weighted), ExerciseLink.ofId(2), ExerciseForm.HOLD)!!
         assertEquals("Added weight", series.spec.label)
         assertEquals(8.0, series.points[0].value, 1e-9)  // the max of the day, not the last
 
@@ -86,7 +86,7 @@ class AnalyticsTest {
             hold("2026-08-01", null, holdSec = 40.0),
             hold("2026-08-02", null, holdSec = 55.0),
         )
-        val fallback = trendSeries(acts(plank), 2, ExerciseForm.HOLD)!!
+        val fallback = trendSeries(acts(plank), ExerciseLink.ofId(2), ExerciseForm.HOLD)!!
         assertEquals("Longest hold", fallback.spec.label)
         assertEquals(ValueFormat.SECONDS, fallback.spec.format)
         assertEquals(55.0, fallback.best!!.value, 1e-9)
@@ -98,7 +98,7 @@ class AnalyticsTest {
             ev(Cardio(activity = "Running", distanceM = 5000.0, paceSecPerKm = 330.0, exerciseId = 3, opDate = "2026-08-01")),
             ev(Cardio(activity = "Running", distanceM = 5000.0, paceSecPerKm = 315.0, exerciseId = 3, opDate = "2026-08-03")),
         )
-        val series = trendSeries(acts(withPace), 3, ExerciseForm.CARDIO)!!
+        val series = trendSeries(acts(withPace), ExerciseLink.ofId(3), ExerciseForm.CARDIO)!!
         assertTrue(series.spec.lowerIsBetter)
         assertEquals(315.0, series.best!!.value, 1e-9)  // best = the LOWEST pace
 
@@ -106,8 +106,8 @@ class AnalyticsTest {
             ev(Cardio(activity = "Elliptical", durationSec = 1800, exerciseId = 4, opDate = "2026-08-01")),
         )
         // distance is volume, not progress: no invented trend
-        assertNull(trendSeries(acts(noPace), 4, ExerciseForm.CARDIO))
-        assertEquals("Time", volumeSeries(acts(noPace), 4, ExerciseForm.CARDIO)!!.spec.label)
+        assertNull(trendSeries(acts(noPace), ExerciseLink.ofId(4), ExerciseForm.CARDIO))
+        assertEquals("Time", volumeSeries(acts(noPace), ExerciseLink.ofId(4), ExerciseForm.CARDIO)!!.spec.label)
     }
 
     @Test
@@ -117,8 +117,8 @@ class AnalyticsTest {
             ev(Tick(activity = "Stretching", exerciseId = 5, opDate = "2026-08-01")),
             ev(Tick(activity = "Stretching", exerciseId = 5, opDate = "2026-08-04")),
         )
-        assertNull(trendSeries(acts(events), 5, ExerciseForm.TICK))
-        val volume = volumeSeries(acts(events), 5, ExerciseForm.TICK)!!
+        assertNull(trendSeries(acts(events), ExerciseLink.ofId(5), ExerciseForm.TICK))
+        val volume = volumeSeries(acts(events), ExerciseLink.ofId(5), ExerciseForm.TICK)!!
         assertEquals("Check-ins", volume.spec.label)
         assertEquals(listOf(2.0, 1.0), volume.points.map { it.value })
     }
@@ -131,21 +131,21 @@ class AnalyticsTest {
             ev(Bodyweight(weightKg = 74.2, opDate = "2026-08-01")),
             ev(Bodyweight(weightKg = 73.8, opDate = "2026-08-05")),
         )
-        val duration = trendSeries(acts(events), 6, ExerciseForm.DURATION)!!
+        val duration = trendSeries(acts(events), ExerciseLink.ofId(6), ExerciseForm.DURATION)!!
         assertEquals(600.0, duration.points[0].value, 1e-9)  // summed over the day
-        assertNull(volumeSeries(acts(events), 6, ExerciseForm.DURATION))
+        assertNull(volumeSeries(acts(events), ExerciseLink.ofId(6), ExerciseForm.DURATION))
 
         // body weight carries no exercise_id, so the id passed in is ignored by design
-        val weight = trendSeries(acts(events), 999, ExerciseForm.BODYWEIGHT)!!
+        val weight = trendSeries(acts(events), ExerciseLink.ofId(999), ExerciseForm.BODYWEIGHT)!!
         assertEquals(listOf(74.2, 73.8), weight.points.map { it.value })
-        assertNull(volumeSeries(acts(events), 999, ExerciseForm.BODYWEIGHT))
+        assertNull(volumeSeries(acts(events), ExerciseLink.ofId(999), ExerciseForm.BODYWEIGHT))
     }
 
     @Test
     fun `an exercise with no entries yields no series at all`() {
         val events = listOf(strength("2026-08-01", 60.0, 5, id = 1))
-        assertNull(trendSeries(acts(events), 42, ExerciseForm.STRENGTH))
-        assertNull(volumeSeries(acts(events), 42, ExerciseForm.STRENGTH))
+        assertNull(trendSeries(acts(events), ExerciseLink.ofId(42), ExerciseForm.STRENGTH))
+        assertNull(volumeSeries(acts(events), ExerciseLink.ofId(42), ExerciseForm.STRENGTH))
     }
 
     @Test
@@ -156,7 +156,7 @@ class AnalyticsTest {
             900, "2026-08-02T11:00:00", 1, 1, TYPE_SET_CANCEL,
             payloadJson.encodeToString(SetCancel(second.id)),
         )
-        val series = trendSeries(acts(listOf(first, second, cancel)), 1, ExerciseForm.STRENGTH)!!
+        val series = trendSeries(acts(listOf(first, second, cancel)), ExerciseLink.ofId(1), ExerciseForm.STRENGTH)!!
         assertEquals(listOf("2026-08-01"), series.points.map { it.opDate })
     }
 
@@ -171,18 +171,18 @@ class AnalyticsTest {
             ev(Cardio(activity = "Running", distanceM = 5000.0, paceSecPerKm = 300.0, exerciseId = 3, opDate = "2026-08-02")),
         )
         val a = acts(events)
-        val strengthRecs = recordsOf(a, 1, ExerciseForm.STRENGTH)
+        val strengthRecs = recordsOf(a, ExerciseLink.ofId(1), ExerciseForm.STRENGTH)
         assertEquals(2, strengthRecs.size)
         assertEquals("2026-08-01", strengthRecs[0].opDate)
-        assertEquals(100.0, heaviestSet(a, 1)!!.value, 1e-9)
-        assertTrue(heaviestSet(a, 1)!!.text.contains("heaviest set"))
+        assertEquals(100.0, heaviestSet(a, ExerciseLink.ofId(1))!!.value, 1e-9)
+        assertTrue(heaviestSet(a, ExerciseLink.ofId(1))!!.text.contains("heaviest set"))
 
-        assertEquals(1, recordsOf(a, 2, ExerciseForm.HOLD).size)
-        assertEquals(RecordHit.Axis.HOLD_WEIGHT, recordsOf(a, 2, ExerciseForm.HOLD)[0].axis)
+        assertEquals(1, recordsOf(a, ExerciseLink.ofId(2), ExerciseForm.HOLD).size)
+        assertEquals(RecordHit.Axis.HOLD_WEIGHT, recordsOf(a, ExerciseLink.ofId(2), ExerciseForm.HOLD)[0].axis)
         // no record model for cardio yet -- an empty list, not a fabricated badge
-        assertTrue(recordsOf(a, 3, ExerciseForm.CARDIO).isEmpty())
-        assertTrue(recordsOf(a, 6, ExerciseForm.DURATION).isEmpty())
-        assertTrue(recordsOf(a, 5, ExerciseForm.TICK).isEmpty())
+        assertTrue(recordsOf(a, ExerciseLink.ofId(3), ExerciseForm.CARDIO).isEmpty())
+        assertTrue(recordsOf(a, ExerciseLink.ofId(6), ExerciseForm.DURATION).isEmpty())
+        assertTrue(recordsOf(a, ExerciseLink.ofId(5), ExerciseForm.TICK).isEmpty())
     }
 
     // --- hangboard siblings --------------------------------------------------------------

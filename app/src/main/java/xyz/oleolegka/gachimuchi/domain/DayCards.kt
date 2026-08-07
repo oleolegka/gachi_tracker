@@ -314,14 +314,14 @@ private data class LooseGroup(
 private fun looseGroups(events: List<JournalEvent>, opDate: String): List<LooseGroup> {
     val buckets = LinkedHashMap<String, MutableList<ActivityEvent>>()
     for (entry in setsOutsideWorkouts(events, opDate)) {
-        val id = entry.form.exerciseId
-        buckets.getOrPut(id?.let { "id:$it" } ?: "name:${entry.key ?: entry.type}") { mutableListOf() } += entry
+        val exercise = entry.form.exerciseLink()
+        buckets.getOrPut(exercise?.key ?: "name:${entry.key ?: entry.type}") { mutableListOf() } += entry
     }
     return buckets.map { (key, entries) ->
         LooseGroup(
             key = key,
             name = entries.first().form.activityName(),
-            exerciseId = entries.first().form.exerciseId,
+            exerciseId = entries.first().form.exerciseLink()?.id,
             opDate = opDate,
             entries = entries,
         )

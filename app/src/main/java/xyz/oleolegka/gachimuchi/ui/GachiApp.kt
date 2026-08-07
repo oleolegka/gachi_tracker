@@ -271,7 +271,7 @@ fun GachiApp(viewModel: MainViewModel) {
             outcome = outcome,
             exercise = state.refById(outcome.exerciseId),
             candidates = holdExercises,
-            lastAddedKg = { id -> lastHoldSet(state.events, id)?.addedKg },
+            lastAddedKg = { id -> lastHoldSet(state.events, state.linkOf(id))?.addedKg },
             nowWallMs = System.currentTimeMillis(),
             onLog = viewModel::logRunSets,
             onDismiss = viewModel::dismissRunOutcome,

@@ -28,6 +28,12 @@ import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.formsOfExercise
+import xyz.oleolegka.gachimuchi.domain.formFromEventOrNull
+import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
+import xyz.oleolegka.gachimuchi.domain.StrengthSet
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.isUid
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
@@ -1600,6 +1606,81 @@ class MigrationTest {
         // and the rows that belonged to no workout still belong to none — a uid invented for
         // them would be a claim about a workout that never happened
         assertTrue(events.filter { it.id != inWorkout.id }.all { it.workoutUid == null })
+    }
+
+    // --- version 9 -> 10: entries name their exercise by identity ----------------------------
+
+    @Test
+    fun `every entry that can be resolved comes out naming its exercise by identity`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val exerciseUid = repo.exercise(phone.exerciseId)!!.uid
+
+        val sets = repo.allEvents().mapNotNull { formFromEventOrNull(it.type, it.payload) }
+        assertEquals(4, sets.size)
+        assertTrue(
+            "an entry was left naming its exercise only by number",
+            sets.all { it.exerciseUid == exerciseUid },
+        )
+        // the number is kept beside it rather than replaced: a build older than version 10
+        // still has to be able to read this journal
+        assertTrue(sets.all { it.exerciseId == phone.exerciseId })
+    }
+
+    @Test
+    fun `the backfill keeps one exercise under one key rather than splitting its history`() =
+        runTest {
+            val phone = writeVersion7()
+
+            val repo = ActivityRepository(openCurrent())
+            val events = repo.allEvents()
+
+            /*
+             * THE POINT OF DOING THIS AT UPGRADE TIME. The reducers group by identity where an
+             * entry has one and by number where it does not. Leave the old entries alone and
+             * the exercise appears twice — half its history under "id:N", half under a uid —
+             * with the records computed over half the sets and nothing looking broken.
+             */
+            val link = ExerciseLink(repo.exercise(phone.exerciseId)!!.uid, phone.exerciseId)
+            assertEquals(4, formsOfExercise<StrengthSet>(events, link, TYPE_STRENGTH_SET).size)
+            assertEquals(1, buildSession(events, "2026-07-05").groups.size)
+        }
+
+    @Test
+    fun `an entry pointing at an exercise that is gone keeps its number and gets no identity`() =
+        runTest {
+            val phone = writeVersion7()
+
+            // an entry naming the exercise that was deleted before the upgrade: there is no
+            // identity to give it, and inventing one would attach this history to whatever is
+            // created next
+            val stray = strengthSetOf(
+                exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                    id = phone.goneExerciseId, name = "Overhead press", form = ExerciseForm.STRENGTH,
+                ),
+                opDate = "2026-07-04", reps = 5, weightKg = 40.0,
+            )
+            writeExtraEventAtVersion7(stray)
+
+            val repo = ActivityRepository(openCurrent())
+            val migrated = repo.allEvents()
+                .mapNotNull { formFromEventOrNull(it.type, it.payload) }
+                .single { it.exerciseId == phone.goneExerciseId }
+
+            assertNull(migrated.exerciseUid)
+            assertEquals(phone.goneExerciseId, migrated.exerciseId)
+        }
+
+    /** Appends one more event to the version 7 file already on disk, without upgrading it. */
+    private suspend fun writeExtraEventAtVersion7(form: xyz.oleolegka.gachimuchi.domain.ActivityForm) {
+        val v7 = Room.databaseBuilder(context, SchemaV7Database::class.java, dbName).build()
+        opened = v7
+        v7.catalog().insertEvent(
+            EventEntityV7(ts = "2026-07-04T10:00:00", type = form.type, payload = form.toPayload())
+        )
+        v7.close()
+        opened = null
     }
 
     @Test

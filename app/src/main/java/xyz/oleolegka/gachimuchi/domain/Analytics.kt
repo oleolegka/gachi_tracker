@@ -162,12 +162,14 @@ fun List<DayPoint>.inPeriod(period: Period, today: LocalDate): List<DayPoint> {
  */
 private fun formsOf(
     activities: List<ActivityEvent>,
-    exerciseId: Long,
+    exercise: ExerciseLink,
     form: ExerciseForm,
 ): List<ActivityEvent> = if (form == ExerciseForm.BODYWEIGHT) {
     activities.filter { it.form is Bodyweight }
 } else {
-    activities.filter { it.type == form.eventType && it.form.exerciseId == exerciseId }
+    activities.filter {
+        it.type == form.eventType && it.form.exerciseLink()?.matches(exercise) == true
+    }
 }
 
 /** Groups by day, ascending, applying [reduce] to each day's entries; empty days are dropped. */
@@ -195,10 +197,10 @@ private fun byDay(
  */
 fun trendSeries(
     activities: List<ActivityEvent>,
-    exerciseId: Long,
+    exercise: ExerciseLink,
     form: ExerciseForm,
 ): FormSeries? {
-    val mine = formsOf(activities, exerciseId, form)
+    val mine = formsOf(activities, exercise, form)
     return when (form) {
         ExerciseForm.STRENGTH -> FormSeries(
             SeriesSpec("Estimated 1RM", ValueFormat.KILOGRAMS, Aggregation.BEST),
@@ -271,10 +273,10 @@ fun trendSeries(
  */
 fun volumeSeries(
     activities: List<ActivityEvent>,
-    exerciseId: Long,
+    exercise: ExerciseLink,
     form: ExerciseForm,
 ): FormSeries? {
-    val mine = formsOf(activities, exerciseId, form)
+    val mine = formsOf(activities, exercise, form)
     return when (form) {
         ExerciseForm.STRENGTH -> {
             val sets = mine.mapNotNull { it.form as? StrengthSet }
@@ -327,15 +329,15 @@ fun volumeSeries(
  */
 fun recordsOf(
     activities: List<ActivityEvent>,
-    exerciseId: Long,
+    exercise: ExerciseLink,
     form: ExerciseForm,
 ): List<ExerciseRecord> = when (form) {
     ExerciseForm.STRENGTH -> listOfNotNull(
-        strengthRecord(activities, exerciseId),
-        heaviestSet(activities, exerciseId),
+        strengthRecord(activities, exercise),
+        heaviestSet(activities, exercise),
     )
 
-    ExerciseForm.HOLD -> listOfNotNull(holdRecord(activities, exerciseId))
+    ExerciseForm.HOLD -> listOfNotNull(holdRecord(activities, exercise))
 
     else -> emptyList()
 }
@@ -345,15 +347,16 @@ fun recordsOf(
  * the estimated 1RM: the 1RM record can be taken by a light-and-many set, and "the most I
  * have ever picked up" is a different question that lifters actually ask.
  */
-fun heaviestSet(activities: List<ActivityEvent>, exerciseId: Long): ExerciseRecord? {
+fun heaviestSet(activities: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
     val weighted = activities.mapNotNull { ev ->
-        (ev.form as? StrengthSet)?.takeIf { it.exerciseId == exerciseId && it.weightKg != null }
+        (ev.form as? StrengthSet)
+            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null }
             ?.let { it to ev.opDate }
     }
     if (weighted.isEmpty()) return null
     val (best, day) = weighted.maxBy { it.first.weightKg!! }
     return ExerciseRecord(
-        exerciseId, RecordHit.Axis.WEIGHT_AT_REPS, best.weightKg!!, day,
+        exercise, RecordHit.Axis.WEIGHT_AT_REPS, best.weightKg!!, day,
         "heaviest set ${fmtNum(best.weightKg)} kg x ${best.reps}",
     )
 }
@@ -447,11 +450,11 @@ fun activitiesByDay(
     val out = LinkedHashMap<String, MutableList<ActivityRef>>()
     val seen = HashSet<Pair<String, String>>()
     for (ev in readActivities(events, FACT_TYPES, dateFrom, dateTo)) {
-        val id = ev.form.exerciseId
-        val key = id?.let { "id:$it" } ?: "name:${ev.key ?: ev.type}"
+        val exercise = ev.form.exerciseLink()
+        val key = exercise?.key ?: "name:${ev.key ?: ev.type}"
         if (!seen.add(ev.opDate to key)) continue
         out.getOrPut(ev.opDate) { mutableListOf() }
-            .add(ActivityRef(key, id, ev.form.activityName()))
+            .add(ActivityRef(key, exercise?.id, ev.form.activityName()))
     }
     return out
 }
@@ -602,8 +605,21 @@ data class DoorTile(
     val entries: Int,
 )
 
-/** A catalog row reduced to what the dashboard needs. */
-data class CatalogExercise(val id: Long, val name: String, val form: ExerciseForm)
+/**
+ * A catalog row reduced to what the dashboard needs.
+ *
+ * [uid] rather than the id alone, because the entries this is matched against are keyed by
+ * identity now — see [ExerciseLink]. An empty uid means "this caller only has a number", and
+ * matching then falls back to the number.
+ */
+data class CatalogExercise(
+    val id: Long,
+    val name: String,
+    val form: ExerciseForm,
+    val uid: String? = null,
+) {
+    val link: ExerciseLink get() = ExerciseLink(uid, id)
+}
 
 /**
  * The overview feed, most recently used first (the same ordering the exercise picker
@@ -621,17 +637,21 @@ fun doorTiles(
     val usage = exerciseUsage(events)
     val order = pickerOrder(usage)
 
-    val tiles = catalog.mapNotNull { (id, name, form) ->
-        val series = trendSeries(activities, id, form) ?: volumeSeries(activities, id, form) ?: return@mapNotNull null
+    val tiles = catalog.mapNotNull { row ->
+        val (id, name, form) = row
+        val link = row.link
+        val series = trendSeries(activities, link, form)
+            ?: volumeSeries(activities, link, form)
+            ?: return@mapNotNull null
         val last = series.last ?: return@mapNotNull null
         DoorTile(
             exerciseId = id,
             name = name,
             form = form,
             series = series,
-            record = recordsOf(activities, id, form).firstOrNull(),
+            record = recordsOf(activities, link, form).firstOrNull(),
             lastDate = last.opDate,
-            entries = formsOf(activities, id, form).size,
+            entries = formsOf(activities, link, form).size,
         )
     }
     // body weight has no exercise_id, so usage never sees it; ordering falls back to its

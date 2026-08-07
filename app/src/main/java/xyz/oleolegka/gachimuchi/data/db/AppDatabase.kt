@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.serialization.json.contentOrNull
 import xyz.oleolegka.gachimuchi.domain.newUid
 
 /**
@@ -34,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -562,6 +563,80 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 9 -> 10: every entry names its exercise by identity as well as by number.
+         *
+         * NO SCHEMA CHANGE AT ALL — the link lives in the payload, so this migration is
+         * nothing but a rewrite of the JSON already stored. It still has to be a migration
+         * rather than something done lazily on read, and that is the point worth writing down.
+         *
+         * ── Why the backfill is not optional ────────────────────────────────────────
+         * The reducers group entries of one exercise by [ExerciseLink.key], which is the
+         * identity when the entry has one and the number otherwise. Leave the old rows alone
+         * and a single exercise ends up under TWO keys — everything logged before the upgrade
+         * under "id:5" and everything after under a uid. The detail screen would show half a
+         * history, the records would be computed over half the sets, and nothing anywhere
+         * would look broken. So the old rows are brought up to the new way of speaking, in one
+         * pass, at upgrade time.
+         *
+         * ── What is deliberately left alone ─────────────────────────────────────────
+         * An entry whose `exercise_id` names a catalog row that no longer exists gets no uid.
+         * There is no identity to give it: the exercise it points at is gone, and inventing one
+         * would attach that history to whatever is created next. It keeps its number, stays
+         * grouped under it, and remains exactly as findable as it was.
+         *
+         * Body-weight entries name no exercise by design and are skipped for that reason
+         * rather than by accident, along with any payload that will not parse — a damaged row
+         * costs itself, never the upgrade (see [formFromEventOrNull] for the same rule on
+         * reads).
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val uidOfExercise = HashMap<Long, String>()
+                db.query("SELECT `id`, `uid` FROM `exercises`").use { c ->
+                    while (c.moveToNext()) uidOfExercise[c.getLong(0)] = c.getString(1)
+                }
+                if (uidOfExercise.isEmpty()) return
+
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query("SELECT `id`, `payload` FROM `events`").use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withExerciseUid(c.getString(1), uidOfExercise)?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * One payload with `exercise_uid` filled in from `exercise_id`, or null when there is
+         * nothing to do — no exercise named, a uid already there, an unknown exercise, or a
+         * payload that will not parse.
+         *
+         * Returning null for "nothing to do" rather than the unchanged string is what keeps
+         * the migration from rewriting every row in the journal to the value it already held.
+         */
+        private fun withExerciseUid(payload: String, uidOfExercise: Map<Long, String>): String? {
+            val json = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(payload)
+            }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+
+            if (json["exercise_uid"] != null) return null
+            val exerciseId = (json["exercise_id"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toLongOrNull() ?: return null
+            val uid = uidOfExercise[exerciseId] ?: return null
+
+            return kotlinx.serialization.json.JsonObject(
+                json + ("exercise_uid" to kotlinx.serialization.json.JsonPrimitive(uid))
+            ).toString()
+        }
+
+        /**
          * Rebuilds one table with a `uid` column on the end, gives every existing row an id of
          * its own, and only then creates the indices — the unique one included, so a row left
          * without an id fails the upgrade instead of passing it.
@@ -626,7 +701,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

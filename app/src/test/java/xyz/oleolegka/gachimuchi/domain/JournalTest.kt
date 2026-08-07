@@ -136,7 +136,7 @@ class JournalTest {
             strength("2026-08-02", "bench press", 62.5, 5, 1),  // different word, same id
             strength("2026-08-03", "bench press", 65.0, 5, null), // pre-catalog — no id
         )
-        val sets = strengthSetsByExerciseId(events, 1)
+        val sets = strengthSetsOfExercise(events, ExerciseLink.ofId(1))
         assertEquals(2, sets.size)
         assertEquals(62.5, sets.last().weightKg!!, 1e-9)
     }
@@ -148,9 +148,9 @@ class JournalTest {
             ev(HoldSet(activity = "Hangs", addedKg = 8.0, exerciseId = 5, opDate = "2026-08-03")),
             ev(Cardio(activity = "Running", distanceM = 5000.0, exerciseId = 6, opDate = "2026-08-02")),
         )
-        assertEquals(8.0, lastHoldSet(events, 5)!!.addedKg!!, 1e-9)
-        assertEquals(5000.0, lastCardio(events, 6)!!.distanceM!!, 1e-9)
-        assertNull(lastHoldSet(events, 999))
+        assertEquals(8.0, lastHoldSet(events, ExerciseLink.ofId(5))!!.addedKg!!, 1e-9)
+        assertEquals(5000.0, lastCardio(events, ExerciseLink.ofId(6))!!.distanceM!!, 1e-9)
+        assertNull(lastHoldSet(events, ExerciseLink.ofId(999)))
     }
 
     @Test
@@ -184,7 +184,7 @@ class JournalTest {
         // the two readable sets come through, including the one AFTER the damage - a throw
         // here would have hidden every entry in the journal, not just the broken one
         assertEquals(listOf("2026-08-01", "2026-08-03"), read.map { it.opDate })
-        assertEquals(2, strengthSetsByExerciseId(listOf(good, truncated, later), 1).size)
+        assertEquals(2, strengthSetsOfExercise(listOf(good, truncated, later), ExerciseLink.ofId(1)).size)
     }
 
     @Test

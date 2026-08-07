@@ -25,7 +25,8 @@ package xyz.oleolegka.gachimuchi.domain
 
 /** One exercise inside a workout, with the rest chosen for it and the sets it collected. */
 data class WorkoutExercise(
-    val exerciseId: Long,
+    /** Which exercise this is, said as fully as the rows that mentioned it managed to. */
+    val exercise: ExerciseLink,
     /**
      * Seconds of rest chosen when the exercise was added to this workout, or null when it
      * was never added explicitly and is only present because a set named it.
@@ -37,6 +38,16 @@ data class WorkoutExercise(
     /** In the order recorded. Cancelled sets are already gone (the reducers drop them). */
     val sets: List<ActivityEvent>,
 ) {
+    /**
+     * The local catalog row number, for the screens that still navigate by one.
+     *
+     * Null only for an exercise that no row in this journal named by number — which cannot
+     * happen for anything this app wrote, and can for a journal merged in from elsewhere. Such
+     * a block has nothing on this phone to open, and the screen has to say so rather than
+     * pretend the exercise is missing.
+     */
+    val exerciseId: Long? get() = exercise.id
+
     val isEmpty: Boolean get() = sets.isEmpty()
 }
 
@@ -196,21 +207,31 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     // rebuilding it per row would fold the whole journal for every event in it
     val live = readActivities(events).associateBy { it.id }
 
-    val sets = LinkedHashMap<Long, MutableList<ActivityEvent>>()
-    val rests = HashMap<Long, Int>()
+    // keyed by ExerciseLink.key so that an entry naming its exercise by identity and one
+    // naming it by number land in the same block; the link itself is merged as they arrive,
+    // so the block ends up knowing both
+    val sets = LinkedHashMap<String, MutableList<ActivityEvent>>()
+    val links = LinkedHashMap<String, ExerciseLink>()
+    val rests = HashMap<String, Int>()
     val unkeyed = ArrayList<ActivityEvent>()
+
+    fun remember(link: ExerciseLink): String {
+        val key = link.key
+        links[key] = links[key]?.mergedWith(link) ?: link
+        sets.getOrPut(key) { mutableListOf() }
+        return key
+    }
 
     for (row in events) {
         if (row.workoutRef()?.matches(startRow) != true) continue
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
-            sets.getOrPut(added.exerciseId) { mutableListOf() }
-            rests[added.exerciseId] = added.restSec
+            rests[remember(ExerciseLink(added.exerciseUid, added.exerciseId))] = added.restSec
             continue
         }
         val activity = live[row.id] ?: continue
-        val exerciseId = activity.form.exerciseId
-        if (exerciseId == null) unkeyed += activity else sets.getOrPut(exerciseId) { mutableListOf() } += activity
+        val link = activity.form.exerciseLink()
+        if (link == null) unkeyed += activity else sets.getValue(remember(link)) += activity
     }
 
     return Workout(
@@ -219,7 +240,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         ts = startRow.ts,
         opDate = started?.opDate ?: startRow.writeDay(),
         slotId = started?.slotId,
-        exercises = sets.map { (id, ofExercise) -> WorkoutExercise(id, rests[id], ofExercise) },
+        exercises = sets.map { (key, ofExercise) ->
+            WorkoutExercise(links.getValue(key), rests[key], ofExercise)
+        },
         entriesWithoutExercise = unkeyed,
     )
 }

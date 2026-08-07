@@ -63,6 +63,57 @@ data class WorkoutRef(val uid: String?, val id: Long?) {
         if (uid != null) uid == start.uid else id != null && id == start.id
 }
 
+/**
+ * Which catalog exercise an entry is about — the identity where the entry has one, and the
+ * local row number where it is old enough not to.
+ *
+ * ── One funnel, so that "the same exercise" means one thing ─────────────────────
+ * Nine reducers used to compare `form.exerciseId` to a number by hand. Every one of them was
+ * a place where the answer could be given differently, and the whole point of the catalog
+ * (§11) is that an exercise has exactly one history. So the comparison lives here and the
+ * reducers ask it.
+ *
+ * [key] is the grouping key: the identity when there is one, and the number otherwise. The
+ * 9 -> 10 migration fills the identity in for every entry it can resolve, so a real journal is
+ * keyed consistently rather than half by one and half by the other.
+ */
+data class ExerciseLink(val uid: String?, val id: Long?) {
+
+    /** Stable key for grouping entries of one exercise together. */
+    val key: String get() = uid ?: "id:$id"
+
+    /**
+     * Whether two references name the same exercise.
+     *
+     * IDENTITIES WIN WHENEVER BOTH SIDES CAN SPEAK THEM, and the numbers are consulted only
+     * when one of the two cannot — an entry written before version 10, or a caller that holds
+     * nothing but a row number. Falling back to the number while both sides carry uids would
+     * undo the point of having them: two devices hand out the same numbers to different
+     * exercises, and a merged journal would weld two histories into one.
+     */
+    fun matches(other: ExerciseLink): Boolean =
+        if (uid != null && other.uid != null) uid == other.uid else id != null && id == other.id
+
+    /**
+     * The same reference, said as fully as the two sources between them can say it.
+     *
+     * Used where entries of one exercise are gathered: the first entry may carry only a
+     * number and a later one both, and the group should end up knowing everything that was
+     * said about what it is.
+     */
+    fun mergedWith(other: ExerciseLink): ExerciseLink =
+        ExerciseLink(uid ?: other.uid, id ?: other.id)
+
+    companion object {
+        /** For a caller that holds only a local row number — screens navigate by number. */
+        fun ofId(id: Long): ExerciseLink = ExerciseLink(null, id)
+    }
+}
+
+/** What an entry says about its exercise, or null when it names none (body weight). */
+fun ActivityForm.exerciseLink(): ExerciseLink? =
+    if (exerciseUid == null && exerciseId == null) null else ExerciseLink(exerciseUid, exerciseId)
+
 /** A parsed domain event: the raw journal row plus its typed form. */
 data class ActivityEvent(
     val id: Long,
@@ -171,34 +222,36 @@ fun strengthSetsByExerciseDay(
 }
 
 /**
- * All sets of a given canonical exercise (by exercise_id, §11), in journal order.
- * This crosses SPELLINGS: sets recorded under different words but with the same
- * exercise_id are collected together — grouping by key cannot achieve that.
+ * All sets of a given canonical exercise (§11), in journal order.
  *
- * Caveat (the seam): records with exercise_id = null (written before the catalog was
- * introduced) will not show up here for any id.
+ * This crosses SPELLINGS: sets recorded under different words but naming the same exercise
+ * are collected together — grouping by the written key cannot achieve that.
+ *
+ * Which link decides is [ExerciseLink.matches] and nothing here. Caveat (the seam): entries
+ * naming no exercise at all — written before the catalog existed — belong to no exercise and
+ * show up for none.
  */
-inline fun <reified T : ActivityForm> formsByExerciseId(
+inline fun <reified T : ActivityForm> formsOfExercise(
     events: List<JournalEvent>,
-    exerciseId: Long,
+    exercise: ExerciseLink,
     type: String,
 ): List<T> = readActivities(events, listOf(type))
     .mapNotNull { it.form as? T }
-    .filter { it.exerciseId == exerciseId }
+    .filter { it.exerciseLink()?.matches(exercise) == true }
 
-fun strengthSetsByExerciseId(events: List<JournalEvent>, exerciseId: Long): List<StrengthSet> =
-    formsByExerciseId(events, exerciseId, TYPE_STRENGTH_SET)
+fun strengthSetsOfExercise(events: List<JournalEvent>, exercise: ExerciseLink): List<StrengthSet> =
+    formsOfExercise(events, exercise, TYPE_STRENGTH_SET)
 
-fun holdSetsByExerciseId(events: List<JournalEvent>, exerciseId: Long): List<HoldSet> =
-    formsByExerciseId(events, exerciseId, TYPE_HOLD_SET)
+fun holdSetsOfExercise(events: List<JournalEvent>, exercise: ExerciseLink): List<HoldSet> =
+    formsOfExercise(events, exercise, TYPE_HOLD_SET)
 
 /** The last non-cancelled hold set of an exercise (the basis for prefilling the entry card). */
-fun lastHoldSet(events: List<JournalEvent>, exerciseId: Long): HoldSet? =
-    holdSetsByExerciseId(events, exerciseId).lastOrNull()
+fun lastHoldSet(events: List<JournalEvent>, exercise: ExerciseLink): HoldSet? =
+    holdSetsOfExercise(events, exercise).lastOrNull()
 
 /** The last non-cancelled cardio entry of an exercise. */
-fun lastCardio(events: List<JournalEvent>, exerciseId: Long): Cardio? =
-    formsByExerciseId<Cardio>(events, exerciseId, TYPE_CARDIO).lastOrNull()
+fun lastCardio(events: List<JournalEvent>, exercise: ExerciseLink): Cardio? =
+    formsOfExercise<Cardio>(events, exercise, TYPE_CARDIO).lastOrNull()
 
 /** The body weight series by day (in journal order). */
 fun bodyweightSeries(events: List<JournalEvent>): List<Bodyweight> =

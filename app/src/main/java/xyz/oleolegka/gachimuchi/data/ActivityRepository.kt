@@ -142,13 +142,14 @@ class ActivityRepository(private val db: AppDatabase) {
      */
     suspend fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int): Long {
         val workoutUid = db.events().byId(workoutId)?.uid
+        val exerciseUid = db.exercises().byId(exerciseId)?.uid
         val id = db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_WORKOUT_EXERCISE_ADDED,
                 payload = payloadJson.encodeToString(
                     WorkoutExerciseAdded(
                         workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
-                        workoutUid = workoutUid,
+                        workoutUid = workoutUid, exerciseUid = exerciseUid,
                     )
                 ),
                 workoutId = workoutId,
@@ -333,6 +334,7 @@ class ActivityRepository(private val db: AppDatabase) {
  */
 fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
     id = id,
+    uid = uid,
     name = name,
     form = runCatching { ExerciseForm.fromCode(form) }.getOrDefault(ExerciseForm.TICK),
     edgeMm = edgeMm,

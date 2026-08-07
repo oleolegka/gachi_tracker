@@ -106,9 +106,11 @@ fun FormDetailScreen(
     }
 
     val activities = remember(state.events) { readActivities(state.events) }
-    val trendAll = remember(activities, currentId, form) { trendSeries(activities, currentId, form) }
-    val volumeAll = remember(activities, currentId, form) { volumeSeries(activities, currentId, form) }
-    val records = remember(activities, currentId, form) { recordsOf(activities, currentId, form) }
+    // the screen navigates by row number; the journal is keyed by identity (see ExerciseLink)
+    val link = remember(state.exercises, currentId) { state.linkOf(currentId) }
+    val trendAll = remember(activities, link, form) { trendSeries(activities, link, form) }
+    val volumeAll = remember(activities, link, form) { volumeSeries(activities, link, form) }
+    val records = remember(activities, link, form) { recordsOf(activities, link, form) }
 
     val siblings = remember(state.exercises, currentId, form) {
         if (form != ExerciseForm.HOLD) emptyList()
