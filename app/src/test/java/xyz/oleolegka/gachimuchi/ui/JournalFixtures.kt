@@ -11,6 +11,7 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
+import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.payloadJson
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.toPayload
@@ -80,6 +81,22 @@ class Journal {
     ): Long {
         val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg)
         return add(form.type, form.toPayload(), "${writtenOn}T$at:00", workoutId)
+    }
+
+    /**
+     * A hang. [addedKg] null is the plate-free case, which is the one the weight question on
+     * the way into a protocol-led set is required NOT to appear for (§13.5).
+     */
+    fun holdSet(
+        exercise: ExerciseRef,
+        day: String,
+        reps: Int = 6,
+        addedKg: Double? = null,
+        at: String = "09:10",
+        workoutId: Long? = null,
+    ): Long {
+        val form = holdSetOf(exercise, day, addedKg = addedKg, reps = reps)
+        return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
     }
 
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */

@@ -394,12 +394,32 @@ class MainViewModel(
     fun dismissFloor(exerciseId: Long) = timer.floors.dismiss(exerciseId)
 
     /**
+     * The plate answered on the way INTO the set that is running, or null when none was.
+     *
+     * ── Why it is held here and not in the run ──────────────────────────────────
+     * It is the answer to a question the USER was asked, and its only job is to be the number
+     * the offer at the end arrives prefilled with. Putting it in [RunSnapshot] would mean a
+     * schema change to the stored run for a value nothing about the running of the set uses.
+     *
+     * The cost, stated: this does NOT survive the process. A set conducted while the app is
+     * killed and rebuilt from the alarm comes back with the offer prefilled from the last
+     * logged set instead of from the answer given at the start — the behaviour before the
+     * question existed, so nothing is worse than it was, but the answer is quietly lost.
+     */
+    private val _entryAddedKg = MutableStateFlow<Double?>(null)
+    val entryAddedKg: StateFlow<Double?> = _entryAddedKg.asStateFlow()
+
+    /**
      * The one-tap program for a hangboard exercise: its work:rest protocol is already on
      * the catalog row, the rep count comes from the last set of it that was logged, the set
      * count from the settings, and the pause between sets from what was actually rested.
-     * Nothing is asked, because nothing is unknown.
+     *
+     * [addedKg] is the one thing that can be asked first, and only when there is a reason to
+     * (§13.5) — the caller decides that, because the caller is the one that would be putting
+     * the extra screen in front of the user.
      */
-    fun startProgramForExercise(exercise: ExerciseRef) {
+    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null) {
+        _entryAddedKg.value = addedKg
         viewModelScope.launch {
             val events = repo.allEvents()
             val settings = timerSettings.value
@@ -424,11 +444,16 @@ class MainViewModel(
      * program a run that belonged to nothing and therefore offered nothing, however many
      * sets it had just counted.
      */
-    fun runProgram(program: WorkoutProgram) = timer.start(
-        program = program,
-        exerciseId = program.exerciseId,
-        origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
-    )
+    fun runProgram(program: WorkoutProgram): Unit {
+        // nobody was asked about a plate for this one, and the previous answer belongs to a
+        // run that is now over
+        _entryAddedKg.value = null
+        timer.start(
+            program = program,
+            exerciseId = program.exerciseId,
+            origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
+        )
+    }
 
     fun pauseTimer() = timer.pause()
     fun resumeTimer() = timer.resume()
@@ -462,7 +487,10 @@ class MainViewModel(
     val runOutcome: StateFlow<RunOutcome?> = timer.outcome
 
     /** "Not this time": the offer goes away and the journal is untouched. */
-    fun dismissRunOutcome() = timer.clearOutcome()
+    fun dismissRunOutcome() {
+        _entryAddedKg.value = null
+        timer.clearOutcome()
+    }
 
     /**
      * Writes the confirmed sets, one journal event per set, through the same repository and
@@ -482,6 +510,9 @@ class MainViewModel(
      */
     fun logRunSets(exercise: ExerciseRef, sets: List<CompletedSet>, addedKg: Double? = null) {
         val outcome = timer.outcome.value
+        // the question has been answered for good: whatever the user typed into the offer is
+        // the weight now, and the entry answer must not prefill the NEXT run
+        _entryAddedKg.value = null
         viewModelScope.launch {
             val day = outcome?.opDate?.takeIf { it.isNotBlank() } ?: LocalDate.now().toString()
             val written = ArrayList<Long>()
