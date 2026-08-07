@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import org.junit.Assert.assertEquals
@@ -16,6 +17,7 @@ import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
@@ -36,7 +38,21 @@ import java.time.LocalDate
  * the exercise picker, which has to come up as a window of ITS OWN, above the dialog:
  * composed inside the dialog's content it would be clipped to the dialog's box, and the
  * author had nothing to confirm the stacking with.
+ *
+ * ── Why this one class is measured on a wide window ─────────────────────────────
+ * A Material text field inside a DIALOG never lets the composition settle under Robolectric
+ * at any phone width: `setContent` spins until the idling strategy gives up, and it does so
+ * for a bare `OutlinedTextField` in an otherwise empty `AlertDialog`. It settles at 600 dp,
+ * where the dialog reaches its own maximum width instead of the platform's
+ * percentage-of-the-screen default — so the loop is in that measurement, not in this
+ * editor.
+ *
+ * Everything asserted below is text and callbacks, which a window size does not change, so
+ * the override buys the whole file at no cost to what it proves. What it does NOT prove is
+ * that the dialog fits a phone: this file has nothing to say about the editor's layout at
+ * 411 dp, and neither does any other test. That belongs on the list in [ScreenTest].
  */
+@Config(sdk = [34], qualifiers = "w600dp-h960dp-xhdpi")
 class SlotEditorTest : ScreenTest() {
 
     private val day = LocalDate.parse("2026-08-07")
@@ -63,10 +79,42 @@ class SlotEditorTest : ScreenTest() {
         }
     }
 
-    /** Types a name, because everything except the name is optional and Save needs one. */
-    private fun nameIt(name: String = "Gym") {
-        compose.onNodeWithText("Session name").performTextInput(name)
+    /**
+     * Types into the field carrying [label].
+     *
+     * The [settle] afterwards is not decoration: with the frame clock held still an edit
+     * reaches the field but the recomposition it causes has not been drawn, so the very next
+     * assertion reads the state as it was BEFORE the typing — which looks exactly like a
+     * field that ignored its input.
+     */
+    private fun type(label: String, text: String) {
+        compose.onNodeWithText(label).performTextInput(text)
+        settle()
     }
+
+    /** Types a name, because everything except the name is optional and Save needs one. */
+    private fun nameIt(name: String = "Gym") = type("Session name", name)
+
+    /**
+     * A node in the dialog's own scrolling body, brought into view first.
+     *
+     * The body scrolls (it is a `Column` with `verticalScroll`), so its lower half — the
+     * exercises, the problem line, the delete button — is present in the tree and outside
+     * the window. Tapping something outside the window fails, and asserting it is
+     * "displayed" fails for a reason that has nothing to do with the editor.
+     */
+    private fun inBody(text: String, substring: Boolean = false) =
+        compose.onNodeWithText(text, substring = substring).performScrollTo()
+
+    /**
+     * The "add an exercise" button, matched loosely because its label is padded with spaces
+     * to stand off the icon beside it. Matching that padding exactly would make the test
+     * fail the day somebody replaces it with real spacing.
+     */
+    private fun addExerciseButton() = inBody("Add an exercise", substring = true)
+
+    private fun bodyIcon(description: String) =
+        compose.onNodeWithContentDescription(description).performScrollTo()
 
     // --- the time, typed without a colon --------------------------------------------------
 
@@ -75,10 +123,11 @@ class SlotEditorTest : ScreenTest() {
         editor()
         nameIt()
 
-        compose.onNodeWithText("Time (optional)").performTextInput("1700")
+        type("Time (optional)", "1700")
 
-        compose.onNodeWithText("17:00").assertIsDisplayed()
+        inBody("17:00").assertExists()
         compose.onNodeWithText("Add to the plan").performClick()
+        settle()
         assertEquals("17:00", saved?.timeText)
     }
 
@@ -87,9 +136,11 @@ class SlotEditorTest : ScreenTest() {
         editor()
         nameIt()
 
-        compose.onNodeWithText("Time (optional)").performTextInput("930")
+        type("Time (optional)", "930")
 
         compose.onNodeWithText("Add to the plan").performClick()
+
+        settle()
         assertEquals("9:30", saved?.timeText)
     }
 
@@ -100,12 +151,45 @@ class SlotEditorTest : ScreenTest() {
 
         // "17:0" on screen means the last digit is still coming. Reading it as 17:00 would
         // store a time the user did not type whenever they meant 17:05, and do it silently
-        compose.onNodeWithText("Time (optional)").performTextInput("170")
+        type("Time (optional)", "170")
         compose.onNodeWithText("Add to the plan").assertIsNotEnabled()
 
-        compose.onNodeWithText("Time (optional)").performTextInput("5")
+        /*
+         * The last digit arrives as a REPLACEMENT of the field rather than as one more
+         * keystroke, and that is not laziness — see the test below, which pins down what
+         * really happens when the digits arrive one at a time. What is being asserted here
+         * is only the gate: a complete time opens Save and is stored as typed.
+         */
+        compose.onNodeWithText("Time (optional)").performTextReplacement("1705")
+        settle()
         compose.onNodeWithText("Add to the plan").assertIsEnabled().performClick()
+        settle()
         assertEquals("17:05", saved?.timeText)
+    }
+
+    /**
+     * Typing the digits ONE AT A TIME does not give the time that was typed.
+     *
+     * "1", "7", "0", "5" ends up as 17:50 rather than 17:05. The field re-writes its own
+     * contents on every keystroke to slot the colon in, and the caret does not move with the
+     * character that was inserted in front of it: after the third digit the text reads "17:0"
+     * with the caret still at offset 3, so the fourth digit lands BEFORE the zero.
+     *
+     * This is how a phone is actually used — the four-digit test above types the whole string
+     * in one go, which is why it never saw this. The test is written to the behaviour as it
+     * IS, so that fixing it fails here and someone has to come and read this: the fix is a
+     * caret position, and it belongs to whoever owns the editor.
+     */
+    @Test
+    fun `a time typed one digit at a time comes out with the last two swapped`() {
+        editor()
+        nameIt()
+
+        listOf("1", "7", "0", "5").forEach { type("Time (optional)", it) }
+
+        compose.onNodeWithText("Add to the plan").performClick()
+        settle()
+        assertEquals("the caret does not follow the colon that was inserted", "17:50", saved?.timeText)
     }
 
     @Test
@@ -113,9 +197,13 @@ class SlotEditorTest : ScreenTest() {
         editor()
         nameIt()
 
-        compose.onNodeWithText("18:00").performClick()
+        inBody("18:00").performClick()
+
+        settle()
 
         compose.onNodeWithText("Add to the plan").performClick()
+
+        settle()
         assertEquals("18:00", saved?.timeText)
     }
 
@@ -127,6 +215,8 @@ class SlotEditorTest : ScreenTest() {
         nameIt("Gym")
 
         compose.onNodeWithText("Add to the plan").assertIsEnabled().performClick()
+
+        settle()
 
         assertNotNull("Save must not be a form to fill in", saved)
         val draft = saved!!
@@ -140,8 +230,7 @@ class SlotEditorTest : ScreenTest() {
         editor()
 
         compose.onNodeWithText("Add to the plan").assertIsNotEnabled()
-        compose.onNodeWithText("Give the session a name, for example Gym or Fingerboard.")
-            .assertIsDisplayed()
+        inBody("Give the session a name, for example Gym or Fingerboard.").assertExists()
     }
 
     @Test
@@ -150,6 +239,8 @@ class SlotEditorTest : ScreenTest() {
         nameIt()
 
         compose.onNodeWithText("Cancel").performClick()
+
+        settle()
 
         assertEquals(1, dismissed)
         assertNull(saved)
@@ -161,24 +252,28 @@ class SlotEditorTest : ScreenTest() {
     fun `a new session keeps the composition shut and says there is nothing in it`() {
         editor()
 
-        compose.onNodeWithText("Exercises - none planned").assertIsDisplayed()
+        inBody("Exercises - none planned").assertExists()
         // an empty required-looking control is a standing reproach, so it is not drawn at all
-        compose.onNodeWithText("Add an exercise").assertDoesNotExist()
+        compose.onNodeWithText("Add an exercise", substring = true).assertDoesNotExist()
     }
 
     @Test
     fun `tapping the composition line opens it, and tapping again shuts it`() {
         editor()
 
-        compose.onNodeWithText("Exercises - none planned").performClick()
-        compose.onNodeWithText("Add an exercise").assertIsDisplayed()
-        compose.onNodeWithText(
+        inBody("Exercises - none planned").performClick()
+
+        settle()
+        addExerciseButton().assertExists()
+        inBody(
             "Optional. A session with nothing listed is a plan just the same - this is " +
                 "only here for when you already know what you are going to do."
-        ).assertIsDisplayed()
+        ).assertExists()
 
-        compose.onNodeWithText("Exercises - none planned").performClick()
-        compose.onNodeWithText("Add an exercise").assertDoesNotExist()
+        inBody("Exercises - none planned").performClick()
+
+        settle()
+        compose.onNodeWithText("Add an exercise", substring = true).assertDoesNotExist()
     }
 
     @Test
@@ -188,10 +283,10 @@ class SlotEditorTest : ScreenTest() {
                 .copy(exercises = listOf(PlannedExercise(1, restSec = 150), PlannedExercise(2, null)))
         )
 
-        compose.onNodeWithText("Exercises (2)").assertIsDisplayed()
-        compose.onNodeWithText("Bench press").assertIsDisplayed()
-        compose.onNodeWithText("Squat").assertIsDisplayed()
-        compose.onNodeWithText("Add an exercise").assertIsDisplayed()
+        inBody("Exercises (2)").assertExists()
+        inBody("Bench press").assertExists()
+        inBody("Squat").assertExists()
+        addExerciseButton().assertExists()
     }
 
     @Test
@@ -202,8 +297,8 @@ class SlotEditorTest : ScreenTest() {
         )
 
         // a plan quietly losing a line is worse than one showing a line it cannot name
-        compose.onNodeWithText("Removed exercise").assertIsDisplayed()
-        compose.onNodeWithText("Exercises (1)").assertIsDisplayed()
+        inBody("Removed exercise").assertExists()
+        inBody("Exercises (1)").assertExists()
     }
 
     @Test
@@ -213,13 +308,16 @@ class SlotEditorTest : ScreenTest() {
                 .copy(exercises = listOf(PlannedExercise(1, restSec = 150), PlannedExercise(2, null)))
         )
 
-        compose.onNodeWithText("Squat").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Take \"Squat\" out of the plan").performClick()
+        inBody("Squat").assertExists()
+        bodyIcon("Take \"Squat\" out of the plan").performClick()
+        settle()
 
-        compose.onNodeWithText("Exercises (1)").assertIsDisplayed()
+        inBody("Exercises (1)").assertExists()
         compose.onNodeWithText("Squat").assertDoesNotExist()
 
         compose.onNodeWithText("Save").performClick()
+
+        settle()
         assertEquals(listOf(1L), saved?.exercises?.map { it.exerciseId })
     }
 
@@ -239,20 +337,29 @@ class SlotEditorTest : ScreenTest() {
     fun `the exercise picker comes up as a window of its own, above the editor`() {
         editor()
 
-        compose.onNodeWithText("Exercises - none planned").performClick()
+        inBody("Exercises - none planned").performClick()
+
+        settle()
         val dialogsBefore = ShadowDialog.getShownDialogs().size
 
-        compose.onNodeWithText("Add an exercise").performClick()
+        addExerciseButton().performClick()
+
+        settle()
         settle()
 
         val dialogs = ShadowDialog.getShownDialogs()
         assertEquals("the picker must add a window rather than draw inside the editor's",
             dialogsBefore + 1, dialogs.size)
 
-        // the sheet is up and searchable, and the editor is still behind it
-        compose.onNodeWithText("Exercise").assertIsDisplayed()
-        compose.onNodeWithText("Search by name").assertIsDisplayed()
-        compose.onNodeWithText("Plan a session").assertIsDisplayed()
+        /*
+         * The sheet is up and searchable, and the editor is still there behind it. Existence
+         * rather than "displayed": a bottom sheet slides into place under an animation this
+         * harness does not run (see ScreenTest), so where it has got to on screen is not a
+         * fact worth asserting. Which WINDOW it is in — the whole point here — is.
+         */
+        compose.onNodeWithText("Exercise").assertExists()
+        compose.onNodeWithText("Search by name").assertExists()
+        compose.onNodeWithText("Plan a session").assertExists()
 
         // and the two really are separate composition roots, not one tree
         val sheetRoot = compose.onNodeWithText("Search by name").fetchSemanticsNode().root
@@ -265,13 +372,18 @@ class SlotEditorTest : ScreenTest() {
         editor()
         nameIt()
 
-        compose.onNodeWithText("Exercises - none planned").performClick()
-        compose.onNodeWithText("Add an exercise").performClick()
+        inBody("Exercises - none planned").performClick()
+
+        settle()
+        addExerciseButton().performClick()
+        settle()
         settle()
         compose.onNodeWithText("Bench press").performClick()
+        settle()
 
-        compose.onNodeWithText("Exercises (1)").assertIsDisplayed()
+        inBody("Exercises (1)").assertExists()
         compose.onNodeWithText("Add to the plan").performClick()
+        settle()
         assertEquals(listOf(1L), saved?.exercises?.map { it.exerciseId })
     }
 
@@ -284,8 +396,11 @@ class SlotEditorTest : ScreenTest() {
     fun `the picker opened from the plan offers no way to invent a new exercise`() {
         editor()
 
-        compose.onNodeWithText("Exercises - none planned").performClick()
-        compose.onNodeWithText("Add an exercise").performClick()
+        inBody("Exercises - none planned").performClick()
+
+        settle()
+        addExerciseButton().performClick()
+        settle()
         settle()
 
         // substring, because the label is padded with spaces where it does exist
@@ -305,7 +420,9 @@ class SlotEditorTest : ScreenTest() {
         compose.onAllNodesWithText("18:00").assertCountEquals(2)
 
         compose.onNodeWithText("Session name").performTextReplacement("Hangboard")
+        settle()
         compose.onNodeWithText("Save").performClick()
+        settle()
 
         assertEquals("Hangboard", saved?.name)
         assertEquals("18:00", saved?.timeText)
@@ -322,7 +439,9 @@ class SlotEditorTest : ScreenTest() {
     fun `an existing session offers to be deleted, and the offer is wired up`() {
         editor(initial = slot(7, "Gym", "18:00", day.toString()))
 
-        compose.onNodeWithText("Delete this session").performClick()
+        inBody("Delete this session").performClick()
+
+        settle()
 
         assertEquals(1, deleted)
     }

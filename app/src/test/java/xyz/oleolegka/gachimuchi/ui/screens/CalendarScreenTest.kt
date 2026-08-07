@@ -6,10 +6,12 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.ui.Journal
@@ -32,7 +34,13 @@ import java.time.LocalDate
  * the clock says something else would make the tests describe a day the app is not in, so
  * they use the real one — the same choice `data/WorkoutFlowTest.kt` makes and for the same
  * reason.
+ *
+ * Measured on a wide window for the same reason [xyz.oleolegka.gachimuchi.ui.components.SlotEditorTest]
+ * is: half of these tests open the slot editor, and a text field inside a dialog does not let
+ * the composition settle at a phone width. The assertions are text and callbacks, which the
+ * window size does not change.
  */
+@Config(sdk = [34], qualifiers = "w600dp-h960dp-xhdpi")
 class CalendarScreenTest : ScreenTest() {
 
     private val today: LocalDate = LocalDate.now()
@@ -95,10 +103,15 @@ class CalendarScreenTest : ScreenTest() {
         calendar()
 
         compose.onNodeWithContentDescription("Next month").performClick()
+
+        settle()
         compose.onNodeWithText(fmtMonth(today.plusMonths(1))).assertIsDisplayed()
 
         compose.onNodeWithContentDescription("Previous month").performClick()
+
+        settle()
         compose.onNodeWithContentDescription("Previous month").performClick()
+        settle()
         compose.onNodeWithText(fmtMonth(today.minusMonths(1))).assertIsDisplayed()
     }
 
@@ -106,21 +119,21 @@ class CalendarScreenTest : ScreenTest() {
     fun `the day underneath opens on today and is the same list the Today tab draws`() {
         calendar()
 
-        compose.onNodeWithText("SELECTED DAY").assertIsDisplayed()
-        compose.onNodeWithText(fmtWeekdayDay(today)).assertIsDisplayed()
+        compose.onNodeWithText("SELECTED DAY").assertExists()
+        compose.onNodeWithText(fmtWeekdayDay(today)).assertExists()
         compose.onNodeWithText(
             "Nothing planned and nothing recorded. Start a workout below, or log a single entry."
-        ).assertIsDisplayed()
+        ).assertExists()
     }
 
     @Test
     fun `a planned session on the selected day is drawn with the calendar's own pencil and bin`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithText("Gym").assertIsDisplayed()
+        compose.onNodeWithText("Gym").assertExists()
         // Today leaves these two out; only the calendar passes them in
-        compose.onNodeWithContentDescription("Edit \"Gym\"").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Delete \"Gym\"").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Edit \"Gym\"").assertExists()
+        compose.onNodeWithContentDescription("Delete \"Gym\"").assertExists()
     }
 
     // --- planning, editing, deleting ----------------------------------------------------------
@@ -129,7 +142,9 @@ class CalendarScreenTest : ScreenTest() {
     fun `Plan a session opens the editor on the day that is selected`() {
         calendar()
 
-        compose.onNodeWithText("Plan a session").performClick()
+        compose.onNodeWithText("Plan a session").performScrollTo().performClick()
+
+        settle()
 
         compose.onNodeWithText("Session name").assertIsDisplayed()
         compose.onNodeWithText("Add to the plan").assertIsDisplayed()
@@ -142,9 +157,13 @@ class CalendarScreenTest : ScreenTest() {
     fun `a session planned in the dialog is handed to the caller as a new slot`() {
         calendar()
 
-        compose.onNodeWithText("Plan a session").performClick()
+        compose.onNodeWithText("Plan a session").performScrollTo().performClick()
+
+        settle()
         compose.onNodeWithText("Session name").performTextInput("Hangboard")
+        settle()
         compose.onNodeWithText("Add to the plan").performClick()
+        settle()
 
         assertEquals("Hangboard", savedDraft?.name)
         assertNull("a slot being created has no id yet", savedId)
@@ -156,10 +175,13 @@ class CalendarScreenTest : ScreenTest() {
     fun `the pencil opens the editor on the session it belongs to`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithContentDescription("Edit \"Gym\"").performClick()
+        compose.onNodeWithContentDescription("Edit \"Gym\"").performScrollTo().performClick()
+
+        settle()
 
         compose.onNodeWithText("Edit this session").assertIsDisplayed()
         compose.onNodeWithText("Save").performClick()
+        settle()
         assertEquals(7L, savedId)
         assertEquals("Gym", savedDraft?.name)
     }
@@ -168,12 +190,16 @@ class CalendarScreenTest : ScreenTest() {
     fun `the bin asks first, and says what deleting a series does`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithContentDescription("Delete \"Gym\"").performClick()
+        compose.onNodeWithContentDescription("Delete \"Gym\"").performScrollTo().performClick()
+
+        settle()
 
         compose.onNodeWithText("Delete \"Gym\"?").assertIsDisplayed()
         assertNull("nothing is deleted before the question is answered", deletedSlot)
 
         compose.onNodeWithText("Delete").performClick()
+
+        settle()
         assertEquals(7L, deletedSlot)
     }
 
@@ -181,8 +207,11 @@ class CalendarScreenTest : ScreenTest() {
     fun `keeping it at the confirmation deletes nothing`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithContentDescription("Delete \"Gym\"").performClick()
+        compose.onNodeWithContentDescription("Delete \"Gym\"").performScrollTo().performClick()
+
+        settle()
         compose.onNodeWithText("Keep it").performClick()
+        settle()
 
         assertNull(deletedSlot)
         compose.onNodeWithText("Delete \"Gym\"?").assertDoesNotExist()
@@ -194,7 +223,9 @@ class CalendarScreenTest : ScreenTest() {
     fun `starting a planned session from the calendar carries the day it was planned on`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithText("Start").performClick()
+        compose.onNodeWithText("Start").performScrollTo().performClick()
+
+        settle()
 
         assertEquals(7L to today, startedFromPlan)
     }
@@ -208,6 +239,7 @@ class CalendarScreenTest : ScreenTest() {
 
         calendar(journal = journal)
 
-        compose.onNodeWithText("1 exercise, 1 set").assertIsDisplayed()
+        // started today and never closed, so it is the workout in progress
+        compose.onNodeWithText("in progress - 1 exercise, 1 set").assertExists()
     }
 }

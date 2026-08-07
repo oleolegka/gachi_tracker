@@ -35,6 +35,19 @@ import xyz.oleolegka.gachimuchi.ui.theme.GachimuchiTheme
  * at all — see the "what this does not catch" note in [DayCardListTest], of which this is
  * now one more item.
  *
+ * ── A text field inside a dialog needs a wide window, and that is a gap ─────────
+ * At any phone width, a Material text field inside a DIALOG never lets the composition
+ * settle even with the clock held still — a bare `OutlinedTextField` in an empty
+ * `AlertDialog` is enough. It settles at 600 dp, where the dialog reaches its own maximum
+ * width instead of the platform's percentage-of-the-screen default, so the loop is in that
+ * measurement. The two classes that open a dialog with a field in it therefore override the
+ * window to 600 dp.
+ *
+ * What that costs is worth saying out loud: NOTHING in this suite exercises a dialog at the
+ * width of the phone the app is built for. The assertions those classes make are text and
+ * callbacks, which a window size does not change, but a dialog that is too tall, clipped, or
+ * scrolled wrong at 411 dp would pass every one of them.
+ *
  * The SDK is pinned to 34 for the reason every other Robolectric test here pins it: the
  * android-all jar for 34 is the one on the machine. The window is pinned to the size of an
  * ordinary phone rather than left at Robolectric's default (a 320x470 dp handset from
