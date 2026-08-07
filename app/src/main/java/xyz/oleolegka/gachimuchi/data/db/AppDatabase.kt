@@ -113,19 +113,72 @@ abstract class AppDatabase : RoomDatabase() {
          * Version 2 -> 3: two columns on `programs` — the optional link to a catalog
          * exercise, and the heading the program is filed under.
          *
-         * Purely additive and both defaulted, so every existing program comes through as
-         * "not linked, no heading", which is exactly what it was. No foreign key is declared
-         * on the link — see [ProgramEntity] for why a hand-written protocol must not be
-         * deletable by way of the catalog.
+         * Additive in effect: every existing program comes through as "not linked, no
+         * heading", which is exactly what it was. No foreign key is declared on the link —
+         * see [ProgramEntity] for why a hand-written protocol must not be deletable by way of
+         * the catalog.
          *
-         * `category` is NOT NULL with a default because the entity declares a non-null
-         * String: Room compares the database against the entities on the next open, and a
-         * nullable column here would fail that check rather than fail quietly.
+         * ── Why this REBUILDS the table instead of two ALTER statements ─────────────
+         * `category` is NOT NULL because the entity declares a non-null String, and SQLite
+         * refuses to add a NOT NULL column to a populated table without a DEFAULT. That
+         * default is not free: it stays on the column forever, so an upgraded phone ended up
+         * with `category TEXT NOT NULL DEFAULT ''` where a fresh install has `category TEXT
+         * NOT NULL`. Two different databases, both passing every check the app had.
+         *
+         * Room does not catch it. Its identity hash is computed from column names,
+         * affinities, nullability and indices — a DEFAULT clause is not part of it — so both
+         * shapes verify identically on open. What catches it is data/SchemaParityTest, which
+         * walks a database up from version 1 and compares `PRAGMA table_info` against a fresh
+         * install column by column. That test is the reason this rebuild exists.
+         *
+         * The rebuild is the same sequence [MIGRATION_6_7] uses and is safe for the same
+         * reason: `program_groups` cascades from `programs`, and dropping a parent table with
+         * foreign keys ENABLED would delete its children, but Room turns foreign keys on in
+         * `onOpen`, which runs after migrations. The AUTOINCREMENT counter is carried across
+         * for the reason spelled out in [MIGRATION_6_7]: a rebuilt table restarts its counter
+         * at the highest surviving id, and a reissued program id would adopt the groups of a
+         * program that was deleted.
          */
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `programs` ADD COLUMN `exercise_id` INTEGER")
-                db.execSQL("ALTER TABLE `programs` ADD COLUMN `category` TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v3` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'programs'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_programs` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`prepare_sec` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`exercise_id` INTEGER, " +
+                        "`category` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_programs` (`id`, `space_id`, `name`, `prepare_sec`, " +
+                        "`position`, `created_at`, `exercise_id`, `category`) " +
+                        "SELECT `id`, `space_id`, `name`, `prepare_sec`, `position`, `created_at`, " +
+                        "NULL, '' FROM `programs`"
+                )
+                db.execSQL("DROP TABLE `programs`")
+                db.execSQL("ALTER TABLE `_new_programs` RENAME TO `programs`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_programs_space_id_id` " +
+                        "ON `programs` (`space_id`, `id`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` has no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v3`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v3`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v3`")
             }
         }
 
