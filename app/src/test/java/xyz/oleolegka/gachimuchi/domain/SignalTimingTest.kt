@@ -149,6 +149,49 @@ class SignalTimingTest {
         assertEquals(1_000, cue.wakeAtMs)
     }
 
+    // --- a tick the loop woke up too late for ----------------------------------------------
+
+    /*
+     * The second way the countdown doubles, and it needs no boundary at all. The loop sleeps
+     * to the exact moment a tick is due; a sleep that overruns used to fire the tick anyway,
+     * at whatever moment the loop woke, so a wake-up 900 ms late made "two" 900 ms late and
+     * "one" a tenth of a second after it. The vibrator plays one waveform at a time, so what
+     * comes out of two taps that close together is a stutter rather than two ticks.
+     */
+
+    @Test
+    fun `a tick the loop is nearly a second late for is dropped, not crowded onto the next`() {
+        val list = steps(7)
+        // "two" was due at 5 000 and the loop only gets there at 5 900
+        val cue = timerCue(list, running(list), countdownTicks = true, now = 5_900)
+
+        assertNull("firing it here would leave 100 ms to the next tap", cue.tickSecond)
+        assertEquals("and 'one' is still made, on its own moment", 6_000, cue.wakeAtMs)
+    }
+
+    @Test
+    fun `an ordinary overrun still ticks`() {
+        val list = steps(7)
+        val cue = timerCue(list, running(list), countdownTicks = true, now = 5_100)
+
+        assertEquals("a tenth of a second late is a tick, not a stutter", 2, cue.tickSecond)
+    }
+
+    /**
+     * The tolerance is a floor on the gap between two ticks, so the worst case it allows is
+     * still comfortably clear of the 90 ms tone a tick is made of.
+     */
+    @Test
+    fun `the worst overrun that still ticks leaves three quarters of a second to the next one`() {
+        val list = steps(7)
+        val worst = 5_000L + TICK_LATENESS_MS
+
+        val cue = timerCue(list, running(list), countdownTicks = true, now = worst)
+
+        assertEquals(2, cue.tickSecond)
+        assertEquals(750, cue.wakeAtMs - worst)
+    }
+
     // --- the ordinary case, which must not have changed ------------------------------------
 
     @Test

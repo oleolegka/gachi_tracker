@@ -91,6 +91,27 @@ data class TimerCue(
 const val BOUNDARY_GUARD_MS = 700L
 
 /**
+ * How far past its own moment a countdown tick may still be made.
+ *
+ * ── A late tick is not a tick, it is the next one arriving early ────────────────
+ * The loop sleeps to the exact moment a tick is due, but a sleep can overrun: the process is
+ * descheduled, the device suspends for a moment, the audio stack takes its time. The tick was
+ * fired anyway, at whatever moment the loop happened to wake, and the second it announced was
+ * still whichever second the clock was standing in — so a wake-up 900 ms late produced "two"
+ * 900 ms late and then "one" 100 ms after it. Two 40 ms taps a tenth of a second apart are
+ * not two ticks; the vibrator plays one waveform at a time, so the first is cut off by the
+ * second and what comes out is a stutter. That is a countdown that DOUBLES rather than one
+ * that counts.
+ *
+ * A quarter of a second is the whole tolerance, which keeps any two ticks at least 750 ms
+ * apart — well clear of the 90 ms tone and 40 ms tap they are made of. A tick that cannot be
+ * made inside it is dropped rather than crowded onto the next one: three taps with the middle
+ * one missing is a countdown that is short, and a countdown that stutters is a countdown that
+ * is wrong.
+ */
+const val TICK_LATENESS_MS = 250L
+
+/**
  * Whether the tick for "[second] seconds left" may be sounded in a step that ends at
  * [stepEndAtMs], began at [stepStartAtMs], and whose boundary signal actually went out at
  * [boundaryAtMs].
@@ -165,7 +186,11 @@ fun timerCue(
 
     fun allowed(candidate: Int) = tickAllowed(candidate, end, start, boundaryAtMs, countdownTicks)
 
-    val due = second.takeIf { allowed(it) }
+    // how far past its own moment the tick for this second would be made. Zero when the loop
+    // woke when it meant to; up to a second when it overslept. See [TICK_LATENESS_MS].
+    val lateness = second * 1000L - (end - now)
+
+    val due = second.takeIf { allowed(it) && lateness <= TICK_LATENESS_MS }
     // the next tick is the one below the current second, but never above the window: a step
     // entered with twenty seconds left owes its first tick at three, not at nineteen
     val nextTick = minOf(second - 1, TICK_SECONDS).takeIf { allowed(it) }
