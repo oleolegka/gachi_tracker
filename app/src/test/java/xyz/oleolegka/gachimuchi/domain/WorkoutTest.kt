@@ -54,7 +54,7 @@ class WorkoutTest {
     fun `there is no open workout until one is started`() {
         val events = listOf(set(bench, today))
         assertNull(openWorkout(events, today))
-        assertNull(openWorkoutId(events, today))
+        assertNull(openWorkoutRow(events, today)?.id)
     }
 
     @Test
@@ -62,14 +62,14 @@ class WorkoutTest {
         val start = started(today)
         val events = listOf(start)
 
-        assertEquals(start.id, openWorkoutId(events, today))
+        assertEquals(start.id, openWorkoutRow(events, today)?.id)
         assertEquals(start.id, openWorkout(events, today)!!.id)
     }
 
     @Test
     fun `yesterday's workout is not open today`() {
         val events = listOf(started("2026-08-06"))
-        assertNull(openWorkoutId(events, today))
+        assertNull(openWorkoutRow(events, today)?.id)
         // and it is still perfectly findable as history
         assertEquals(1, workoutsOn(events, "2026-08-06").size)
     }
@@ -80,7 +80,7 @@ class WorkoutTest {
         val evening = started(today, ts = "${today}T19:00:00")
         val events = listOf(morning, evening)
 
-        assertEquals(evening.id, openWorkoutId(events, today))
+        assertEquals(evening.id, openWorkoutRow(events, today)?.id)
         // both are on the day: two separate workouts is the thing a Session could not express
         assertEquals(listOf(morning.id, evening.id), workoutsOn(events, today).map { it.id })
     }
@@ -95,7 +95,7 @@ class WorkoutTest {
         val start = started("2026-06-01", ts = "${today}T21:00:00")
         val events = listOf(start)
 
-        assertEquals(start.id, openWorkoutId(events, today))
+        assertEquals(start.id, openWorkoutRow(events, today)?.id)
         val workout = openWorkout(events, today)!!
         assertEquals("2026-06-01", workout.opDate)
         assertTrue("nothing in a workout from June may count anything down", workout.isBackdated(today))
@@ -399,6 +399,100 @@ class WorkoutTest {
     fun `the workout link travels from the journal row through to the parsed activity`() {
         val start = started(today)
         val events = listOf(start, set(bench, today, workoutId = start.id))
-        assertEquals(start.id, readActivities(events).single().workoutId)
+        assertTrue(readActivities(events).single().workout!!.matches(start))
+    }
+
+    // --- the workout link said in uids -----------------------------------------------
+    //
+    // The link used to be a local autoincrement, which two devices hand out to different
+    // training, so a union of two journals welded unrelated rows together. It is a uid now,
+    // with the number kept alongside for rows written before schema version 9. What these
+    // check is that the fold does not care which of the two a fixture happens to carry.
+
+    /** The same workout, three ways of saying which rows belong to it. */
+    private fun workoutWrittenWith(
+        withNumber: Boolean,
+        withUid: Boolean,
+    ): Pair<JournalEvent, List<JournalEvent>> {
+        val start = started(today)
+        fun link(row: JournalEvent) = row.copy(
+            workoutId = if (withNumber) start.id else null,
+            workoutUid = if (withUid) start.uid else null,
+        )
+        val events = listOf(
+            start,
+            link(added(start.id, bench.id, 150)),
+            link(set(bench, today, ts = "${today}T09:10:00")),
+            link(set(bench, today, ts = "${today}T09:14:00", weightKg = 65.0)),
+            link(set(squat, today, ts = "${today}T09:30:00")),
+        )
+        return start to events
+    }
+
+    /** Everything about a folded workout that a reader can actually see. */
+    private fun Workout.shape() = listOf(
+        opDate,
+        setCount.toString(),
+        exercises.joinToString(";") { "${it.exerciseId}:${it.restSec}:${it.sets.size}" },
+        entriesWithoutExercise.size.toString(),
+    )
+
+    @Test
+    fun `a workout folds the same whether its rows carry both links or only the uid`() {
+        val (bothStart, both) = workoutWrittenWith(withNumber = true, withUid = true)
+        val (uidStart, uidOnly) = workoutWrittenWith(withNumber = false, withUid = true)
+
+        val fromBoth = buildWorkout(both, bothStart.id)!!
+        val fromUid = buildWorkout(uidOnly, uidStart.id)!!
+
+        assertEquals(fromBoth.shape(), fromUid.shape())
+        // four rows landed in it either way, and none of them leaked out into "loose entries"
+        assertEquals(3, fromUid.setCount)
+        assertTrue(setsOutsideWorkouts(uidOnly, today).isEmpty())
+    }
+
+    @Test
+    fun `a row written before uids existed still lands in its workout`() {
+        val (start, numbersOnly) = workoutWrittenWith(withNumber = true, withUid = false)
+
+        val workout = buildWorkout(numbersOnly, start.id)!!
+        assertEquals(3, workout.setCount)
+        assertEquals(listOf(bench.id, squat.id), workout.exercises.map { it.exerciseId })
+        assertTrue(setsOutsideWorkouts(numbersOnly, today).isEmpty())
+    }
+
+    /**
+     * THE FAILURE THE UID EXISTS TO PREVENT, written down as a test.
+     *
+     * Two journals merged by union bring two `workout_started` events that were both row
+     * number 1 on their own phone. A row carrying a uid must be judged by it and never fall
+     * back to its stale number, or every set of one workout lands in the other as well.
+     */
+    @Test
+    fun `a uid that names another workout is not overridden by a matching stale number`() {
+        val mine = started(today, ts = "${today}T08:00:00")
+        val theirs = started(today, ts = "${today}T18:00:00")
+        // the number says "mine", the identity says "theirs" — the identity wins
+        val confused = set(bench, today, ts = "${today}T18:10:00")
+            .copy(workoutId = mine.id, workoutUid = theirs.uid)
+        val events = listOf(mine, theirs, confused)
+
+        assertEquals(0, buildWorkout(events, mine.id)!!.setCount)
+        assertEquals(1, buildWorkout(events, theirs.id)!!.setCount)
+    }
+
+    @Test
+    fun `a workout knows its own identity, and it is the start event's`() {
+        val start = started(today)
+        assertEquals(start.uid, buildWorkout(listOf(start), start.id)!!.uid)
+        assertEquals(start.uid, openWorkoutRow(listOf(start), today)?.uid)
+    }
+
+    @Test
+    fun `a row pointing at a workout this journal does not hold counts as loose`() {
+        // a dangling link, which is what a half-merged journal looks like. The only
+        // alternative to showing these entries here is not showing them anywhere.
+        val stray = set(bench, today).copy(workoutUid = "0198f000-0000-7000-8000-00000000dead")
+        assertEquals(1, setsOutsideWorkouts(listOf(started(today), stray), today).size)
     }
 }

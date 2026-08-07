@@ -50,6 +50,13 @@ data class WorkoutExercise(
  */
 data class Workout(
     val id: Long,
+    /**
+     * Identity of the start event, which IS the identity of the workout — see
+     * [xyz.oleolegka.gachimuchi.data.db.EventEntity.uid]. This is what rows recorded during
+     * the workout point at, and what an export refers to; [id] is the local row number and
+     * means nothing off this phone.
+     */
+    val uid: String,
     /** Honest write time of the start event, which is not the same as [opDate]. */
     val ts: String,
     val opDate: String,
@@ -82,15 +89,24 @@ data class Workout(
 }
 
 /**
- * Which workout a journal row belongs to, or null for one recorded outside any.
+ * What a journal row says about the workout it was recorded during, or null for a row
+ * recorded outside any.
  *
- * The `workout_id` COLUMN is the answer whenever there is one. The fallback to the payload
- * exists for [TYPE_WORKOUT_EXERCISE_ADDED] specifically: that event carries the id in its
- * payload as well, because the payload is the format shared with the bot's journal and the
- * column is local to this app (see [WorkoutExerciseAdded]). A row that arrives from over
- * there has the field but not the column, and it still has to land in the right workout.
+ * ── The order the four sources are consulted in ─────────────────────────────────
+ * The `workout_uid` COLUMN first, because it is the identity that survives leaving this
+ * phone, then the payload's own uid field, then the two numeric links they replaced. A
+ * [WorkoutRef] carrying a uid never falls back to a number — see [WorkoutRef.matches] for why
+ * that matters — so the ordering here decides which link a row is judged by, once and for all
+ * readers, instead of each reader picking for itself.
+ *
+ * The payload is consulted at all for [TYPE_WORKOUT_EXERCISE_ADDED] specifically: that event
+ * states its workout in its own payload as well as in the column, so that a row arriving from
+ * another journal (which has this app's columns nowhere) still lands in the right workout.
  */
-fun JournalEvent.workoutOf(): Long? = workoutId ?: workoutExerciseAddedOrNull()?.workoutId
+fun JournalEvent.workoutRef(): WorkoutRef? {
+    val id = workoutId ?: workoutExerciseAddedOrNull()?.workoutId
+    return if (workoutUid == null && id == null) null else WorkoutRef(workoutUid, id)
+}
 
 /** Payload of an "exercise added" row, or null for any other row and for an unreadable one. */
 fun JournalEvent.workoutExerciseAddedOrNull(): WorkoutExerciseAdded? =
@@ -136,12 +152,17 @@ private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
  * fix them is the one nobody presses reliably.
  */
 fun openWorkout(events: List<JournalEvent>, today: String): Workout? =
-    workoutStarts(events).lastOrNull { (row, _) -> row.writeDay() == today }
-        ?.let { (row, _) -> buildWorkout(events, row.id) }
+    openWorkoutRow(events, today)?.let { buildWorkout(events, it.id) }
 
-/** Id of [openWorkout] — what the repository stamps onto the rows it appends. */
-fun openWorkoutId(events: List<JournalEvent>, today: String): Long? =
-    workoutStarts(events).lastOrNull { (row, _) -> row.writeDay() == today }?.first?.id
+/**
+ * The start event of [openWorkout] — what the repository stamps onto the rows it appends.
+ *
+ * The whole row rather than its id, because a row is stamped with the workout's UID now and
+ * the number only alongside it; handing back one of the two would put the choice of which
+ * link to write at the call site.
+ */
+fun openWorkoutRow(events: List<JournalEvent>, today: String): JournalEvent? =
+    workoutStarts(events).lastOrNull { (row, _) -> row.writeDay() == today }?.first
 
 /**
  * Folds one workout out of the journal, or null when [workoutId] names no start event here.
@@ -178,7 +199,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val unkeyed = ArrayList<ActivityEvent>()
 
     for (row in events) {
-        if (row.workoutOf() != workoutId) continue
+        if (row.workoutRef()?.matches(startRow) != true) continue
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
             sets.getOrPut(added.exerciseId) { mutableListOf() }
@@ -192,6 +213,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
 
     return Workout(
         id = startRow.id,
+        uid = startRow.uid,
         ts = startRow.ts,
         opDate = started?.opDate ?: startRow.writeDay(),
         slotId = started?.slotId,
@@ -231,9 +253,9 @@ fun loggingDay(workout: Workout?, today: String): String = workout?.opDate ?: to
  * only alternative to showing those sets here is not showing them anywhere.
  */
 fun setsOutsideWorkouts(events: List<JournalEvent>, opDate: String): List<ActivityEvent> {
-    val known = workoutStarts(events).mapTo(HashSet()) { (row, _) -> row.id }
+    val starts = workoutStarts(events).map { (row, _) -> row }
     return readActivities(events, dateFrom = opDate, dateTo = opDate)
-        .filter { it.workoutId == null || it.workoutId !in known }
+        .filter { entry -> starts.none { start -> entry.workout?.matches(start) == true } }
 }
 
 /**

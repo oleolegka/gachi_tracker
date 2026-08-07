@@ -84,6 +84,19 @@ data class EventEntity(
     @androidx.room.ColumnInfo(name = "workout_id") val workoutId: Long? = null,
     /** Stable identity of this event across devices and exports — see [newUid]. */
     val uid: String = newUid(),
+    /**
+     * The same link as [workoutId], said in the identity that travels (schema version 9):
+     * the `uid` of the `workout_started` event that opened the workout this row was recorded
+     * during, or null for "recorded outside any workout".
+     *
+     * BOTH COLUMNS ARE WRITTEN, and the uid is the one the readers believe. The numeric one
+     * stays for rows that predate version 9 — the 8 -> 9 migration fills the uid in for every
+     * one it can resolve, and a row pointing at a workout that is no longer in the journal
+     * keeps its dangling number and nothing else, which is the honest record of what it says.
+     *
+     * There is still deliberately no foreign key, for the reason [workoutId] gives.
+     */
+    @androidx.room.ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
 )
 
 /**

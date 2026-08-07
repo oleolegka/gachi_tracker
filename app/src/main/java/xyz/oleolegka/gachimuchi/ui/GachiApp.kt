@@ -32,7 +32,7 @@ import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
 import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.loggingDay
-import xyz.oleolegka.gachimuchi.domain.openWorkoutId
+import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.ui.components.DayActions
 import xyz.oleolegka.gachimuchi.ui.components.LogReceiptDialog
@@ -126,7 +126,7 @@ fun GachiApp(viewModel: MainViewModel) {
      * it is derived from. It decides which card says "Continue" and whether the workout
      * screen offers a way back into the entry card.
      */
-    val runningWorkoutId = remember(state.events, iso) { openWorkoutId(state.events, iso) }
+    val runningWorkoutId = remember(state.events, iso) { openWorkoutRow(state.events, iso)?.id }
 
     /*
      * The offered rest length is derived from the whole journal, so it is computed once

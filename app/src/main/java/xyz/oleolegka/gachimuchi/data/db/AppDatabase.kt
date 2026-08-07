@@ -34,7 +34,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -532,6 +532,36 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 8 -> 9: the journal's workout link, said in uids.
+         *
+         * One nullable column, so a plain `ALTER TABLE ADD COLUMN` will do — no rebuild, no
+         * default, and every row that belonged to no workout stays saying exactly that.
+         *
+         * ── The backfill is the whole point ─────────────────────────────────────────
+         * Adding the column empty and letting only new rows fill it would split the history:
+         * rows written before this version would be found by the numeric link and rows written
+         * after by the uid, and any reader that preferred one would lose the other half of a
+         * workout. So every existing row is pointed at the uid of the start event its number
+         * already named, in one statement — the ids are in the same table, so this is a
+         * lookup and not a guess.
+         *
+         * A row whose `workout_id` names a start event that is NOT in this journal keeps its
+         * dangling number and gets no uid. That is the honest outcome: the row says it belongs
+         * to a workout this database has never seen, and inventing an identity for it would
+         * turn "I do not know that workout" into a claim about one.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `workout_uid` TEXT")
+                db.execSQL(
+                    "UPDATE `events` SET `workout_uid` = " +
+                        "(SELECT `start`.`uid` FROM `events` AS `start` WHERE `start`.`id` = `events`.`workout_id`) " +
+                        "WHERE `workout_id` IS NOT NULL"
+                )
+            }
+        }
+
+        /**
          * Rebuilds one table with a `uid` column on the end, gives every existing row an id of
          * its own, and only then creates the indices — the unique one included, so a row left
          * without an id fails the upgrade instead of passing it.
@@ -596,7 +626,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-            MIGRATION_6_7, MIGRATION_7_8,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

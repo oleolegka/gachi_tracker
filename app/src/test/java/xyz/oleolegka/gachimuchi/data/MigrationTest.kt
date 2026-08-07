@@ -34,7 +34,12 @@ import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
+import xyz.oleolegka.gachimuchi.domain.payloadJson
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.toDraft
 import xyz.oleolegka.gachimuchi.domain.toPayload
@@ -1379,6 +1384,7 @@ class MigrationTest {
         val slotId: Long,
         val exerciseId: Long,
         val goneExerciseId: Long,
+        val workoutStartId: Long = 0,
     )
 
     /**
@@ -1416,6 +1422,28 @@ class MigrationTest {
             )
         }
 
+        // a workout, and one set recorded inside it. Version 7 could only say so with a
+        // number, which is the link the 8 -> 9 step has to translate.
+        val startId = v7.catalog().insertEvent(
+            EventEntityV7(
+                ts = "2026-07-05T18:00:00",
+                type = TYPE_WORKOUT_STARTED,
+                payload = payloadJson.encodeToString(WorkoutStarted(opDate = "2026-07-05")),
+            )
+        )
+        val inWorkout = strengthSetOf(
+            exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                id = exerciseId, name = "Bench press", form = ExerciseForm.STRENGTH,
+            ),
+            opDate = "2026-07-05", reps = 3, weightKg = 90.0,
+        )
+        v7.catalog().insertEvent(
+            EventEntityV7(
+                ts = "2026-07-05T18:10:00", type = inWorkout.type,
+                payload = inWorkout.toPayload(), workoutId = startId,
+            )
+        )
+
         val slotId = v7.catalog().insertSlot(
             SlotEntityV7(
                 name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
@@ -1436,7 +1464,10 @@ class MigrationTest {
         )
         v7.close()
         opened = null
-        return PhoneV7(slotId = slotId, exerciseId = exerciseId, goneExerciseId = gone)
+        return PhoneV7(
+            slotId = slotId, exerciseId = exerciseId, goneExerciseId = gone,
+            workoutStartId = startId,
+        )
     }
 
     @Test
@@ -1452,9 +1483,9 @@ class MigrationTest {
                 db.slots().allExercises().map { it.uid } +
                 db.programs().allPrograms().map { it.uid }
 
-            // eleven rows across five tables, and not one of them left holding the empty
+            // thirteen rows across five tables, and not one of them left holding the empty
             // string the rebuild inserted before the ids were handed out
-            assertEquals(3 + 1 + 1 + 2 + 1, uids.size)
+            assertEquals(5 + 1 + 1 + 2 + 1, uids.size)
             assertTrue("a migrated row was left without a uid", uids.all { isUid(it) })
             assertEquals("two rows were given the same uid", uids.size, uids.toSet().size)
 
@@ -1540,8 +1571,49 @@ class MigrationTest {
         opened = null
 
         val again = openCurrent()
-        assertEquals(3, again.events().count())
+        assertEquals(5, again.events().count())
         assertEquals(1, again.exercises().all().size)
         assertEquals(1, again.programs().countPrograms())
+    }
+
+    // --- version 8 -> 9: the workout link said in uids ---------------------------------------
+
+    @Test
+    fun `a set recorded inside a workout is repointed at that workout's uid`() = runTest {
+        val phone = writeVersion7()
+
+        val db = openCurrent()
+        val events = db.events().all()
+
+        val start = events.single { it.type == TYPE_WORKOUT_STARTED }
+        assertEquals(phone.workoutStartId, start.id)
+
+        /*
+         * THE BACKFILL IS THE POINT OF THE STEP. Adding the column empty and letting only new
+         * rows fill it would split every workout in two: the sets written before the upgrade
+         * would be findable only by the number and the ones after it only by the uid, and the
+         * reducers read the uid first.
+         */
+        val inWorkout = events.single { it.workoutId != null }
+        assertEquals(start.uid, inWorkout.workoutUid)
+
+        // and the rows that belonged to no workout still belong to none — a uid invented for
+        // them would be a claim about a workout that never happened
+        assertTrue(events.filter { it.id != inWorkout.id }.all { it.workoutUid == null })
+    }
+
+    @Test
+    fun `the migrated workout folds out of the journal with all of its sets`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)
+
+        assertNotNull("the workout was lost in the upgrade", workout)
+        assertEquals(1, workout!!.setCount)
+        assertEquals(listOf(phone.exerciseId), workout.exercises.map { it.exerciseId })
+
+        // the other three sets were written outside any workout and stay outside it
+        assertEquals(1, setsOutsideWorkouts(repo.allEvents(), "2026-07-05").size)
     }
 }
