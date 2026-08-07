@@ -50,6 +50,13 @@ abstract class ScreenTest {
 
     /** Raises [content] as the whole screen, in the app theme, with the clock held still. */
     protected fun screen(dark: Boolean = false, content: @Composable () -> Unit) {
+        /*
+         * DO NOT TURN THIS BACK ON without reading the header. It looks like a line that
+         * makes tests less realistic for no reason, and the effect of removing it is not
+         * "some animations go untested" — it is that every screen carrying a text field
+         * stops working at all: the composition never settles, `setContent` below spins for
+         * a minute, and the failure arrives as a timeout in a test that looks unrelated.
+         */
         compose.mainClock.autoAdvance = false
         compose.setContent { GachimuchiTheme(darkTheme = dark) { content() } }
     }
