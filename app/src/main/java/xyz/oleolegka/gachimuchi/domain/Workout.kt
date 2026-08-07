@@ -207,6 +207,20 @@ fun workoutsOn(events: List<JournalEvent>, opDate: String): List<Workout> =
         .mapNotNull { (row, _) -> buildWorkout(events, row.id) }
 
 /**
+ * The day a set being logged right now belongs to.
+ *
+ * THE WORKOUT'S DAY WINS. [buildWorkout] files a set under the workout's op_date whatever the
+ * set's own payload says, so a screen that built the form with today's date while a backdated
+ * workout was open would produce a set the workout shows and the calendar files elsewhere —
+ * the two views of one journal disagreeing about the same row. The disagreement cannot be
+ * fixed after the fact either: the payload is written once and the journal is append-only.
+ *
+ * So the rule lives here, one call away from every screen that builds a form, rather than in
+ * the comment on [buildWorkout] asking callers to remember it.
+ */
+fun loggingDay(workout: Workout?, today: String): String = workout?.opDate ?: today
+
+/**
  * Sets of [opDate] that no workout in this journal claims — everything logged the way the app
  * has always worked, with nobody having pressed "start".
  *

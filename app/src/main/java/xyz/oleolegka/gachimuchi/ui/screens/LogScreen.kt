@@ -92,16 +92,26 @@ import java.time.LocalDate
  * it. Nothing here pushes a back stack, so the back gesture means exactly one thing:
  * leave the workout.
  *
- * ── What a session is ───────────────────────────────────────────────────────────
- * Everything logged today (see domain/Session.kt). There is no "start" or "finish"
- * event, so "continue today's workout" is not a feature but the default, and closing the
- * screen mid-workout costs nothing.
+ * ── The day is given, not assumed ───────────────────────────────────────────────
+ * [day] is the day being written under, and it is NOT necessarily today. It used to be:
+ * the screen took "today" and stamped it onto every form it built. That broke the moment a
+ * workout could be dated to a day already gone — the workout would show the set (a workout
+ * claims its rows by id) while the calendar filed it under today (the calendar reads the
+ * payload), and an append-only journal offers no way to correct it afterwards. The caller
+ * resolves the day through `loggingDay` and hands it here; see ui/GachiApp.kt.
+ *
+ * ── What is still a session, and the seam that leaves ───────────────────────────
+ * The tape below is everything logged on [day] (domain/Session.kt), NOT the contents of the
+ * workout being logged into. On a day with two workouts it therefore shows both. That is a
+ * known intermediate state: this screen is due to be rebuilt around per-exercise cards with
+ * their own rest countdowns (§13.2), and narrowing the tape is part of that change rather
+ * than a patch to make ahead of it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogScreen(
     state: UiState,
-    today: LocalDate,
+    day: LocalDate,
     activeExerciseId: Long?,
     timer: TimerUiState,
     timerActions: TimerActions,
@@ -114,7 +124,7 @@ fun LogScreen(
     onClose: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    val iso = today.toString()
+    val iso = day.toString()
     val session = remember(state.events, iso) { buildSession(state.events, iso) }
     val active = state.refById(activeExerciseId)
     var picking by remember { mutableStateOf(false) }
@@ -135,7 +145,7 @@ fun LogScreen(
                     Column {
                         Text("Workout", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "${fmtDay(today)} - ${session.setCount} entries, " +
+                            "${fmtDay(day)} - ${session.setCount} entries, " +
                                 "${session.groups.size} exercises",
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.inkSecondary,
@@ -196,7 +206,7 @@ fun LogScreen(
     if (picking) {
         ExercisePickerSheet(
             state = state,
-            today = today,
+            today = day,
             startInCreate = catalogEmpty,
             onPick = onSelectExercise,
             onCreate = onCreateExercise,

@@ -2,7 +2,6 @@ package xyz.oleolegka.gachimuchi.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,11 +27,11 @@ class NavigationTest {
         // win over the tab AND over anything that was open before it
         assertEquals(
             BackStep.CloseEditor,
-            backStep(editingProgram = true, showingFormDetail = false, logging = false, tab = Tab.TIMER),
+            backStep(true, showingFormDetail = false, logging = false, showingWorkout = false, tab = Tab.TIMER),
         )
         assertEquals(
             BackStep.CloseEditor,
-            backStep(editingProgram = true, showingFormDetail = true, logging = true, tab = Tab.OVERVIEW),
+            backStep(true, showingFormDetail = true, logging = true, showingWorkout = true, tab = Tab.OVERVIEW),
         )
     }
 
@@ -40,25 +39,52 @@ class NavigationTest {
     fun `back leaves the form detail screen for the tab it was opened from`() {
         assertEquals(
             BackStep.CloseFormDetail,
-            backStep(editingProgram = false, showingFormDetail = true, logging = false, tab = Tab.OVERVIEW),
+            backStep(false, showingFormDetail = true, logging = false, showingWorkout = false, tab = Tab.OVERVIEW),
         )
         // closing it only clears the mode; the tab underneath was never changed, so
         // Overview is what comes back — the same thing the arrow in its title bar does
         assertEquals(
             BackStep.CloseFormDetail,
-            backStep(editingProgram = false, showingFormDetail = true, logging = true, tab = Tab.OVERVIEW),
+            backStep(false, showingFormDetail = true, logging = true, showingWorkout = false, tab = Tab.OVERVIEW),
         )
     }
 
     @Test
     fun `back leaves the logging screen for whichever tab opened it`() {
-        // logging is reachable from Today's button and, in context, from the calendar and
-        // the timer. Each of them leaves its own tab selected underneath.
+        // logging is reached from a card on a day, which lives on Today and on the calendar
+        // — but the mode is drawn over whatever tab was selected, so each leaves its own.
         for (tab in Tab.entries) {
             assertEquals(
                 "logging opened from $tab",
                 BackStep.CloseLogging,
-                backStep(editingProgram = false, showingFormDetail = false, logging = true, tab = tab),
+                backStep(false, showingFormDetail = false, logging = true, showingWorkout = false, tab = tab),
+            )
+        }
+    }
+
+    @Test
+    fun `back out of logging lands on the workout it was logging into`() {
+        // the pair that makes the order of these two a decision rather than an accident:
+        // "Continue" leads from the workout screen into the entry card, and backing out of
+        // the entry card has to return to the workout rather than skip past it
+        assertEquals(
+            BackStep.CloseLogging,
+            backStep(false, showingFormDetail = false, logging = true, showingWorkout = true, tab = HomeTab),
+        )
+        assertEquals(
+            BackStep.CloseWorkout,
+            backStep(false, showingFormDetail = false, logging = false, showingWorkout = true, tab = HomeTab),
+        )
+    }
+
+    @Test
+    fun `back leaves the workout screen for whichever tab opened it`() {
+        // a workout is opened from a card, and cards live on two different tabs
+        for (tab in Tab.entries) {
+            assertEquals(
+                "workout opened from $tab",
+                BackStep.CloseWorkout,
+                backStep(false, showingFormDetail = false, logging = false, showingWorkout = true, tab = tab),
             )
         }
     }
@@ -69,12 +95,12 @@ class NavigationTest {
             assertEquals(
                 "from $tab",
                 BackStep.SwitchTab(HomeTab),
-                backStep(editingProgram = false, showingFormDetail = false, logging = false, tab = tab),
+                backStep(false, showingFormDetail = false, logging = false, showingWorkout = false, tab = tab),
             )
         }
         assertEquals(
             BackStep.LeaveApp,
-            backStep(editingProgram = false, showingFormDetail = false, logging = false, tab = HomeTab),
+            backStep(false, showingFormDetail = false, logging = false, showingWorkout = false, tab = HomeTab),
         )
     }
 
@@ -103,12 +129,12 @@ class NavigationTest {
     @Test
     fun `back always reaches the exit, in a bounded number of presses`() {
         /*
-         * Four is the ceiling over ALL flag combinations: three modes closed one at a time,
-         * then one hop to the home tab. In the app itself only one mode can be open at once
-         * — the editor is reached from the timer tab, the detail screen from the overview,
-         * and each covers the whole window — so the real worst case is two presses. The walk
-         * is over every combination anyway, reachable or not, because a rule that loops on a
-         * state nobody expected to reach is exactly the kind that ships.
+         * Five is the ceiling over ALL flag combinations: four modes closed one at a time,
+         * then one hop to the home tab. In the app itself at most TWO can be open at once —
+         * logging over a workout, which is the pair "Continue" creates — so the real worst
+         * case is three presses. The walk is over every combination anyway, reachable or
+         * not, because a rule that loops on a state nobody expected to reach is exactly the
+         * kind that ships.
          */
         forEveryState { state ->
             var current = state
@@ -116,39 +142,16 @@ class NavigationTest {
             while (current.back() != BackStep.LeaveApp) {
                 current = current.after(current.back())!!
                 presses++
-                assertTrue("back loops from $state", presses <= 4)
+                assertTrue("back loops from $state", presses <= 5)
             }
             assertEquals("back must end at the bare home tab, from $state", home(), current)
-            // one mode at a time is what the app can actually produce, and from there the
-            // exit is never more than a mode and a tab away
-            val modes = listOf(state.editingProgram, state.showingFormDetail, state.logging)
+            // the combinations the app can actually produce, and from each of them the exit
+            // is never more than the open modes plus a tab away
+            val modes = listOf(state.editingProgram, state.showingFormDetail, state.logging, state.showingWorkout)
             if (modes.count { it } <= 1) {
                 assertTrue("$state should exit within two presses, took $presses", presses <= 2)
             }
         }
-    }
-
-    @Test
-    fun `the logging entry point defaults to letting the app choose the exercise`() {
-        // the signature the calendar and the timer call: openLogging() with no argument
-        // means "whatever makes sense", openLogging(id) means "this one"
-        var opened: Long? = -1
-        val entry = OpenLogging { opened = it }
-
-        entry()
-        assertNull("no argument must arrive as null, not as a made-up id", opened)
-
-        entry(42L)
-        assertEquals(42L, opened)
-    }
-
-    @Test
-    fun `a screen drawn outside the app frame can still ask for logging without crashing`() {
-        // the shape of the composition local's default: a preview, or the picture
-        // onboarding, has no logging screen to open, and a no-op beats an exception
-        val nowhere = OpenLogging {}
-        nowhere()
-        nowhere(7L)
     }
 
     @Test
@@ -165,18 +168,21 @@ class NavigationTest {
         val editingProgram: Boolean,
         val showingFormDetail: Boolean,
         val logging: Boolean,
+        val showingWorkout: Boolean,
         val tab: Tab,
     )
 
-    private fun home() = NavState(false, false, false, HomeTab)
+    private fun home() = NavState(false, false, false, false, HomeTab)
 
-    private fun NavState.back() = backStep(editingProgram, showingFormDetail, logging, tab)
+    private fun NavState.back() =
+        backStep(editingProgram, showingFormDetail, logging, showingWorkout, tab)
 
     /** The state the app is left in after [step] is carried out — mirrors the handler. */
     private fun NavState.after(step: BackStep): NavState? = when (step) {
         BackStep.CloseEditor -> copy(editingProgram = false)
         BackStep.CloseFormDetail -> copy(showingFormDetail = false)
         BackStep.CloseLogging -> copy(logging = false)
+        BackStep.CloseWorkout -> copy(showingWorkout = false)
         is BackStep.SwitchTab -> copy(tab = step.tab)
         BackStep.LeaveApp -> null
     }
@@ -186,14 +192,16 @@ class NavigationTest {
         for (editor in listOf(false, true)) {
             for (detail in listOf(false, true)) {
                 for (log in listOf(false, true)) {
-                    for (tab in Tab.entries) {
-                        check(NavState(editor, detail, log, tab))
-                        seen++
+                    for (workout in listOf(false, true)) {
+                        for (tab in Tab.entries) {
+                            check(NavState(editor, detail, log, workout, tab))
+                            seen++
+                        }
                     }
                 }
             }
         }
-        assertEquals(2 * 2 * 2 * Tab.entries.size, seen)
+        assertEquals(2 * 2 * 2 * 2 * Tab.entries.size, seen)
     }
 
     @Test
@@ -204,6 +212,7 @@ class NavigationTest {
             BackStep.CloseEditor,
             BackStep.CloseFormDetail,
             BackStep.CloseLogging,
+            BackStep.CloseWorkout,
             BackStep.SwitchTab(HomeTab),
             BackStep.LeaveApp,
         )

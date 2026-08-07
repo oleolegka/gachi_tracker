@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,15 +21,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -42,39 +38,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.domain.ActivityEvent
 import xyz.oleolegka.gachimuchi.domain.ActivityRef
 import xyz.oleolegka.gachimuchi.domain.DayState
 import xyz.oleolegka.gachimuchi.domain.DayStatus
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
-import xyz.oleolegka.gachimuchi.domain.FACT_TYPES
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
-import xyz.oleolegka.gachimuchi.domain.SlotState
-import xyz.oleolegka.gachimuchi.domain.SlotStatus
 import xyz.oleolegka.gachimuchi.domain.activitiesByDay
 import xyz.oleolegka.gachimuchi.domain.activityStamps
-import xyz.oleolegka.gachimuchi.domain.normPhrase
-import xyz.oleolegka.gachimuchi.domain.offersLogging
+import xyz.oleolegka.gachimuchi.domain.dayCards
 import xyz.oleolegka.gachimuchi.domain.planVsFact
-import xyz.oleolegka.gachimuchi.domain.readActivities
-import xyz.oleolegka.gachimuchi.domain.repeatBadge
-import xyz.oleolegka.gachimuchi.ui.LocalOpenLogging
 import xyz.oleolegka.gachimuchi.ui.UiState
-import xyz.oleolegka.gachimuchi.ui.components.DashedNote
+import xyz.oleolegka.gachimuchi.ui.components.DayActions
+import xyz.oleolegka.gachimuchi.ui.components.DayCardList
 import xyz.oleolegka.gachimuchi.ui.components.DeleteSlotDialog
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.SlotEditorDialog
-import xyz.oleolegka.gachimuchi.ui.displayName
 import xyz.oleolegka.gachimuchi.ui.fmtMonth
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
-import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.weekdayShort
 import java.time.LocalDate
@@ -102,20 +88,25 @@ import java.time.temporal.ChronoUnit
  * ── Every slot carries its own verdict ──────────────────────────────────────────
  * The rule is written out in domain/Schedule.kt and is decided by TIME: the morning gym
  * session can be done while the evening hangboard is still planned, and a session whose
- * time has not come yet is never shown as done. A session that is not done yet carries a
- * "Log" button, because a plan one cannot act on is a list of reproaches. That button is a
- * WORD next to two icons: the row already carries a pencil and a bin, and "log a workout"
- * one mis-tap away from "delete the plan" is not a trade worth making.
+ * time has not come yet is never shown as done.
  *
- * The button appears on TODAY's sessions only. The logging screen writes entries for
- * today, so offering it on last Tuesday's missed slot would quietly record the workout on
- * the wrong day — the very class of bug the per-slot status exists to remove.
+ * ── The day underneath is the same list Today shows ─────────────────────────────
+ * It used to be an agenda of the plan followed by every exercise recorded that day, one row
+ * per entry. It is now the SAME CARDS the Today tab draws (ui/components/DayCardList.kt,
+ * built by domain/DayCards.kt), differing only in which date is asked for. Two screens
+ * answering "what happened on this day" with two implementations is two answers, and the
+ * day they disagree is the day the app stops being believed.
+ *
+ * That also removes the old restriction that a workout could only be logged on TODAY's
+ * slots: a card on last Tuesday now starts a workout DATED last Tuesday (§13.6), rather
+ * than opening an entry card that would have written today's date onto it.
  *
  * ── Editing happens on the selected day, in a dialog ────────────────────────────
- * "Plan a session" sits under the agenda and always means "on the day above it", so the
- * day never has to be picked twice; each planned row carries its own pencil and bin. The
- * editor is [SlotEditorDialog] and the confirmation [DeleteSlotDialog] — both are dialogs
- * so the grid stays visible behind them, which is the context for "which day is this".
+ * "Plan a session" sits under the cards and always means "on the day above it", so the day
+ * never has to be picked twice; each planned card carries its own pencil and bin, which
+ * only the calendar passes in. The editor is [SlotEditorDialog] and the confirmation
+ * [DeleteSlotDialog] — both are dialogs so the grid stays visible behind them, which is the
+ * context for "which day is this".
  *
  * Nothing about occurrences is stored: an edit rewrites ONE master row and the whole
  * series moves with it, which is why the save handler also jumps the grid to the day that
@@ -126,13 +117,13 @@ import java.time.temporal.ChronoUnit
 fun CalendarScreen(
     state: UiState,
     today: LocalDate,
+    dayActions: DayActions,
     modifier: Modifier = Modifier,
     // no default: a screen whose Save quietly does nothing is worse than one that fails
     // to compile, and there is exactly one caller
     onSaveSlot: (SlotDraft, Long?) -> Unit,
     onDeleteSlot: (Long) -> Unit,
 ) {
-    val colors = LocalGachiColors.current
     var monthOffset by rememberSaveable { mutableIntStateOf(0) }
     var selected by rememberSaveable { mutableStateOf(today.toString()) }
     // the editor and the confirmation are transient: a half-typed slot is not worth
@@ -172,10 +163,18 @@ fun CalendarScreen(
     val formOf = remember(state.exercises) { { id: Long? -> state.formOf(id) } }
 
     val selectedDate = remember(selected) { runCatching { LocalDate.parse(selected) }.getOrDefault(today) }
-    val selectedStatus = remember(days, selected) { days.firstOrNull { it.day == selected } }
-    val selectedFacts = remember(state.events, selected) {
-        readActivities(
-            state.events, dateFrom = selected, dateTo = selected,
+    val selectedDay = remember(state.events, state.slots, selectedDate, today, now) {
+        dayCards(state.events, state.slots, selectedDate, today, now)
+    }
+    // the pencil and the bin belong to the calendar and only to the calendar; the same
+    // component draws no icons on Today, where the two lambdas are left null
+    val cardActions = remember(dayActions, state.slots, selectedDate) {
+        dayActions.copy(
+            editSlot = { id ->
+                state.slots.firstOrNull { it.id == id }
+                    ?.let { editing = SlotEditorTarget(it, selectedDate) }
+            },
+            deleteSlot = { id -> state.slots.firstOrNull { it.id == id }?.let { deleting = it } },
         )
     }
 
@@ -201,15 +200,7 @@ fun CalendarScreen(
         item {
             Column(Modifier.fillMaxWidth()) {
                 SectionHeader("Selected day", fmtWeekdayDay(selectedDate))
-                DayAgenda(
-                    status = selectedStatus,
-                    facts = selectedFacts,
-                    formOf = formOf,
-                    today = today,
-                    exerciseNamed = { state.exerciseNamed(it) },
-                    onEdit = { editing = SlotEditorTarget(it, selectedDate) },
-                    onDelete = { deleting = it },
-                )
+                DayCardList(day = selectedDay, date = selectedDate, actions = cardActions)
                 PlanButton(
                     onClick = { editing = SlotEditorTarget(null, selectedDate) },
                     modifier = Modifier.padding(top = 9.dp),
@@ -457,209 +448,6 @@ private fun DayCell(
                     )
                 }
             }
-        }
-    }
-}
-
-/**
- * The agenda of the selected day: every planned session with its OWN verdict, and what was
- * actually recorded.
- *
- * A recorded entry is labelled by whether it closed a slot ([DayStatus.closedByActivityIds]),
- * not by whether the day happened to have a plan at all: on a day with two slots and one
- * workout, the workout says "done" and the slot it did not reach says "missed".
- */
-@Composable
-private fun DayAgenda(
-    status: DayStatus?,
-    facts: List<ActivityEvent>,
-    formOf: (Long?) -> ExerciseForm?,
-    today: LocalDate,
-    exerciseNamed: (String) -> Long?,
-    onEdit: (Slot) -> Unit,
-    onDelete: (Slot) -> Unit,
-) {
-    val colors = LocalGachiColors.current
-    val openLogging = LocalOpenLogging.current
-    val slots = status?.slots.orEmpty()
-    val closed = status?.closedByActivityIds.orEmpty()
-
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        if (slots.isEmpty() && facts.isEmpty()) {
-            DashedNote("Nothing planned and nothing recorded")
-            return@Column
-        }
-
-        slots.forEach { slotStatus ->
-            val slot = slotStatus.occurrence.slot
-            SlotRow(
-                status = slotStatus,
-                // the rule lives in the domain: logging writes today's entries (offersLogging)
-                onLog = if (slotStatus.offersLogging(today)) {
-                    { openLogging(exerciseNamed(slotStatus.name)) }
-                } else {
-                    null
-                },
-                onEdit = { onEdit(slot) },
-                onDelete = { onDelete(slot) },
-            )
-        }
-
-        if (facts.isEmpty() && slots.isNotEmpty()) {
-            DashedNote("Planned, but nothing recorded yet")
-        }
-
-        facts.forEach { event ->
-            val form = formOf(event.form.exerciseId)
-            // a weigh-in is not training (FACT_TYPES), so it is never judged against a plan
-            val judged = event.type in FACT_TYPES
-            AgendaRow(
-                eyebrow = form?.title?.uppercase() ?: "ACTIVITY",
-                accent = form?.let { colors.forForm(it) } ?: colors.inkMuted,
-                name = event.form.displayName(),
-                meta = event.form.summaryLine(),
-                statusLabel = when {
-                    event.id in closed -> "done"
-                    !judged -> "logged"
-                    else -> "unplanned"
-                },
-                statusColor = if (event.id in closed) colors.goodText else colors.inkMuted,
-            )
-        }
-    }
-}
-
-/**
- * A planned session on the selected day, with its verdict and the things that can be done
- * to it.
- *
- * The actions are on the ROW rather than behind a long press or a swipe: a long press is
- * invisible and a swipe would collide with the month grid's horizontal feel. The bin does
- * not delete — it opens [DeleteSlotDialog], because for a repeating slot the answer to
- * "what will this remove" is a sentence, not an icon.
- *
- * "Log" is TEXT while edit and delete are icons, and that asymmetry is the point: three
- * icons of the same size in a row put "record a workout" a thumb's width from "delete the
- * plan", and the two are much too different to be one mis-tap apart.
- */
-@Composable
-private fun SlotRow(
-    status: SlotStatus,
-    onLog: (() -> Unit)?,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    val colors = LocalGachiColors.current
-    val (label, color) = when (status.state) {
-        SlotState.DONE -> "done" to colors.goodText
-        SlotState.MISS -> "missed" to colors.critical
-        SlotState.PLAN -> "planned" to colors.inkMuted
-    }
-    AgendaRow(
-        eyebrow = "PLAN",
-        accent = colors.accent,
-        name = status.name,
-        meta = listOfNotNull(status.atTime, repeatBadge(status.slot.repeatRule))
-            .joinToString(" - "),
-        statusLabel = label,
-        statusColor = color,
-    ) {
-        if (onLog != null) {
-            TextButton(onClick = onLog, contentPadding = PaddingValues(horizontal = 10.dp)) {
-                Text("Log", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-        RowAction(Icons.Filled.Edit, "Edit \"${status.name}\"", colors.inkSecondary, onEdit)
-        RowAction(Icons.Filled.Delete, "Delete \"${status.name}\"", colors.critical, onDelete)
-    }
-}
-
-/**
- * The catalog exercise called exactly what the slot is called, if there is one.
- *
- * A slot is a SESSION ("Gym", "Hangboard") and the model has no slot -> exercise link, so
- * this is a lucky coincidence rather than a feature: normally it finds nothing and the
- * logging screen opens with the exercise still to be picked. Only the same name counts,
- * after the normalization the catalog itself uses — anything looser would point the entry
- * card at an exercise the user did not plan.
- */
-private fun UiState.exerciseNamed(name: String): Long? {
-    val want = normPhrase(name) ?: return null
-    return exercises.firstOrNull { normPhrase(it.name) == want }?.id
-}
-
-@Composable
-private fun RowAction(icon: ImageVector, description: String, tint: Color, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(38.dp)) {
-        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(18.dp))
-    }
-}
-
-/**
- * A row of the agenda: coloured spine, form eyebrow, name, meta, status word, and — for a
- * planned row — the actions on the end. A recorded fact has no actions here: the journal
- * is append-only and is edited on the logging screen, not in the calendar.
- */
-@Composable
-private fun AgendaRow(
-    eyebrow: String,
-    accent: Color,
-    name: String,
-    meta: String,
-    statusLabel: String,
-    statusColor: Color,
-    actions: (@Composable () -> Unit)? = null,
-) {
-    val colors = LocalGachiColors.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, colors.border, RoundedCornerShape(12.dp)),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier
-                .width(4.dp)
-                .heightIn(min = 58.dp)
-                .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
-                .background(accent)
-        )
-        Column(
-            Modifier.weight(1f).padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                eyebrow,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.6.sp,
-                color = accent,
-            )
-            Text(
-                name,
-                fontSize = 13.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (meta.isNotBlank()) {
-                Text(meta, fontSize = 11.sp, color = colors.inkMuted)
-            }
-        }
-        // the status is a WORD, so colour never has to be decoded on its own
-        Text(
-            statusLabel,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = statusColor,
-            modifier = Modifier.padding(end = if (actions == null) 12.dp else 4.dp),
-        )
-        if (actions != null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(end = 4.dp),
-            ) { actions() }
         }
     }
 }

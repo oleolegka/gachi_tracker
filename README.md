@@ -6,10 +6,20 @@ no accounts, no Google Play Services.
 
 ## What it does
 
+**A workout is a thing you start.** A day is two or three cards — the session you planned,
+the workout you are in the middle of, the stretching you did on its own — and tapping one
+is how you begin, carry on, or look back at it. Two workouts in one day are two cards.
+Entries recorded outside any workout sit in the same list, grouped per exercise, so five
+fingerboard sets read as one line rather than five.
+
 **Logging, during the session.** The entry card sits at the bottom of the screen, within
 reach of one thumb, and comes prefilled from your last set of that exercise — so another
 set of the same is a single tap. The exercise picker is ordered by what you used most
 recently, and knows your own names for things: "bench" and "bench press" are one exercise.
+
+**Training typed up afterwards.** A workout carries its own date, so a day already gone can
+be filled in from the calendar and everything lands under the day it happened rather than
+under the day it was typed. Nothing counts down in a workout dated in the past.
 
 **Six kinds of activity**, because they are not the same shape: strength (weight and
 reps), hangs and hangboard, cardio, plain duration, a bare check-in with no metrics at
@@ -28,9 +38,10 @@ from JSON files ([format](docs/program-file-format.md)).
 **A calendar you can plan in.** A session is a slot on a day — once, every day or every
 week — and EVERY slot gets its own verdict against what you actually logged: done, missed,
 still to come. The morning gym session can be done while the evening hangboard is still
-planned, a session whose time has not come is never shown as done, and one that is still
-outstanding today opens the logging screen straight from the plan. Times are typed without
-a colon: the field takes digits and `1700` becomes `17:00` as you go.
+planned, a session whose time has not come is never shown as done, and one still outstanding
+starts a workout straight from the plan — on any day that is not in the future, dated to the
+day it sits on. Times are typed without a colon: the field takes digits and `1700` becomes
+`17:00` as you go.
 
 **Charts and history**: activity across the year, trends and volume per exercise over a
 chosen period, records with the date they were set.

@@ -120,18 +120,19 @@ data class SlotStatus(
     val slot: Slot get() = occurrence.slot
 }
 
-/**
- * Whether this planned session should offer a way to log the workout it stands for.
+/*
+ * There used to be an `offersLogging(today)` here, which decided that only TODAY's
+ * outstanding slots may offer a way to log against them. Its reason was true when it was
+ * written and is not any more: the logging screen wrote entries for today, so a button on
+ * last Tuesday's missed slot would have recorded the workout on the wrong date.
  *
- * Two conditions, and the second is the load-bearing one. A session already done needs no
- * button; and the LOGGING SCREEN WRITES ENTRIES FOR TODAY, so a button on any other day
- * would record the workout on the wrong date. That makes "only today" a property of the
- * model rather than of the calendar screen, which is why it is decided here: a missed slot
- * from last Tuesday is exactly the row a user would tap to fix, and the fix would land on
- * the wrong day silently.
+ * A workout now carries its own op_date (§13.6) and the screen is told which day it writes
+ * under, so starting one from a slot in the past dates it to that slot's day. Keeping the
+ * rule would have kept the restriction without the reason for it, and left a function in
+ * the domain stating a fact about the app that had stopped being one. Whether a day can be
+ * recorded against at all is decided in domain/DayCards.kt, and the answer there is "any
+ * day that is not in the future".
  */
-fun SlotStatus.offersLogging(today: LocalDate): Boolean =
-    state != SlotState.DONE && day == today.toString()
 
 /** Plan/fact states of a day (§12-B; the strings match the dashboard tokens). */
 enum class DayState { DONE, MISS, PLAN, EXTRA, EMPTY }
