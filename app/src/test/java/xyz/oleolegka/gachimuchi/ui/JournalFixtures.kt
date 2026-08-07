@@ -2,11 +2,13 @@ package xyz.oleolegka.gachimuchi.ui
 
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
@@ -120,6 +122,20 @@ class Journal {
             warmup = warmup, side = side,
         )
         return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
+    }
+
+    /**
+     * Removes an entry the way the app does: a new event naming the target's IDENTITY, never a
+     * row taken out of the list. Written into a fixture so a screen test can assert that the
+     * screen reads the journal through the amendment funnel rather than raw.
+     */
+    fun deleteEntry(eventId: Long): Long {
+        val target = rows.first { it.id == eventId }
+        return add(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid)),
+            target.ts,
+        )
     }
 
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */

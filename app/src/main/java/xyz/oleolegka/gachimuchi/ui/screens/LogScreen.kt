@@ -69,6 +69,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerBar
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.fmtDay
 import xyz.oleolegka.gachimuchi.ui.fmtRest
+import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
@@ -583,7 +584,7 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
                     // tapping the chosen one again clears it rather than doing nothing, so a
                     // mis-tap is undone the same way it was made
                     onClick = { side = if (side == option) null else option },
-                    label = { Text(option.label) },
+                    label = { Text(option.label()) },
                     modifier = Modifier.heightIn(min = 40.dp),
                 )
             }
@@ -610,12 +611,6 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
             )
         )
     }
-}
-
-/** How a side is named on a chip; the enum's own code is the stored value, not a label. */
-private val HoldSide.label: String get() = when (this) {
-    HoldSide.LEFT -> "Left"
-    HoldSide.RIGHT -> "Right"
 }
 
 @Composable

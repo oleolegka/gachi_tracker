@@ -470,6 +470,9 @@ fun GachiApp(viewModel: MainViewModel) {
                 null
             },
             onClose = { viewingWorkoutId = null },
+            // both append rather than rewrite; domain/Amendments.kt folds them for every reader
+            onAmendEntry = viewModel::amendEntry,
+            onDeleteEntry = viewModel::deleteEntry,
         )
 
         else -> Scaffold(

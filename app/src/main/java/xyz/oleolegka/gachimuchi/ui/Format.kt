@@ -5,6 +5,7 @@ import xyz.oleolegka.gachimuchi.domain.Bodyweight
 import xyz.oleolegka.gachimuchi.domain.Cardio
 import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
@@ -85,6 +86,16 @@ fun fmtMonth(d: LocalDate): String = d.format(monthFormat)
 
 /** Activity name taken from the form (body weight has no name — its role is used instead). */
 fun ActivityForm.displayName(): String = activityName()
+
+/**
+ * How a side is named on screen. The enum's [HoldSide.code] is the STORED value and is not a
+ * label: it is the payload's own spelling and must stay readable by anything that does not
+ * know this app, so the wording lives here where every other piece of wording does.
+ */
+fun HoldSide.label(): String = when (this) {
+    HoldSide.LEFT -> "Left"
+    HoldSide.RIGHT -> "Right"
+}
 
 /**
  * A series value in its own units, for tile headlines and record lines.

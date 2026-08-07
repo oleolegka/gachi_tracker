@@ -320,6 +320,33 @@ class MainViewModel(
     }
 
     /**
+     * Corrects an entry already in the journal, from the whole form the editor is holding.
+     *
+     * ANY entry, not only the last one — which is the difference from [undoSet], and the reason
+     * this exists. Nothing is rewritten: the repository appends an amendment naming the target
+     * and `domain/Amendments.kt` folds the two into what the readers see.
+     *
+     * The exercise carried by [updated] is IGNORED by the repository rather than applied (see
+     * `amendEntry`), so a correction can never move a set to another exercise. The editor does
+     * not offer it either — this is the belt to that dialog's braces, not the only guard.
+     */
+    fun amendEntry(eventId: Long, updated: ActivityForm) {
+        viewModelScope.launch { repo.amendEntry(eventId, updated) }
+    }
+
+    /**
+     * Removes ANY entry from every reading of the journal — not only the newest, which is all
+     * [undoSet] could ever reach.
+     *
+     * The row stays in the table; this appends a deletion naming it. So it is reversible in
+     * principle (deleting the deletion brings it back), and nothing about the append-only
+     * guarantee is given up to get a delete button.
+     */
+    fun deleteEntry(eventId: Long) {
+        viewModelScope.launch { repo.deleteEntry(eventId) }
+    }
+
+    /**
      * Creates a catalog exercise and immediately points the entry card at it. For holds,
      * edge and protocol are part of the identity (§12-A) and are stored on the exercise
      * rather than asked for on every set.
