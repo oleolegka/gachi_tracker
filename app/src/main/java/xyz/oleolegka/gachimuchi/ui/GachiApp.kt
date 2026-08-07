@@ -207,23 +207,13 @@ fun GachiApp(viewModel: MainViewModel) {
         loggingDate = day
         loggingWorkoutId = workoutId
     }
+    /*
+     * Starting a workout, from a plan or off-plan. When it comes from a plan its exercises
+     * are already in it by the time the screen opens — the copy happens inside
+     * [MainViewModel.startWorkout], between the start event and this navigation, so there is
+     * no frame on which the workout looks empty.
+     */
     val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?) -> Unit> { day, slotId ->
-        /*
-         * TODO(§13.7): copy the slot's exercises into the workout. A workout started from a
-         * plan currently arrives EMPTY and the user adds exercises as they go, exactly as an
-         * off-plan one does.
-         *
-         * Everything needed is now in place — `plannedExercises(state.slots, slotId)` reads
-         * the list and `ActivityRepository.addExerciseToWorkout` writes each one in — so this
-         * is a deliberate omission rather than a missing dependency: it is one
-         * `addExerciseToWorkout` per planned exercise, run between the start event and the
-         * navigation below, and it needs its own verification (which rest wins when the slot
-         * names one and the catalog remembers another is still open, §13.8).
-         *
-         * It is a COPY rather than a reference whenever it lands: the plan is editable and
-         * the facts are not, so rewriting the slot next month must not rewrite the
-         * composition of a workout already done.
-         */
         viewModel.startWorkout(day, slotId) { id ->
             openLoggingNow(day.toString(), id)
         }

@@ -240,11 +240,20 @@ class MainViewModel(
      * the thing it just created and it has no other way to name it — the id IS the id of the
      * event the repository just wrote.
      *
-     * [slotId] is the plan it was started from, when it was started from one. The exercises
-     * ON that slot are NOT copied in yet; see the note at the call site in ui/GachiApp.kt.
+     * [slotId] is the plan it was started from, when it was started from one — and when it is
+     * one, that plan's exercises are COPIED into the workout before the caller is told about
+     * it, so the screen it opens is already the list of what the session is meant to be
+     * (§13.7). Copied and not referenced: the plan is editable and the facts are not.
+     *
+     * The copy happens between the start and [then] rather than after it, so the screen never
+     * draws a workout that is about to gain three cards on the next frame.
      */
     fun startWorkout(day: LocalDate, slotId: Long? = null, then: (Long) -> Unit) {
-        viewModelScope.launch { then(repo.startWorkout(day.toString(), slotId)) }
+        viewModelScope.launch {
+            val id = repo.startWorkout(day.toString(), slotId)
+            if (slotId != null) repo.copyPlannedExercises(id, slotId, timer.settings.value)
+            then(id)
+        }
     }
 
     /**

@@ -13,10 +13,12 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
@@ -32,6 +34,7 @@ import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.payloadJson
+import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.toSlot as draftToSlot
 import java.time.LocalDate
@@ -237,6 +240,49 @@ class ActivityRepository(private val db: AppDatabase) {
         )
         setDefaultRest(exerciseId, restSec)
         return id
+    }
+
+    /**
+     * Copies a plan's composition into a workout, in order, and hands back the rows written.
+     *
+     * ── A COPY, never a reference (§13.7) ───────────────────────────────────────
+     * The plan is editable and the facts are not. Rewriting a slot next month must not
+     * rewrite what a workout done in August consisted of, so the exercises are written INTO
+     * the workout as ordinary "exercise added" events — the same events the user's own taps
+     * produce, indistinguishable afterwards, which is also why nothing downstream had to
+     * learn about plans.
+     *
+     * ── Which rest wins ─────────────────────────────────────────────────────────
+     * The one ON THE PLAN when the plan names one, because a rest written next to an exercise
+     * in a planned session is a statement about THAT session. Failing that, [restHintSec]
+     * answers in its usual order: what the user last chose for the exercise, then what the
+     * journal says they actually rested, then the configured default. §13.8 left this open;
+     * this is the answer, and it is the only order in which the more specific statement wins.
+     *
+     * ── Two things it deliberately does anyway ──────────────────────────────────
+     * A planned exercise that is no longer in the catalog is still added: the workout should
+     * consist of what was planned, and a card for an exercise this phone cannot build a form
+     * for is already a state the screen handles. And [addExerciseToWorkout] writes the rest
+     * onto the catalog row as well, so a rest that came off the PLAN becomes the exercise's
+     * remembered answer — which is right when the plan is where the user last thought about
+     * it, and is a side effect worth knowing about either way.
+     *
+     * Reads the slot's rows directly rather than through `plannedExercises` over the whole
+     * plan: same list, one query, and this path only ever holds an id.
+     */
+    suspend fun copyPlannedExercises(
+        workoutId: Long,
+        slotId: Long,
+        settings: TimerSettings,
+    ): List<Long> {
+        val planned = slotExercises(slotId)
+        if (planned.isEmpty()) return emptyList()
+        val events = allEvents()
+        return planned.map { entry ->
+            val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
+                ?: restHintSec(settings, events, exercise(entry.exerciseId)?.toRef())
+            addExerciseToWorkout(workoutId, entry.exerciseId, rest)
+        }
     }
 
     /** Remembers the rest chosen for an exercise — see [ExerciseDao.setDefaultRest]. */
