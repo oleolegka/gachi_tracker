@@ -94,14 +94,14 @@ class FloorLinesTest {
     @Test
     fun `nothing ready means no button`() {
         val floors = listOf(floor(1, "Bench", 90_000))
-        assertEquals(emptyList<RestFloor>(), readyFloors(floors, now = 0))
-        assertNull(dismissReadyLabel(readyFloors(floors, now = 0)))
+        assertEquals(emptyList<RestFloor>(), restsOver(floors, now = 0))
+        assertNull(dismissLabel(restsOver(floors, now = 0)))
     }
 
     @Test
     fun `one ready rest is named on the button`() {
         val floors = listOf(floor(1, "Bench", 10_000), floor(2, "Abs", 90_000))
-        assertEquals("Dismiss Bench", dismissReadyLabel(readyFloors(floors, now = 20_000)))
+        assertEquals("Dismiss Bench", dismissLabel(restsOver(floors, now = 20_000)))
     }
 
     /**
@@ -111,8 +111,8 @@ class FloorLinesTest {
     @Test
     fun `several ready rests share one unnamed button`() {
         val floors = listOf(floor(1, "Bench", 10_000), floor(2, "Abs", 15_000))
-        val ready = readyFloors(floors, now = 20_000)
+        val ready = restsOver(floors, now = 20_000)
         assertEquals(listOf(1L, 2L), ready.map { it.exerciseId })
-        assertEquals("Dismiss ready", dismissReadyLabel(ready))
+        assertEquals("Dismiss ready", dismissLabel(ready))
     }
 }

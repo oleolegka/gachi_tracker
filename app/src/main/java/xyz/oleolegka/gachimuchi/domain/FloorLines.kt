@@ -51,21 +51,29 @@ fun floorNotificationLine(floors: List<RestFloor>, now: Long): String? {
     return parts.joinToString(FLOOR_LINE_SEPARATOR)
 }
 
-/** The floors whose rest is over at [now], in the order they became ready. */
-fun readyFloors(floors: List<RestFloor>, now: Long): List<RestFloor> = floors
+/**
+ * The floors whose rest is over at [now], in the order they became ready.
+ *
+ * Named for the rests being over rather than for their being ready, because domain/Floors.kt
+ * already has a [ReadyFloor] and it means something narrower: one floor that matured while a
+ * conductor had it muted, carrying how long ago that was. A `readyFloors` sitting in the same
+ * package as a `ReadyFloor` and returning neither is a name that has to be checked against its
+ * signature before it can be read.
+ */
+fun restsOver(floors: List<RestFloor>, now: Long): List<RestFloor> = floors
     .filter { now >= it.readyAtMs }
     .sortedWith(compareBy({ it.readyAtMs }, { it.exerciseId }))
 
 /**
- * The label of the notification button that clears every ready rest, or null when none is
- * ready and the button therefore has nothing to do.
+ * The label of the notification button that clears every rest that is over, or null when
+ * none is and the button therefore has nothing to do.
  *
- * One ready floor names it, several do not. The button does the same thing either way —
- * clears all of them — so naming the only one is a description and not a promise about which
- * of many would go, which is the mistake the plural form exists to avoid.
+ * One names it, several do not. The button does the same thing either way — clears all of
+ * them — so naming the only one is a description and not a promise about which of many would
+ * go, which is the mistake the plural form exists to avoid.
  */
-fun dismissReadyLabel(ready: List<RestFloor>): String? = when (ready.size) {
+fun dismissLabel(over: List<RestFloor>): String? = when (over.size) {
     0 -> null
-    1 -> "Dismiss ${ready.single().exerciseName}"
+    1 -> "Dismiss ${over.single().exerciseName}"
     else -> "Dismiss ready"
 }

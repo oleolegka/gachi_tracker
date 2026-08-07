@@ -101,8 +101,10 @@ class TimerService : Service() {
                 startForeground(TimerNotifications.ID_RUNNING, notification)
             }
         }.onFailure {
-            // Android 12+ refuses a foreground start from the background; the controller
-            // keeps counting on its alarm and wake lock, so degrade instead of crashing
+            // Android 12+ refuses a foreground start from the background. Degrade instead of
+            // crashing: a run keeps counting on its alarm and its wake lock, and a rest keeps
+            // counting on its alarm alone — which is what a rest had before it was given a
+            // service at all, so what is lost here is the improvement and not the feature.
             stopSelf()
             return START_NOT_STICKY
         }

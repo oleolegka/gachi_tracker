@@ -593,6 +593,38 @@ class FloorControllerTest {
         assertEquals("Bench 4:00", shownTitle(TimerNotifications.ID_RUNNING))
     }
 
+    /**
+     * The hand-off back from a protocol is rate limited like everything else, and this pins
+     * the cost of that rather than pretending there is none: a protocol that starts and stops
+     * inside one second leaves the shade EMPTY, because the conductor took the notification
+     * down and the rests may not write another one yet. The tick loop puts it back within the
+     * second, which is what the second half asserts.
+     *
+     * The alternative — letting a hand-off jump the queue — was rejected: "not more than once
+     * a second" with an exception in it is not a rule, and a shade that is a second behind
+     * after a run nobody meant to start is not a cost worth an exception.
+     */
+    @Test
+    fun `the rests take the shade back after a protocol, but no sooner than the rate allows`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 300_000)
+        assertEquals("Bench 5:00", shownTitle(TimerNotifications.ID_RUNNING))
+
+        // started and stopped without the clock moving at all
+        timer.start(tabata)
+        timer.stop()
+
+        assertNull(
+            "the conductor took it down and the rate limit will not let it back yet",
+            notifications().getNotification(TimerNotifications.ID_RUNNING),
+        )
+
+        advance(1)
+        timer.floors.refresh()
+
+        assertEquals("Bench 4:59", shownTitle(TimerNotifications.ID_RUNNING))
+    }
+
     @Test
     fun `nothing left to count takes the line out of the shade with the service`() {
         val timer = newController()

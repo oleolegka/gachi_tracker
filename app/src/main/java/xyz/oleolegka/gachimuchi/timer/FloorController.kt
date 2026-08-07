@@ -21,12 +21,12 @@ import xyz.oleolegka.gachimuchi.data.FloorStore
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.bootReference
-import xyz.oleolegka.gachimuchi.domain.dismissReadyLabel
+import xyz.oleolegka.gachimuchi.domain.dismissLabel
 import xyz.oleolegka.gachimuchi.domain.floorCue
 import xyz.oleolegka.gachimuchi.domain.floorNotificationLine
 import xyz.oleolegka.gachimuchi.domain.floorSummaryText
-import xyz.oleolegka.gachimuchi.domain.readyFloors
 import xyz.oleolegka.gachimuchi.domain.releaseFloors
+import xyz.oleolegka.gachimuchi.domain.restsOver
 import xyz.oleolegka.gachimuchi.domain.settleFloors
 import xyz.oleolegka.gachimuchi.domain.startFloor
 import xyz.oleolegka.gachimuchi.domain.withFloor
@@ -330,6 +330,19 @@ class FloorController internal constructor(
     fun conductorStarted() {
         if (conductorRunning) return
         conductorRunning = true
+        /*
+         * [lastNotifyLine] means "what we believe is in the shade", and from this moment that
+         * belief is false: the conductor takes ID_RUNNING, and takes it down again when it
+         * stops (TimerNotifications.cancelAll). Left standing, it would let a floor compare its
+         * line after the run against what it posted before, find them equal, and decide there
+         * was nothing to post into a shade that is by then empty.
+         *
+         * Not a complete answer on its own — the rate limit below can still hold the re-post
+         * back for up to a second after a hand-off, and the tick loop is what delivers it. It
+         * is here because a field that means one thing should not quietly start meaning
+         * another.
+         */
+        lastNotifyLine = null
         // takes the floor alarm and the floor loop down: while a conductor runs the domain
         // reports no wake moment at all, and the conductor holds a wake-up of its own
         advance()
@@ -476,7 +489,7 @@ class FloorController internal constructor(
             TimerNotifications.floors(
                 context = app,
                 line = line,
-                dismissLabel = dismissReadyLabel(readyFloors(_floors.value, now)),
+                dismissLabel = dismissLabel(restsOver(_floors.value, now)),
             )
         }
     }
@@ -526,7 +539,7 @@ class FloorController internal constructor(
                 TimerNotifications.floors(
                     context = app,
                     line = line,
-                    dismissLabel = dismissReadyLabel(readyFloors(_floors.value, now)),
+                    dismissLabel = dismissLabel(restsOver(_floors.value, now)),
                 ),
             )
         }.isSuccess
@@ -543,6 +556,10 @@ class FloorController internal constructor(
 
     private fun postSummaryNotification(text: String) {
         if (!TimerNotifications.canPost(app)) return
+        // as in [refreshNotification]: the channels belong to the service, and this can be
+        // reached without one having started — a conductor whose foreground start was refused
+        // still ends, and still owes this line
+        TimerNotifications.ensureChannels(app)
         runCatching {
             NotificationManagerCompat.from(app)
                 .notify(TimerNotifications.ID_FLOOR_SUMMARY, TimerNotifications.floorSummary(app, text))
