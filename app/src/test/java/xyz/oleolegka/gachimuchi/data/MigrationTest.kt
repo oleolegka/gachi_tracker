@@ -1641,6 +1641,48 @@ class MigrationTest {
     }
 
     @Test
+    fun `an entry written before the field existed is back-filled too, key and all`() = runTest {
+        val phone = writeVersion7()
+        /*
+         * THE SHAPE THE TEST ABOVE CANNOT PRODUCE, and the one every real phone is full of.
+         *
+         * That fixture builds its payloads from StrengthSet, which is TODAY's class: written
+         * with `encodeDefaults` it stores `"exercise_uid": null` — the key present, holding
+         * nothing. A build old enough to predate the field wrote no key at all. The two are
+         * different JSON, and the difference is what the 9 -> 10 backfill got wrong once
+         * already: a null is a JsonNull, an object, not an absence, and "the key is there"
+         * read it as a link.
+         *
+         * Both shapes resolve correctly now. Only one of them was ever exercised, and it was
+         * the one no phone has — so a later change that made the backfill depend on the key
+         * being present would break every upgrade and pass every test. Hence a payload spelled
+         * out by hand, without the key.
+         */
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_STRENGTH_SET,
+            """{"exercise":"Bench press","exercise_key":"bench press","reps":5,""" +
+                """"weight_kg":80.0,"own_weight":false,"exercise_id":${phone.exerciseId},""" +
+                """"op_date":"2026-07-04"}""",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+        val exerciseUid = repo.exercise(phone.exerciseId)!!.uid
+        val events = repo.allEvents()
+
+        val migrated = formFromEventOrNull(
+            events.single { it.id == strayId }.type,
+            events.single { it.id == strayId }.payload,
+        )!!
+        assertEquals(exerciseUid, migrated.exerciseUid)
+        assertEquals(phone.exerciseId, migrated.exerciseId)
+
+        // and it is filed with the rest of that exercise's history rather than under a key of
+        // its own, which is the only symptom a missed row would ever have shown
+        val link = ExerciseLink(exerciseUid, phone.exerciseId)
+        assertEquals(5, formsOfExercise<StrengthSet>(events, link, TYPE_STRENGTH_SET).size)
+    }
+
+    @Test
     fun `the backfill keeps one exercise under one key rather than splitting its history`() =
         runTest {
             val phone = writeVersion7()
