@@ -58,6 +58,13 @@ android {
 
     buildFeatures {
         compose = true
+        /*
+         * BuildConfig is generated for one reason: the settings tab shows the version that
+         * is installed. Updates arrive through Obtainium rather than a store, so there is
+         * no listing anywhere saying what is on the phone, and a bug report about a version
+         * nobody can name is a bug report about nothing.
+         */
+        buildConfig = true
     }
 
     testOptions {

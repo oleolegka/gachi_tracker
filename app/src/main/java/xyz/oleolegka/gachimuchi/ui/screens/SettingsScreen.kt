@@ -1,7 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -33,9 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.BuildConfig
 import xyz.oleolegka.gachimuchi.data.DeviceStore
 import xyz.oleolegka.gachimuchi.data.GalleryStore
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
@@ -45,11 +47,12 @@ import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicturePicker
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
- * The settings tab: the celebration pictures.
+ * The settings tab: the celebration pictures, and at the foot of it the two things that
+ * identify this copy of the app — which installation it is and which build it is.
  *
  * It exists as a tab of its own rather than as a section of another screen because the
- * settings that are still to come (and the timer's own, which live on the timer screen
- * next to the thing they configure) need somewhere to land.
+ * settings that are still to come (and the timer's own, which live on the programs tab next
+ * to the thing they configure) need somewhere to land.
  *
  * The timer's settings deliberately stay where they are. They are read while looking at a
  * countdown; these are read once and then rarely again.
@@ -195,17 +198,54 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 color = colors.inkMuted,
             )
         }
+
+        item {
+            Text(
+                "This build",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            /*
+             * The version, shown because there is nowhere else to read it. The app is not on
+             * a store; updates arrive through Obtainium, which installs whatever the latest
+             * release is without saying afterwards what that was. Both numbers are here
+             * because they answer different questions: the NAME is what a release is called
+             * and what a bug report should quote, the CODE is what the updater compares to
+             * decide whether there is anything to install.
+             */
+            Text(
+                "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
     }
 }
 
+/**
+ * One celebration mode as a row: the button, the name, and what choosing it means.
+ *
+ * ── Selectable, not merely clickable ────────────────────────────────────────────
+ * The whole row is the target and the `RadioButton` inside it takes no click of its own, so
+ * the row has to say what the button would have said. `Modifier.selectable` with
+ * [Role.RadioButton] publishes BOTH the role and the chosen state into semantics; a plain
+ * `clickable` publishes neither, and then which mode is on is only painted. A screen reader
+ * reading these rows would announce three identical buttons and never say which one is
+ * already picked — and a test could not tell either, which is how it stayed that way.
+ */
 @Composable
 private fun ModeRow(selected: Boolean, title: String, hint: String, onSelect: () -> Unit) {
     val colors = LocalGachiColors.current
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // the whole row is the target; the button itself takes no click of its own
         RadioButton(selected = selected, onClick = null)
         Column(Modifier.padding(start = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)
