@@ -53,11 +53,13 @@ class CalendarScreenTest : ScreenTest() {
 
     private val noActions = DayActions(
         startFromPlan = { id, date -> startedFromPlan = id to date },
-        startWorkout = {},
+        startWorkout = { _, _ -> },
         logSingleEntry = {},
         continueWorkout = {},
         openWorkout = {},
-        openExercise = {},
+        openExercise = { _, _ -> },
+        deleteWorkout = {},
+        renameWorkout = { _, _ -> },
     )
 
     private fun calendar(slots: List<Slot> = emptyList(), journal: Journal = Journal()) {

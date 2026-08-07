@@ -1,0 +1,240 @@
+package xyz.oleolegka.gachimuchi.ui.components
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.ActivityEvent
+import xyz.oleolegka.gachimuchi.domain.RecordHit
+import xyz.oleolegka.gachimuchi.ui.fmtDuration
+import xyz.oleolegka.gachimuchi.ui.summaryLine
+import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import java.time.Duration
+import java.time.LocalDateTime
+
+/**
+ * The breakdown of what was done: a heading, and one row per entry with its numbers, its
+ * clock time and the record it broke.
+ *
+ * ── Why this is a component and not a private function on one screen ────────────
+ * It started as one, on the workout review screen, and then the day breakdown needed exactly
+ * the same rows for entries recorded OUTSIDE a workout (§14.2). Writing them again would have
+ * been two answers to "what does a set look like when you read it back" — and the second one
+ * would have been the one to quietly lose the record line, because nothing on that screen
+ * would have said it was missing. So the rows moved here whole, and both screens draw the same
+ * ones.
+ *
+ * ── The gesture, and the two things behind it ───────────────────────────────────
+ * A long press on a row raises what can be done with it: correcting it and removing it. See
+ * [ItemActions] for why a press rather than a control per row, and why the removal asks once
+ * more before it writes. A caller that passes neither gets read-only rows, which is what a
+ * screen with nothing to write with should show.
+ */
+@Composable
+fun EntryBlock(
+    /** The heading: an exercise's name, or what the entries have in common. */
+    name: String,
+    /**
+     * The rest CHOSEN for this exercise in this workout, in seconds, or null when nobody chose
+     * one. A different fact from the pauses [showGaps] measures — see `WorkoutExerciseAdded`.
+     */
+    restSec: Int?,
+    entries: List<ActivityEvent>,
+    /** The record verdicts of the day, by event id — folded once by the caller. */
+    recordOf: Map<Long, RecordHit?>,
+    modifier: Modifier = Modifier,
+    /** What a row says when there are none. */
+    emptyNote: String = "no sets yet",
+    /** Correct one entry. Null leaves the rows read-only. */
+    onCorrect: ((eventId: Long) -> Unit)? = null,
+    /** Remove one entry. Already confirmed by the time it is called. */
+    onRemove: ((eventId: Long) -> Unit)? = null,
+    /**
+     * Whether each row states how long after the previous one it was recorded.
+     *
+     * Off inside a workout, where the heading already carries the rest that was CHOSEN and two
+     * numbers about rest on one card would have to be told apart every time they disagreed.
+     * On where there is no chosen rest to show — entries logged on their own — because there
+     * the gap between one set and the next is the only thing that answers "how long did I
+     * actually wait", which is the question the day breakdown exists for.
+     */
+    showGaps: Boolean = false,
+) {
+    val colors = LocalGachiColors.current
+    GachiCard(modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            // the rest CHOSEN for this exercise in this workout, which is a different fact
+            // from the pause the timestamps happen to show (see WorkoutExerciseAdded)
+            restSec?.takeIf { it > 0 }?.let {
+                Text("rest ${fmtDuration(it)}", fontSize = 11.sp, color = colors.inkMuted)
+            }
+        }
+        HorizontalDivider(color = colors.grid)
+
+        if (entries.isEmpty()) {
+            Text(
+                emptyNote,
+                fontSize = 12.sp,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
+            )
+            return@GachiCard
+        }
+
+        entries.forEachIndexed { index, entry ->
+            if (index > 0) HorizontalDivider(color = colors.grid)
+            EntryLine(
+                number = index + 1,
+                entry = entry,
+                record = recordOf[entry.id],
+                gapSec = if (showGaps && index > 0) {
+                    secondsBetween(entries[index - 1].ts, entry.ts)
+                } else {
+                    null
+                },
+                onCorrect = onCorrect,
+                onRemove = onRemove,
+            )
+        }
+    }
+}
+
+/**
+ * One recorded entry, and the long press that acts on it.
+ *
+ * The numbers are on the left and the clock time on the right. Nothing else is drawn: the row
+ * is read far more often than it is corrected, and a control on it would be paying for the
+ * rare case out of the common one's legibility. There is no delete affordance anywhere near
+ * a thumb, deliberately — removing training that actually happened is two deliberate acts.
+ */
+@Composable
+private fun EntryLine(
+    number: Int,
+    entry: ActivityEvent,
+    record: RecordHit?,
+    gapSec: Int?,
+    onCorrect: ((eventId: Long) -> Unit)?,
+    onRemove: ((eventId: Long) -> Unit)?,
+) {
+    val colors = LocalGachiColors.current
+    val summary = entry.form.summaryLine()
+    var confirming by remember(entry.id) { mutableStateOf(false) }
+
+    val menu = buildList {
+        onCorrect?.let { correct -> add(ItemAction("Correct") { correct(entry.id) }) }
+        onRemove?.let { add(ItemAction("Remove entry", destructive = true) { confirming = true }) }
+    }
+
+    ItemActions(title = summary, actions = menu, modifier = Modifier.fillMaxWidth()) { press ->
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(press)
+                .padding(start = 13.dp, end = 13.dp, top = 9.dp, bottom = 9.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$number",
+                    fontSize = 10.sp,
+                    color = colors.inkMuted,
+                    modifier = Modifier.width(20.dp),
+                )
+                Text(
+                    summary,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                clockOf(entry)?.let { Text(it, fontSize = 10.sp, color = colors.inkMuted) }
+            }
+            /*
+             * The pause that was actually taken, which is a MEASUREMENT and says so: it counts
+             * from the moment the previous set was written down, which is a few seconds after
+             * it ended and rather longer when the phone stayed in a pocket. Stated as "after"
+             * rather than as "rest" so it is never read as the rest that was chosen.
+             */
+            gapSec?.let {
+                Text(
+                    "after ${fmtDuration(it)}",
+                    fontSize = 11.sp,
+                    color = colors.inkMuted,
+                    modifier = Modifier.padding(start = 20.dp, top = 2.dp),
+                )
+            }
+            record?.let {
+                Text(
+                    "Record: ${it.text}",
+                    fontSize = 11.sp,
+                    color = colors.good,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 20.dp, top = 2.dp),
+                )
+            }
+        }
+    }
+
+    if (confirming) {
+        ConfirmRemoveDialog(
+            title = "Remove this entry?",
+            subject = summary,
+            explanation = "It stops counting towards volume, records and the streak. " +
+                REMOVAL_IS_REVERSIBLE,
+            onConfirm = {
+                confirming = false
+                onRemove?.invoke(entry.id)
+            },
+            onDismiss = { confirming = false },
+        )
+    }
+}
+
+/**
+ * "HH:mm" of the entry, but only when it was written on the day it is filed under.
+ *
+ * Old training typed up on the sofa carries the time it was TYPED, and printing that beside
+ * a set done last Tuesday morning would be a plausible-looking lie. Same rule as the day
+ * cards and the calendar's own stamps.
+ */
+private fun clockOf(entry: ActivityEvent): String? =
+    if (entry.ts.length >= 16 && entry.ts.startsWith("${entry.opDate}T")) {
+        entry.ts.substring(11, 16)
+    } else {
+        null
+    }
+
+/**
+ * Whole seconds between two journal timestamps, or null when either will not parse or the
+ * second is not after the first.
+ *
+ * Null rather than a negative number or a zero: rows are ordered by when they were WRITTEN,
+ * and a clock that moved backwards between two of them (a timezone change, a manual correction
+ * on the phone) makes the difference meaningless rather than small. Saying nothing is the
+ * honest answer; printing "after 0 s" would invent a fact.
+ */
+private fun secondsBetween(earlier: String, later: String): Int? = runCatching {
+    Duration.between(LocalDateTime.parse(earlier), LocalDateTime.parse(later)).seconds
+}.getOrNull()?.takeIf { it > 0 }?.toInt()

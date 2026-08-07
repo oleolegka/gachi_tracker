@@ -2,9 +2,11 @@ package xyz.oleolegka.gachimuchi.ui.components
 
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -52,21 +54,25 @@ class DayCardListTest : ScreenTest() {
 
     // what each callback was last called with; null means it was never called
     private var startedFromPlan: Pair<Long, LocalDate>? = null
-    private var startedWorkout: LocalDate? = null
+    private var startedWorkout: Pair<LocalDate, String?>? = null
     private var loggedSingle: LocalDate? = null
     private var continued: Long? = null
     private var opened: Long? = null
-    private var openedExercise: Long? = null
+    private var openedExercise: Pair<Long, LocalDate>? = null
     private var edited: Long? = null
     private var deleted: Long? = null
+    private var deletedWorkout: Long? = null
+    private var renamed: Pair<Long, String?>? = null
 
     private fun actions(withSlotIcons: Boolean = false) = DayActions(
         startFromPlan = { id, date -> startedFromPlan = id to date },
-        startWorkout = { date -> startedWorkout = date },
+        startWorkout = { date, name -> startedWorkout = date to name },
         logSingleEntry = { date -> loggedSingle = date },
         continueWorkout = { id -> continued = id },
         openWorkout = { id -> opened = id },
-        openExercise = { id -> openedExercise = id },
+        openExercise = { id, date -> openedExercise = id to date },
+        deleteWorkout = { id -> deletedWorkout = id },
+        renameWorkout = { id, name -> renamed = id to name },
         editSlot = if (withSlotIcons) ({ id -> edited = id }) else null,
         deleteSlot = if (withSlotIcons) ({ id -> deleted = id }) else null,
     )
@@ -152,7 +158,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("12:00 - 12:08").assertIsDisplayed()
 
         compose.onNodeWithText("Fingerboard 20 mm").performClick()
-        assertEquals(fingerboard.id, openedExercise)
+        assertEquals("the breakdown is opened for the day on screen", fingerboard.id to today, openedExercise)
     }
 
     @Test
@@ -216,6 +222,12 @@ class DayCardListTest : ScreenTest() {
 
     // --- adding ---------------------------------------------------------------------------
 
+    /**
+     * What the "Workout" answer then does — it asks for a name — is exercised in
+     * [DayCardNamingTest] rather than here, because that dialog carries a text field and a
+     * text field inside a dialog needs a 600 dp window under Robolectric (see [ScreenTest]).
+     * This class stays at the width of a real phone, so it stops at the menu.
+     */
     @Test
     fun `the Add button asks which of the two, and each answer calls its own action`() {
         day()
@@ -229,8 +241,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("Workout").assertIsDisplayed()
         compose.onNodeWithText("Single entry").assertIsDisplayed()
 
-        compose.onNodeWithText("Workout").performClick()
-        assertEquals(today, startedWorkout)
+        assertNull("neither answer has been given yet", startedWorkout)
         assertNull(loggedSingle)
     }
 
@@ -244,6 +255,86 @@ class DayCardListTest : ScreenTest() {
 
         assertEquals("the entry belongs to the day on screen, not to today", yesterday, loggedSingle)
         assertNull(startedWorkout)
+    }
+
+    // --- the long press, and what it is allowed to remove ---------------------------------
+
+    /** A finished workout of yesterday, so it is not the one in progress. */
+    private fun finishedWorkout(journal: Journal): Long {
+        val workout = journal.startWorkout(yesterday.toString(), at = "18:05")
+        journal.addExercise(workout, yesterday.toString(), bench, restSec = 150)
+        journal.strengthSet(bench, yesterday.toString(), at = "18:10", workoutId = workout)
+        journal.finishWorkout(workout, yesterday.toString(), at = "18:30")
+        return workout
+    }
+
+    @Test
+    fun `a long press on a workout card offers to delete it, and asks before it does`() {
+        val journal = Journal()
+        val workout = finishedWorkout(journal)
+        day(journal.events, date = yesterday)
+
+        // nothing on the card says so until it is asked: the gesture costs no screen space
+        compose.onNodeWithText("Delete workout").assertDoesNotExist()
+
+        compose.onNodeWithText("18:05 - 18:10").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Delete workout").performClick()
+        settle()
+
+        compose.onNodeWithText("Delete this workout?").assertExists()
+        assertNull("nothing may be written before the question is answered", deletedWorkout)
+
+        compose.onNodeWithText("Delete").performClick()
+        assertEquals(workout, deletedWorkout)
+    }
+
+    /**
+     * The confirmation names what disappears, not just the verb: deleting a workout takes its
+     * sets out of the volume, the records and the streak, and that is invisible from the card.
+     */
+    @Test
+    fun `the question says what stops counting, and can be answered no`() {
+        val journal = Journal()
+        finishedWorkout(journal)
+        day(journal.events, date = yesterday)
+
+        compose.onNodeWithText("18:05 - 18:10").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Delete workout").performClick()
+        settle()
+
+        compose.onNodeWithText("18:05 - 18:10 - 1 exercise, 1 set").assertExists()
+        compose.onNodeWithText(
+            "Everything recorded in it goes too - its sets stop counting towards volume, " +
+                "records and the streak. The journal keeps the original rows - removing is " +
+                "itself an entry, so this can be undone later rather than being the end of " +
+                "the evidence."
+        ).assertExists()
+
+        compose.onNodeWithText("Keep it").performClick()
+        assertNull("answering no must write nothing", deletedWorkout)
+    }
+
+    /**
+     * The two kinds that answer a long press with nothing, each for its own reason: a plan
+     * already carries its actions as icons, and a single-entry card is a GROUP whose entries
+     * are removed one at a time from the breakdown behind it.
+     */
+    @Test
+    fun `a planned card and a loose entry card raise no menu`() {
+        val journal = Journal()
+        journal.strengthSet(fingerboard, today.toString(), at = "12:00")
+        day(journal.events, slots = listOf(slot(7, "Gym", "18:00", today.toString())))
+
+        compose.onNodeWithText("Gym").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Delete workout").assertDoesNotExist()
+
+        compose.onNodeWithText("Fingerboard 20 mm").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Delete workout").assertDoesNotExist()
+        assertNull(deletedWorkout)
     }
 
     // --- the pencil and the bin, which belong to the calendar only -------------------------

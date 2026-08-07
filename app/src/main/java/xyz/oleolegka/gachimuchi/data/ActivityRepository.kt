@@ -4,6 +4,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
@@ -428,6 +430,33 @@ class ActivityRepository(private val db: AppDatabase) {
                     EntryAmended(targetUid = target.uid, fields = fields)
                 ),
             )
+        )
+    }
+
+    /**
+     * Names a workout that has already been started, or takes its name away.
+     *
+     * ── A correction like any other, which is why there is no new event ─────────
+     * The name lives in the start event's payload, and the start event is an event: an
+     * amendment naming it is exactly the mechanism [amendEntry] already provides, and
+     * [journalView] already folds. Inventing a `workout_renamed` type would be a second shape
+     * for every reader to learn, for a change that is a value in a payload.
+     *
+     * The snapshot rule is untouched. The name is still what THIS workout is called and never
+     * a lookup of the plan it came from (see [WorkoutStarted]); renaming a plan still leaves
+     * every workout ever started from it alone. What this adds is that the snapshot can be
+     * corrected — which is the same thing every other value in this journal can now do.
+     *
+     * A blank name is a REMOVAL of the name and not a name made of spaces: the payload gets a
+     * null, the readers fall back to the time of day, and a workout goes back to being
+     * nameless the way it started. Returns the id of the amendment, or null when [workoutId]
+     * names no row here.
+     */
+    suspend fun renameWorkout(workoutId: Long, name: String?): Long? {
+        val clean = name?.trim()?.takeIf { it.isNotEmpty() }
+        return amendEntry(
+            workoutId,
+            JsonObject(mapOf("name" to (clean?.let { JsonPrimitive(it) } ?: JsonNull))),
         )
     }
 

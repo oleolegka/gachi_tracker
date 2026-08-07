@@ -42,6 +42,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
 import xyz.oleolegka.gachimuchi.ui.screens.ConductorScreen
+import xyz.oleolegka.gachimuchi.ui.screens.DayEntriesScreen
 import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
@@ -137,6 +138,14 @@ fun GachiApp(viewModel: MainViewModel) {
     // the form detail screen is a MODE over the overview, like the logging screen: it has
     // exactly one way out and nothing to navigate to from inside it
     var detailExerciseId by rememberSaveable { mutableStateOf<Long?>(null) }
+    /*
+     * WHICH exercise and WHICH day the breakdown is showing. Two states rather than one pair,
+     * because rememberSaveable stores what the Bundle can carry and a pair of two nullables
+     * would need a Saver written for it — for a value whose halves are always set and cleared
+     * together anyway.
+     */
+    var entriesExerciseId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var entriesDate by rememberSaveable { mutableStateOf<String?>(null) }
     val today by viewModel.today.collectAsStateWithLifecycle()
     val iso = today.toString()
 
@@ -213,8 +222,9 @@ fun GachiApp(viewModel: MainViewModel) {
      * [MainViewModel.startWorkout], between the start event and this navigation, so there is
      * no frame on which the workout looks empty.
      */
-    val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?) -> Unit> { day, slotId ->
-        viewModel.startWorkout(day, slotId) { id ->
+    val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?, String?) -> Unit> {
+        day, slotId, name ->
+        viewModel.startWorkout(day, slotId, name) { id ->
             openLoggingNow(day.toString(), id)
         }
     }
@@ -226,12 +236,19 @@ fun GachiApp(viewModel: MainViewModel) {
 
     val dayActions = remember {
         DayActions(
-            startFromPlan = { slotId, day -> startWorkoutNow(day, slotId) },
-            startWorkout = { day -> startWorkoutNow(day, null) },
+            // a workout started from a plan takes the plan's name as its snapshot, so it is
+            // not asked for one — see ActivityRepository.startWorkout
+            startFromPlan = { slotId, day -> startWorkoutNow(day, slotId, null) },
+            startWorkout = { day, name -> startWorkoutNow(day, null, name) },
             logSingleEntry = { day -> openLoggingNow(day.toString(), null) },
             continueWorkout = { id -> continueWorkoutNow(id) },
             openWorkout = { id -> viewingWorkoutId = id },
-            openExercise = { id -> detailExerciseId = id },
+            openExercise = { id, day ->
+                entriesExerciseId = id
+                entriesDate = day.toString()
+            },
+            deleteWorkout = viewModel::deleteWorkout,
+            renameWorkout = viewModel::renameWorkout,
         )
     }
 
@@ -257,6 +274,7 @@ fun GachiApp(viewModel: MainViewModel) {
         showingWorkout = viewingWorkoutId != null,
         tab = tab,
         conducting = conductorOpen && timerRun != null,
+        showingDayEntries = entriesExerciseId != null && entriesDate != null,
     )
     BackHandler(enabled = step != BackStep.LeaveApp) {
         when (step) {
@@ -270,6 +288,11 @@ fun GachiApp(viewModel: MainViewModel) {
             }
 
             BackStep.CloseWorkout -> viewingWorkoutId = null
+            BackStep.CloseDayEntries -> {
+                entriesExerciseId = null
+                entriesDate = null
+            }
+
             is BackStep.SwitchTab -> tab = step.tab
             BackStep.LeaveApp -> Unit // unreachable: the handler is disabled in that state
         }
@@ -339,6 +362,8 @@ fun GachiApp(viewModel: MainViewModel) {
     val loggingOn = loggingDate
     val loggingWorkout = loggingWorkoutId
     val viewingWorkout = viewingWorkoutId
+    val entriesOf = entriesExerciseId
+    val entriesOn = entriesDate
 
     when {
         editorTarget != null -> ProgramEditorScreen(
@@ -409,6 +434,9 @@ fun GachiApp(viewModel: MainViewModel) {
                         viewModel.addSet(form, intoWorkoutId = workoutBeingLogged)
                     },
                     undoSet = viewModel::undoSet,
+                    // rows and all: the "added" events and every set of the exercise, so a
+                    // block taken out of the workout does not come straight back on its sets
+                    removeExercise = viewModel::deleteEntries,
                     finish = { viewModel.finishWorkout(workoutBeingLogged) },
                     startProtocolSet = { exercise, addedKg ->
                         viewModel.startProgramForExercise(exercise, addedKg)
@@ -470,6 +498,26 @@ fun GachiApp(viewModel: MainViewModel) {
                 null
             },
             onClose = { viewingWorkoutId = null },
+            // both append rather than rewrite; domain/Amendments.kt folds them for every reader
+            onAmendEntry = viewModel::amendEntry,
+            onDeleteEntry = viewModel::deleteEntry,
+        )
+
+        /*
+         * The breakdown of one exercise on one day, opened from a single-entry card. It sits
+         * below the workout screen for no reason other than that both are opened from a day
+         * card and neither leads to the other; what matters is that it is BELOW the form
+         * detail screen, which is now reached from inside it.
+         */
+        entriesOf != null && entriesOn != null -> DayEntriesScreen(
+            state = state,
+            exerciseId = entriesOf,
+            date = entriesOn,
+            onOpenHistory = { detailExerciseId = it },
+            onClose = {
+                entriesExerciseId = null
+                entriesDate = null
+            },
             // both append rather than rewrite; domain/Amendments.kt folds them for every reader
             onAmendEntry = viewModel::amendEntry,
             onDeleteEntry = viewModel::deleteEntry,

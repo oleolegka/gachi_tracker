@@ -91,6 +91,19 @@ data class WorkoutExercise(
     val restSec: Int?,
     /** In the order recorded. Cancelled sets are already gone (the reducers drop them). */
     val sets: List<ActivityEvent>,
+    /**
+     * The "exercise added" rows that put this exercise in the workout, if any.
+     *
+     * Carried because REMOVING an exercise from a workout is deleting them together with its
+     * sets, and a screen holding only the folded block would have nothing to name. Several,
+     * not one: adding an exercise again is how the rest is changed in an append-only journal
+     * (see [buildWorkout]), so an exercise whose rest was reconsidered twice has three rows
+     * saying it belongs here — and leaving any of them alive would put the card straight back.
+     *
+     * Empty for an exercise nobody added explicitly, which is present only because a set named
+     * it. Removing that one is removing its sets, and there is nothing else to take out.
+     */
+    val addedEventIds: List<Long> = emptyList(),
 ) {
     /**
      * The local catalog row number, for the screens that still navigate by one.
@@ -363,6 +376,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val sets = LinkedHashMap<String, MutableList<ActivityEvent>>()
     val links = LinkedHashMap<String, ExerciseLink>()
     val rests = HashMap<String, Int>()
+    val addedRows = HashMap<String, MutableList<Long>>()
     val unkeyed = ArrayList<ActivityEvent>()
     var finished = false
 
@@ -383,7 +397,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         }
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
-            rests[remember(ExerciseLink(added.exerciseUid, added.exerciseId))] = added.restSec
+            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId))
+            rests[key] = added.restSec
+            addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
         val activity = live[row.id] ?: continue
@@ -401,11 +417,39 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         // in each screen that would otherwise draw a blank heading
         name = started?.name?.takeIf { it.isNotBlank() },
         exercises = sets.map { (key, ofExercise) ->
-            WorkoutExercise(links.getValue(key), rests[key], ofExercise)
+            WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty())
         },
         entriesWithoutExercise = unkeyed,
         finished = finished,
     )
+}
+
+/**
+ * Every journal row a workout is made of: its start, the exercises added to it, the sets
+ * recorded into it, and its finish. Empty when [workoutId] names no live start event.
+ *
+ * ── Why removing a workout is not removing one event ────────────────────────────
+ * Deleting the start event alone WOULD take the workout off every screen, and it would leave
+ * its sets behind: a row pointing at a workout that is not in the journal is treated as
+ * unclaimed by [setsOutsideWorkouts], deliberately, so that a journal merged from elsewhere
+ * cannot hide training. The sets would reappear on the day as loose entries and keep counting
+ * towards volume, records and the streak — which is not what anybody pressing "delete this
+ * workout" is asking for, and worse, is the opposite of what the confirmation promised.
+ *
+ * So the whole workout is named here, in one place, and the caller deletes the lot. Reversible
+ * like every other deletion, one deletion per row.
+ *
+ * The rows are returned in journal order, the start first. Nothing depends on the order — a
+ * deletion names its target by identity — but a stable one keeps the writes readable in an
+ * export.
+ */
+fun workoutEventIds(events: List<JournalEvent>, workoutId: Long): List<Long> {
+    val journal = liveEvents(events)
+    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }?.first
+        ?: return emptyList()
+    return listOf(startRow.id) +
+        journal.filter { it.id != startRow.id && it.workoutRef()?.matches(startRow) == true }
+            .map { it.id }
 }
 
 /** Every workout of one training day, in the order they were started. */
