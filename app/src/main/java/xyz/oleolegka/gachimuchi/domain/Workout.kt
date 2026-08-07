@@ -104,8 +104,10 @@ data class Workout(
  * another journal (which has this app's columns nowhere) still lands in the right workout.
  */
 fun JournalEvent.workoutRef(): WorkoutRef? {
-    val id = workoutId ?: workoutExerciseAddedOrNull()?.workoutId
-    return if (workoutUid == null && id == null) null else WorkoutRef(workoutUid, id)
+    val added = workoutExerciseAddedOrNull()
+    val uid = workoutUid ?: added?.workoutUid
+    val id = workoutId ?: added?.workoutId
+    return if (uid == null && id == null) null else WorkoutRef(uid, id)
 }
 
 /** Payload of an "exercise added" row, or null for any other row and for an unreadable one. */

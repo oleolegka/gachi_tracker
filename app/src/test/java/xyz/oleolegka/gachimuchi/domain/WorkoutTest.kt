@@ -488,6 +488,60 @@ class WorkoutTest {
         assertEquals(start.uid, openWorkoutRow(listOf(start), today)?.uid)
     }
 
+    /**
+     * The "exercise added" event states its workout in its own payload as well as in the
+     * columns, so that it survives being exported and read back somewhere with no columns at
+     * all. This is that path: the columns are stripped and only the payload is left talking.
+     */
+    @Test
+    fun `an exercise-added event finds its workout from its payload alone`() {
+        val start = started(today)
+        val addedByUid = row(
+            TYPE_WORKOUT_EXERCISE_ADDED,
+            payloadJson.encodeToString(
+                WorkoutExerciseAdded(start.id, bench.id, 150, workoutUid = start.uid)
+            ),
+            "${today}T09:01:00",
+        )
+        val events = listOf(start, addedByUid)
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(listOf(bench.id), workout.exercises.map { it.exerciseId })
+        assertEquals(listOf(150), workout.exercises.map { it.restSec })
+    }
+
+    @Test
+    fun `an exercise-added event written before uids still finds its workout`() {
+        val start = started(today)
+        // no uid anywhere: the payload's number is all there is, which is every such row
+        // written before schema version 9
+        val addedByNumber = row(
+            TYPE_WORKOUT_EXERCISE_ADDED,
+            payloadJson.encodeToString(WorkoutExerciseAdded(start.id, bench.id, 150)),
+            "${today}T09:01:00",
+        )
+
+        assertEquals(1, buildWorkout(listOf(start, addedByNumber), start.id)!!.exercises.size)
+    }
+
+    @Test
+    fun `an exercise-added payload naming another workout is not pulled in by a stale number`() {
+        val mine = started(today, ts = "${today}T08:00:00")
+        val theirs = started(today, ts = "${today}T18:00:00")
+        val confused = row(
+            TYPE_WORKOUT_EXERCISE_ADDED,
+            // the number says "mine", the identity says "theirs"
+            payloadJson.encodeToString(
+                WorkoutExerciseAdded(mine.id, bench.id, 150, workoutUid = theirs.uid)
+            ),
+            "${today}T18:01:00",
+        )
+        val events = listOf(mine, theirs, confused)
+
+        assertTrue(buildWorkout(events, mine.id)!!.exercises.isEmpty())
+        assertEquals(1, buildWorkout(events, theirs.id)!!.exercises.size)
+    }
+
     @Test
     fun `a row pointing at a workout this journal does not hold counts as loose`() {
         // a dangling link, which is what a half-merged journal looks like. The only

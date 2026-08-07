@@ -141,14 +141,18 @@ class ActivityRepository(private val db: AppDatabase) {
      * [WorkoutExerciseAdded] for why the payload carries it too.
      */
     suspend fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int): Long {
+        val workoutUid = db.events().byId(workoutId)?.uid
         val id = db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_WORKOUT_EXERCISE_ADDED,
                 payload = payloadJson.encodeToString(
-                    WorkoutExerciseAdded(workoutId = workoutId, exerciseId = exerciseId, restSec = restSec)
+                    WorkoutExerciseAdded(
+                        workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
+                        workoutUid = workoutUid,
+                    )
                 ),
                 workoutId = workoutId,
-                workoutUid = db.events().byId(workoutId)?.uid,
+                workoutUid = workoutUid,
             )
         )
         setDefaultRest(exerciseId, restSec)
