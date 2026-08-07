@@ -154,12 +154,8 @@ class SlotEditorTest : ScreenTest() {
         type("Time (optional)", "170")
         compose.onNodeWithText("Add to the plan").assertIsNotEnabled()
 
-        /*
-         * The last digit arrives as a REPLACEMENT of the field rather than as one more
-         * keystroke, and that is not laziness — see the test below, which pins down what
-         * really happens when the digits arrive one at a time. What is being asserted here
-         * is only the gate: a complete time opens Save and is stored as typed.
-         */
+        // what is being asserted here is only the gate: a complete time opens Save and is
+        // stored as typed. The keystroke-by-keystroke route in is the test below
         compose.onNodeWithText("Time (optional)").performTextReplacement("1705")
         settle()
         compose.onNodeWithText("Add to the plan").assertIsEnabled().performClick()
@@ -168,20 +164,17 @@ class SlotEditorTest : ScreenTest() {
     }
 
     /**
-     * Typing the digits ONE AT A TIME does not give the time that was typed.
+     * The digits typed ONE AT A TIME give the time that was typed.
      *
-     * "1", "7", "0", "5" ends up as 17:50 rather than 17:05. The field re-writes its own
-     * contents on every keystroke to slot the colon in, and the caret does not move with the
-     * character that was inserted in front of it: after the third digit the text reads "17:0"
-     * with the caret still at offset 3, so the fourth digit lands BEFORE the zero.
-     *
-     * This is how a phone is actually used — the four-digit test above types the whole string
-     * in one go, which is why it never saw this. The test is written to the behaviour as it
-     * IS, so that fixing it fails here and someone has to come and read this: the fix is a
-     * caret position, and it belongs to whoever owns the editor.
+     * This is how a phone is actually used, and it is the case the field has to work for: it
+     * rewrites its own contents on every keystroke to slot the colon in, and each rewrite moves
+     * the caret. After the third digit the text reads "17:0" and the caret has to be behind the
+     * zero, at offset 4 — left where the keyboard put it, at 3, the fourth digit lands in front
+     * of the zero and 17:05 is stored as 17:50, silently. The four-digit test above types the
+     * whole string in one go, so it says nothing about this.
      */
     @Test
-    fun `a time typed one digit at a time comes out with the last two swapped`() {
+    fun `a time typed one digit at a time comes out as it was typed`() {
         editor()
         nameIt()
 
@@ -189,7 +182,30 @@ class SlotEditorTest : ScreenTest() {
 
         compose.onNodeWithText("Add to the plan").performClick()
         settle()
-        assertEquals("the caret does not follow the colon that was inserted", "17:50", saved?.timeText)
+        assertEquals("the caret must follow the colon that was inserted", "17:05", saved?.timeText)
+    }
+
+    /**
+     * A time put in from OUTSIDE the field — a quick chip, the clock, Clear — takes the caret
+     * with it. The field holds its own caret now, so a value written past it would leave that
+     * caret pointing into a string that is no longer there, and the next keystroke would be
+     * placed by it.
+     */
+    @Test
+    fun `a time cleared after a chip can be typed again from scratch`() {
+        editor()
+        nameIt()
+
+        inBody("18:00").performClick()
+        settle()
+        inBody("Clear").performClick()
+        settle()
+
+        listOf("1", "7", "0", "5").forEach { type("Time (optional)", it) }
+
+        compose.onNodeWithText("Add to the plan").performClick()
+        settle()
+        assertEquals("17:05", saved?.timeText)
     }
 
     @Test
