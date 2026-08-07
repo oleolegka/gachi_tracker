@@ -445,6 +445,30 @@ private fun SubmitButton(repeat: Boolean, enabled: Boolean, label: String? = nul
     }
 }
 
+/**
+ * The warm-up toggle, shared by the two forms that can carry one.
+ *
+ * ── Off on arrival, always, and never prefilled ─────────────────────────────────
+ * A warm-up is a decision made about ONE set, not a property of the exercise, so the card
+ * opens on "working set" however the previous set was marked. That is also what keeps the
+ * ordinary move at two taps — raise the form, press the button — because the control that
+ * matters most here is the one nobody has to touch.
+ *
+ * Getting this backwards is the expensive direction: a card that arrived pre-ticked from a
+ * ramp-up would quietly file the working set that follows as a warm-up, and a warm-up counts
+ * towards neither volume nor records. The set would be in the journal, on the day's feed, and
+ * missing from every number the training is judged by.
+ */
+@Composable
+private fun WarmupChip(selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text("Warm-up") },
+        modifier = Modifier.heightIn(min = 40.dp),
+    )
+}
+
 @Composable
 internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastStrengthSet(state.events, exercise.link) }
@@ -453,11 +477,19 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
     var weight by remember(exercise.id, last) { mutableStateOf(prefillWeight?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var ownWeight by remember(exercise.id, last) { mutableStateOf(last?.ownWeight ?: false) }
+    var warmup by remember(exercise.id, last) { mutableStateOf(false) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
+    /*
+     * The warm-up flag is part of what makes a set "the same again": ramping up and then
+     * repeating the ramp-up is a repeat, and a working set after one is not. Comparing it
+     * against the previous set rather than against false is what keeps the button honest in
+     * both directions — the card starts unticked, so a working set after a working set still
+     * reads "Repeat set" and still costs one tap.
+     */
     val untouched = last != null && weightValue == prefillWeight &&
-        repsValue == last.reps && ownWeight == last.ownWeight
+        repsValue == last.reps && ownWeight == last.ownWeight && warmup == last.warmup
 
     StepperField(
         label = if (ownWeight) "Added weight, kg (empty means body weight only)" else "Weight, kg",
@@ -472,17 +504,21 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
         steps = listOf(1.0),
         decimal = false,
     )
-    FilterChip(
-        selected = ownWeight,
-        onClick = { ownWeight = !ownWeight },
-        label = { Text("Own body weight") },
-        modifier = Modifier.heightIn(min = 40.dp),
-    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = ownWeight,
+            onClick = { ownWeight = !ownWeight },
+            label = { Text("Own body weight") },
+            modifier = Modifier.heightIn(min = 40.dp),
+        )
+        WarmupChip(warmup) { warmup = !warmup }
+    }
     SubmitButton(repeat = untouched, enabled = repsValue != null && repsValue > 0) {
         onAddSet(
             strengthSetOf(
                 exercise = exercise, opDate = opDate, reps = repsValue!!,
                 weightKg = weightValue, ownWeight = ownWeight, addedKg = weightValue,
+                warmup = warmup,
             )
         )
     }
@@ -497,10 +533,12 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
+    var warmup by remember(exercise.id, last) { mutableStateOf(false) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
-    val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps
+    val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
+        warmup == last.warmup
 
     StepperField(
         label = "Added weight, kg",
@@ -515,11 +553,17 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         steps = listOf(1.0),
         decimal = false,
     )
+    WarmupChip(warmup) { warmup = !warmup }
     SubmitButton(
         repeat = untouched,
         enabled = (weightValue != null && weightValue > 0) || (repsValue != null && repsValue > 0),
     ) {
-        onAddSet(holdSetOf(exercise = exercise, opDate = opDate, addedKg = weightValue, reps = repsValue))
+        onAddSet(
+            holdSetOf(
+                exercise = exercise, opDate = opDate, addedKg = weightValue, reps = repsValue,
+                warmup = warmup,
+            )
+        )
     }
 }
 

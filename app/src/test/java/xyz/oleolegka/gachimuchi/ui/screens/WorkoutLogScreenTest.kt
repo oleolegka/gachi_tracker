@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.annotation.Config
@@ -310,6 +311,52 @@ class WorkoutLogScreenTest : ScreenTest() {
         assertEquals(past, set.opDate)
         assertEquals(5, set.reps)
         assertEquals(60.0, set.weightKg!!, 0.0001)
+    }
+
+    // --- the warm-up flag -------------------------------------------------------------------
+
+    /**
+     * A warm-up counts towards neither volume nor records, so the flag has to reach the payload
+     * — a chip that looks ticked and writes nothing is worse than no chip, because the set then
+     * inflates the tonnage of a week that did not earn it.
+     */
+    @Test
+    fun `ticking warm-up writes the flag onto the set`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Warm-up").performClick()
+        // the clock is held still (see ScreenTest), so the tick needs a frame to reach the tree
+        settle()
+
+        // no longer the same set as the last one, and the button stops claiming it is
+        compose.onNodeWithText("Add set").performClick()
+
+        assertTrue("the set must be marked as a warm-up", (logged.single() as StrengthSet).warmup)
+    }
+
+    /**
+     * The other half, and the one that matters more: the ordinary working set is still two taps
+     * and is still NOT a warm-up. A card arriving pre-ticked would quietly file working sets as
+     * ramp-ups, which is how a set ends up in the journal and missing from every number.
+     */
+    @Test
+    fun `a working set stays two taps and is not marked as a warm-up`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Warm-up").assertExists()
+        compose.onNodeWithText("Repeat set").performClick()
+
+        assertFalse("an untouched card must record a working set", (logged.single() as StrengthSet).warmup)
     }
 
     // --- putting an exercise into the workout ---------------------------------------------
