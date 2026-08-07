@@ -2,7 +2,6 @@ package xyz.oleolegka.gachimuchi.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,14 +65,31 @@ import java.time.LocalDate
  * screen you stand in the gym with; rewriting the schedule from it is not a thing anyone
  * does mid-set, and a bin one mis-tap from "Start" is a bad trade. [DayActions] leaves both
  * null there and no icons are drawn.
+ *
+ * ── A long press acts on the card (§14.1) ───────────────────────────────────────
+ * A WORKOUT card answers a long press with its own menu, which is where removing it lives —
+ * see [ItemActions] for why the gesture rather than a bin on the row, and why removal is
+ * behind one more question.
+ *
+ * The other three kinds answer nothing, and each for its own reason. A PLANNED card already
+ * carries its two actions as icons where they belong, and giving it a second way to reach the
+ * same pair would be the duplication this change is undoing rather than more of it. A SINGLE
+ * card is a GROUP of entries, and "delete these five" is not a thing anyone means by long
+ * pressing one card — its entries are removed one at a time from the breakdown the card opens.
  */
 @Immutable
 data class DayActions(
     /** Begin a workout from a planned session, on the given day. */
     val startFromPlan: (Long, LocalDate) -> Unit,
 
-    /** Begin a workout with no plan behind it. */
-    val startWorkout: (LocalDate) -> Unit,
+    /**
+     * Begin a workout with no plan behind it, under [name] or under none.
+     *
+     * The name is NULLABLE and usually null: it is asked for on the way in, with the field
+     * empty and the button already enabled, so that giving one is an option and never a toll
+     * (§14.3). A workout with no name is shown by its time of day.
+     */
+    val startWorkout: (date: LocalDate, name: String?) -> Unit,
 
     /** Record something on its own, outside any workout. */
     val logSingleEntry: (LocalDate) -> Unit,
@@ -84,8 +100,24 @@ data class DayActions(
     /** Look inside a workout that is not running. */
     val openWorkout: (Long) -> Unit,
 
-    /** Look at the history of one exercise — where a single-entry card leads. */
-    val openExercise: (Long) -> Unit,
+    /**
+     * Look at what was done of one exercise ON THIS DAY — where a single-entry card leads.
+     *
+     * The DAY travels with the exercise, and that is the whole of the change §14.2 asked for:
+     * this card used to open the all-time statistics of the exercise, which answers a question
+     * nobody is asking at the moment they tap a card saying "3 entries". The charts are one tap
+     * further on, from the breakdown.
+     */
+    val openExercise: (exerciseId: Long, date: LocalDate) -> Unit,
+
+    /**
+     * Remove a workout and everything recorded into it — behind the long press and behind a
+     * confirmation, never on a tap.
+     */
+    val deleteWorkout: (Long) -> Unit,
+
+    /** Name a workout that is already going, or clear its name with null. */
+    val renameWorkout: (workoutId: Long, name: String?) -> Unit,
 
     /** The calendar's own two, absent everywhere else. */
     val editSlot: ((Long) -> Unit)? = null,
@@ -103,6 +135,9 @@ fun DayCardList(
     actions: DayActions,
     modifier: Modifier = Modifier,
 ) {
+    /** Whether the question "what shall this one be called" is on screen. */
+    var naming by remember(day.date) { mutableStateOf(false) }
+
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         if (day.isEmpty) {
             /*
@@ -129,11 +164,27 @@ fun DayCardList(
 
         if (day.canRecord) {
             AddMenuButton(
-                onWorkout = { actions.startWorkout(date) },
+                onWorkout = { naming = true },
                 onSingleEntry = { actions.logSingleEntry(date) },
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
+    }
+
+    if (naming) {
+        NameDialog(
+            title = "Start a workout",
+            label = "Name (optional)",
+            initial = "",
+            confirmLabel = "Start",
+            note = "Leave it empty and the card shows the time of day instead. It can be " +
+                "named later from the card.",
+            onConfirm = { name ->
+                naming = false
+                actions.startWorkout(date, name)
+            },
+            onDismiss = { naming = false },
+        )
     }
 }
 
@@ -151,7 +202,7 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         DayCardAction.START -> card.slotId?.let { id -> { actions.startFromPlan(id, date) } }
         DayCardAction.CONTINUE -> card.workoutId?.let { id -> { actions.continueWorkout(id) } }
         DayCardAction.OPEN -> when (card.kind) {
-            DayCardKind.SINGLE -> card.exerciseId?.let { id -> { actions.openExercise(id) } }
+            DayCardKind.SINGLE -> card.exerciseId?.let { id -> { actions.openExercise(id, date) } }
             else -> card.workoutId?.let { id -> { actions.openWorkout(id) } }
         }
 
@@ -164,13 +215,36 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         DayCardKind.SINGLE -> colors.inkMuted
     }
 
+    /** The workout this card is about, for the actions a long press offers. */
+    val workoutId = card.workoutId.takeIf {
+        card.kind == DayCardKind.RUNNING || card.kind == DayCardKind.DONE
+    }
+    var confirmingDelete by remember(card.key) { mutableStateOf(false) }
+    var renaming by remember(card.key) { mutableStateOf(false) }
+    val menu = if (workoutId == null) {
+        emptyList()
+    } else {
+        listOf(
+            // the harmless one first: a menu whose top entry deletes is a menu that gets
+            // dismissed rather than read
+            ItemAction(if (card.workoutName == null) "Name it" else "Rename") { renaming = true },
+            ItemAction("Delete workout", destructive = true) { confirmingDelete = true },
+        )
+    }
+
+    ItemActions(
+        title = card.title,
+        actions = menu,
+        onTap = onTap,
+        modifier = Modifier.fillMaxWidth(),
+    ) { press ->
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, colors.border, RoundedCornerShape(12.dp))
-            .then(if (onTap != null) Modifier.clickable(onClick = onTap) else Modifier),
+            .then(press),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -232,6 +306,42 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         } else {
             Box(Modifier.width(12.dp))
         }
+    }
+    }
+
+    if (renaming && workoutId != null) {
+        NameDialog(
+            title = if (card.workoutName == null) "Name this workout" else "Rename this workout",
+            label = "Name (optional)",
+            // empty for a workout nobody named, rather than the time range it is shown by:
+            // the range is a fact about the day and was never a name to edit
+            initial = card.workoutName.orEmpty(),
+            confirmLabel = "Save",
+            note = "Leave it empty and the card goes back to showing the time of day.",
+            onConfirm = { name ->
+                renaming = false
+                actions.renameWorkout(workoutId, name)
+            },
+            onDismiss = { renaming = false },
+        )
+    }
+
+    if (confirmingDelete && workoutId != null) {
+        ConfirmRemoveDialog(
+            title = "Delete this workout?",
+            // the card's own two lines, so the dialog is unmistakably about the card that
+            // was pressed and not about the one next to it
+            subject = listOf(card.title, card.subtitle).filter { it.isNotEmpty() }
+                .joinToString(" - "),
+            explanation = "Everything recorded in it goes too - its sets stop counting " +
+                "towards volume, records and the streak. $REMOVAL_IS_REVERSIBLE",
+            confirmLabel = "Delete",
+            onConfirm = {
+                confirmingDelete = false
+                actions.deleteWorkout(workoutId)
+            },
+            onDismiss = { confirmingDelete = false },
+        )
     }
 }
 

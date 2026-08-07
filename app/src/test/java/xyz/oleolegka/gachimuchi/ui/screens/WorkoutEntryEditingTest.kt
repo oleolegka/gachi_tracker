@@ -1,11 +1,13 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,21 +80,39 @@ class WorkoutEntryEditingTest : ScreenTest() {
         return id
     }
 
-    /** Opens the editor on the OLDER of the two sets. */
-    private fun openEditorOnFirstSet(journal: Journal, workoutId: Long) {
+    /** Raises the action menu of the OLDER of the two sets. */
+    private fun pressAndHoldFirstSet(journal: Journal, workoutId: Long) {
         show(journal, workoutId)
-        compose.onAllNodesWithText("Edit")[0].performClick()
+        compose.onNodeWithText("60 kg × 5 reps").performTouchInput { longClick() }
+        settle()
+    }
+
+    /** Opens the editor on the OLDER of the two sets, through the gesture that offers it. */
+    private fun openEditorOnFirstSet(journal: Journal, workoutId: Long) {
+        pressAndHoldFirstSet(journal, workoutId)
+        compose.onNodeWithText("Correct").performClick()
         settle()
         settle()
     }
 
+    /**
+     * The gesture is the whole of the affordance now: there is no per-row button, and the
+     * older set is reached exactly as the newer one is.
+     */
     @Test
-    fun `every set carries a way to correct it, not only the newest one`() {
+    fun `a long press on any set offers to correct it and to remove it`() {
         val journal = Journal()
-        show(journal, workout(journal))
+        val id = workout(journal)
 
-        // one per set: the older is exactly as reachable as the newer, which is the whole point
-        assertEquals(2, compose.onAllNodesWithText("Edit").fetchSemanticsNodes().size)
+        show(journal, id)
+        // nothing on the row itself: a list of finished sets carries no controls
+        assertEquals(0, compose.onAllNodesWithText("Edit").fetchSemanticsNodes().size)
+        compose.onNodeWithText("Correct").assertDoesNotExist()
+
+        compose.onNodeWithText("60 kg × 5 reps").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Correct").assertExists()
+        compose.onNodeWithText("Remove entry").assertExists()
     }
 
     /**
@@ -174,16 +194,46 @@ class WorkoutEntryEditingTest : ScreenTest() {
     @Test
     fun `removing an entry asks before it writes, and then removes that entry`() {
         val journal = Journal()
-        openEditorOnFirstSet(journal, workout(journal))
+        pressAndHoldFirstSet(journal, workout(journal))
 
-        compose.onNodeWithText("Remove").performClick()
+        compose.onNodeWithText("Remove entry").performClick()
         settle()
 
         compose.onNodeWithText("Remove this entry?").assertExists()
         assertTrue("nothing may be written before the question is answered", deleted.isEmpty())
 
+        // the older set, not the newest: "Undo last" could never have reached this one
         compose.onNodeWithText("Remove").performClick()
         assertEquals(listOf(3L), deleted)
+    }
+
+    /** The question can be answered no, and answering no writes nothing at all. */
+    @Test
+    fun `keeping an entry at the question leaves the journal alone`() {
+        val journal = Journal()
+        pressAndHoldFirstSet(journal, workout(journal))
+
+        compose.onNodeWithText("Remove entry").performClick()
+        settle()
+        compose.onNodeWithText("Keep it").performClick()
+        settle()
+
+        assertTrue("answering no must write nothing", deleted.isEmpty())
+        compose.onNodeWithText("Remove this entry?").assertDoesNotExist()
+        compose.onNodeWithText("60 kg × 5 reps").assertExists()
+    }
+
+    /**
+     * ONE path to a deletion, which is the point of moving it out of the editor: the dialog
+     * that corrects an entry no longer removes one.
+     */
+    @Test
+    fun `the editor offers no second way to remove the entry it is correcting`() {
+        val journal = Journal()
+        openEditorOnFirstSet(journal, workout(journal))
+
+        compose.onNodeWithText("Correct this entry").assertExists()
+        compose.onNodeWithText("Remove").assertDoesNotExist()
     }
 
     /**

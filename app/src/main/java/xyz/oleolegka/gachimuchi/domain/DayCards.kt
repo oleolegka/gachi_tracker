@@ -82,6 +82,15 @@ data class DayCard(
     val slotId: Long? = null,
     /** [DayCardKind.RUNNING] and [DayCardKind.DONE]: the workout to open. */
     val workoutId: Long? = null,
+    /**
+     * What the workout was CALLED, or null when nobody named it.
+     *
+     * Carried beside [title] rather than inferred from it: an unnamed workout is titled by its
+     * time range, so a screen offering to rename one would otherwise have to guess whether the
+     * title it is holding is a name or a clock — and would offer "18:05 - 19:35" as the value
+     * to edit. Null here is the honest "nobody named it", and the field a rename starts empty.
+     */
+    val workoutName: String? = null,
     /** [DayCardKind.SINGLE]: the exercise its entries are about, when they name one. */
     val exerciseId: Long? = null,
 )
@@ -253,6 +262,7 @@ private fun placedWorkout(
             recordLine = recordLine(entries.map { it.id }, recordOf),
             slotId = workout.slotId,
             workoutId = workout.id,
+            workoutName = name,
         ),
     )
 }

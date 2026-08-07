@@ -3,9 +3,11 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -87,6 +89,8 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val added = mutableListOf<Pair<Long, Int>>()
     private val logged = mutableListOf<ActivityForm>()
     private val undone = mutableListOf<Long>()
+    /** The rows an exercise removed from the workout took with it. */
+    private val removedRows = mutableListOf<List<Long>>()
     private val started = mutableListOf<Pair<String, Double?>>()
     private var conductorOpened = 0
     private var summaryDismissed = 0
@@ -115,6 +119,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                     createExercise = { _, _, _, _, _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
+                    removeExercise = { ids -> removedRows += ids },
                     finish = { finishes++ },
                     startProtocolSet = { exercise, kg -> started += exercise.name to kg },
                     openConductor = { conductorOpened++ },
@@ -679,5 +684,75 @@ class WorkoutLogScreenTest : ScreenTest() {
         // bench set and the newest thing the workout wrote
         assertEquals(listOf(5L), undone)
         assertEquals(0, closed)
+    }
+
+    // --- taking an exercise out of the workout (14.1) --------------------------------------
+
+    /**
+     * The rows a removal has to name: the "added" event AND every set of it.
+     *
+     * Removing only the "added" row would put the card straight back - `buildWorkout` admits an
+     * exercise on the first set of it as readily as on an explicit add, because a set logged
+     * under an exercise nobody added is still training that happened.
+     *
+     * In [supersetWorkout] the journal is: 1 start, 2 bench added, 3 abs added, 4 and 5 the two
+     * bench sets. So bench is rows 2, 4 and 5.
+     */
+    @Test
+    fun `a long press on an exercise card removes it with every set under it`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Remove from this workout").assertDoesNotExist()
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Remove from this workout").performClick()
+        settle()
+
+        compose.onNodeWithText("Remove this exercise from the workout?").assertExists()
+        compose.onNodeWithText(
+            "Its 2 sets go with it and stop counting towards volume, records and the streak. " +
+                "The journal keeps the original rows - removing is itself an entry, so this " +
+                "can be undone later rather than being the end of the evidence."
+        ).assertExists()
+        assertTrue("nothing may be written before the question is answered", removedRows.isEmpty())
+
+        compose.onNodeWithText("Remove").performClick()
+        assertEquals(listOf(listOf(2L, 4L, 5L)), removedRows)
+    }
+
+    /** An exercise added and never done takes only its own row, and says so. */
+    @Test
+    fun `removing an exercise with no sets says nothing stops counting`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Abs").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Remove from this workout").performClick()
+        settle()
+
+        compose.onNodeWithText(
+            "Nothing has been recorded under it yet, so nothing stops counting. The journal " +
+                "keeps the original rows - removing is itself an entry, so this can be undone " +
+                "later rather than being the end of the evidence."
+        ).assertExists()
+
+        compose.onNodeWithText("Remove").performClick()
+        assertEquals(listOf(listOf(3L)), removedRows)
+    }
+
+    /** The tap still logs: the gesture was added beside the card's action, not over it. */
+    @Test
+    fun `a tap on a card still raises the entry form after the gesture was added`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Bench press").performClick()
+        settle()
+
+        compose.onNodeWithText("Remove from this workout").assertDoesNotExist()
+        compose.onNodeWithText("Repeat set").assertExists()
     }
 }
