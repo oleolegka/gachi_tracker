@@ -40,10 +40,79 @@ class JournalTest {
             payloadJson.encodeToString(SetCancel(first.id)),
         )
         val events = listOf(first, cancel)
-        assertEquals(setOf(first.id), cancelledEventIds(events))
+        assertEquals(setOf(first.uid), cancelledEventUids(events))
         assertEquals(0, readActivities(events).size)
         assertEquals(1, readActivities(events, includeCancelled = true).size)
         assertEquals(2, events.size) // the journal itself is untouched
+    }
+
+    // --- the reversal link said in uids -----------------------------------------------
+
+    /** The same reversal, said with a number, with a uid, or with both. */
+    private fun reversalOf(
+        target: JournalEvent,
+        withNumber: Boolean,
+        withUid: Boolean,
+    ) = JournalEvent(
+        99, "2026-08-06T11:00:00", 1, 1, TYPE_SET_CANCEL,
+        payloadJson.encodeToString(
+            SetCancel(
+                cancels = if (withNumber) target.id else null,
+                cancelsUid = if (withUid) target.uid else null,
+            )
+        ),
+    )
+
+    @Test
+    fun `a reversal folds the same whether it names a number, a uid, or both`() {
+        val set = strength("2026-08-06", "Bench press", 60.0, 5, 1)
+
+        for (shape in listOf(true to true, false to true, true to false)) {
+            val (withNumber, withUid) = shape
+            val events = listOf(set, reversalOf(set, withNumber, withUid))
+            assertEquals(
+                "reversal written with number=$withNumber uid=$withUid",
+                setOf(set.uid),
+                cancelledEventUids(events),
+            )
+            assertEquals(0, readActivities(events).size)
+        }
+    }
+
+    /**
+     * THE FAILURE THE UID EXISTS TO PREVENT. Two journals merged by union both hold a row
+     * numbered 1, and a reversal that came from one of them would otherwise cancel the other's
+     * set — somebody's training quietly disappearing with nothing on screen to show for it.
+     */
+    @Test
+    fun `a reversal carrying a uid never falls back to its stale number`() {
+        val mine = strength("2026-08-06", "Bench press", 60.0, 5, 1)
+        val theirs = strength("2026-08-06", "Squat", 90.0, 5, 2)
+        val confused = JournalEvent(
+            99, "2026-08-06T11:00:00", 1, 1, TYPE_SET_CANCEL,
+            // the number says "mine", the identity says "theirs"
+            payloadJson.encodeToString(SetCancel(cancels = mine.id, cancelsUid = theirs.uid)),
+        )
+
+        assertEquals(setOf(theirs.uid), cancelledEventUids(listOf(mine, theirs, confused)))
+    }
+
+    @Test
+    fun `a reversal that names nothing at all cancels nothing`() {
+        val set = strength("2026-08-06", "Bench press", 60.0, 5, 1)
+        val empty = JournalEvent(
+            99, "2026-08-06T11:00:00", 1, 1, TYPE_SET_CANCEL,
+            payloadJson.encodeToString(SetCancel()),
+        )
+        // and a number that names no row here resolves to nothing rather than to whatever
+        // happens to hold that number
+        val stray = JournalEvent(
+            100, "2026-08-06T11:01:00", 1, 1, TYPE_SET_CANCEL,
+            payloadJson.encodeToString(SetCancel(cancels = 4242)),
+        )
+
+        assertEquals(emptySet<String>(), cancelledEventUids(listOf(set, empty, stray)))
+        assertEquals(1, readActivities(listOf(set, empty, stray)).size)
     }
 
     @Test
@@ -128,7 +197,7 @@ class JournalTest {
         )
 
         // the readable reversal still counts; the unreadable one is simply not evidence
-        assertEquals(setOf(first.id), cancelledEventIds(listOf(first, broken, real)))
+        assertEquals(setOf(first.uid), cancelledEventUids(listOf(first, broken, real)))
         assertEquals(0, readActivities(listOf(first, broken, real)).size)
     }
 }

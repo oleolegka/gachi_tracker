@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import xyz.oleolegka.gachimuchi.domain.newUid
 
 /**
  * The local database (SQLite via Room). The schema repeats the server one (`bot/db.py`):
@@ -33,7 +34,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 7,
+    version = 9,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -113,19 +114,72 @@ abstract class AppDatabase : RoomDatabase() {
          * Version 2 -> 3: two columns on `programs` — the optional link to a catalog
          * exercise, and the heading the program is filed under.
          *
-         * Purely additive and both defaulted, so every existing program comes through as
-         * "not linked, no heading", which is exactly what it was. No foreign key is declared
-         * on the link — see [ProgramEntity] for why a hand-written protocol must not be
-         * deletable by way of the catalog.
+         * Additive in effect: every existing program comes through as "not linked, no
+         * heading", which is exactly what it was. No foreign key is declared on the link —
+         * see [ProgramEntity] for why a hand-written protocol must not be deletable by way of
+         * the catalog.
          *
-         * `category` is NOT NULL with a default because the entity declares a non-null
-         * String: Room compares the database against the entities on the next open, and a
-         * nullable column here would fail that check rather than fail quietly.
+         * ── Why this REBUILDS the table instead of two ALTER statements ─────────────
+         * `category` is NOT NULL because the entity declares a non-null String, and SQLite
+         * refuses to add a NOT NULL column to a populated table without a DEFAULT. That
+         * default is not free: it stays on the column forever, so an upgraded phone ended up
+         * with `category TEXT NOT NULL DEFAULT ''` where a fresh install has `category TEXT
+         * NOT NULL`. Two different databases, both passing every check the app had.
+         *
+         * Room does not catch it. Its identity hash is computed from column names,
+         * affinities, nullability and indices — a DEFAULT clause is not part of it — so both
+         * shapes verify identically on open. What catches it is data/SchemaParityTest, which
+         * walks a database up from version 1 and compares `PRAGMA table_info` against a fresh
+         * install column by column. That test is the reason this rebuild exists.
+         *
+         * The rebuild is the same sequence [MIGRATION_6_7] uses and is safe for the same
+         * reason: `program_groups` cascades from `programs`, and dropping a parent table with
+         * foreign keys ENABLED would delete its children, but Room turns foreign keys on in
+         * `onOpen`, which runs after migrations. The AUTOINCREMENT counter is carried across
+         * for the reason spelled out in [MIGRATION_6_7]: a rebuilt table restarts its counter
+         * at the highest surviving id, and a reissued program id would adopt the groups of a
+         * program that was deleted.
          */
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `programs` ADD COLUMN `exercise_id` INTEGER")
-                db.execSQL("ALTER TABLE `programs` ADD COLUMN `category` TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v3` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'programs'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_programs` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`prepare_sec` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`exercise_id` INTEGER, " +
+                        "`category` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_programs` (`id`, `space_id`, `name`, `prepare_sec`, " +
+                        "`position`, `created_at`, `exercise_id`, `category`) " +
+                        "SELECT `id`, `space_id`, `name`, `prepare_sec`, `position`, `created_at`, " +
+                        "NULL, '' FROM `programs`"
+                )
+                db.execSQL("DROP TABLE `programs`")
+                db.execSQL("ALTER TABLE `_new_programs` RENAME TO `programs`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_programs_space_id_id` " +
+                        "ON `programs` (`space_id`, `id`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` has no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v3`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v3`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v3`")
             }
         }
 
@@ -326,9 +380,253 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 7 -> 8: every stored row gets a `uid` — the identity that survives leaving
+         * this phone (see [Entities.kt][EventEntity] and domain/Uid.kt).
+         *
+         * ── Why five tables are rebuilt rather than altered ─────────────────────────
+         * The column is NOT NULL and unique. SQLite will not add a NOT NULL column to a
+         * populated table without a DEFAULT, and a default would be the same value on every
+         * row, which is the exact opposite of an identity. So each table is rebuilt with the
+         * column in place, filled row by row, and only THEN given its unique index — if a
+         * single row were left without an id of its own, the index creation is what fails,
+         * loudly, instead of the database quietly holding duplicates.
+         *
+         * ── The ids of old rows are seeded from the times those rows carry ──────────
+         * A UUIDv7 begins with the millisecond it was minted at, and the point of that is
+         * that plain string order is creation order. Stamping "now" onto a decade of history
+         * would throw that away and sort every migrated row after every future one. So each
+         * row's own recorded time is used where the table has one (`events.ts`,
+         * `created_at` elsewhere), and the migration's own clock only where there is none —
+         * `slot_exercises`, which records no time. Those lines then sort among themselves by
+         * insertion order rather than by anything meaningful, which is the honest answer:
+         * the table never knew when its rows were written.
+         *
+         * A time that cannot be parsed also falls back to the migration clock rather than
+         * failing the upgrade. A uid seeded from the wrong millisecond is still a perfectly
+         * good identity; refusing to open the database over one malformed timestamp is not.
+         *
+         * ── Foreign keys and id counters ────────────────────────────────────────────
+         * Same two hazards as [MIGRATION_6_7], handled the same way. `programs` and `slots`
+         * are parents of cascading children, and dropping a parent with foreign keys ENABLED
+         * would delete those children — Room turns foreign keys on after migrations run, so
+         * they are off here. And every rebuilt table has its AUTOINCREMENT counter carried
+         * across, so an id belonging to a deleted row is never handed out a second time.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v8` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` IN ('events', 'exercises', 'slots', 'slot_exercises', 'programs')"
+                )
+
+                rebuildWithUid(
+                    db,
+                    table = "events",
+                    ddl = "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`ts` TEXT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`author_id` INTEGER NOT NULL, " +
+                        "`type` TEXT NOT NULL, " +
+                        "`payload` TEXT NOT NULL, " +
+                        "`workout_id` INTEGER, " +
+                        "`uid` TEXT NOT NULL",
+                    columns = "`id`, `ts`, `space_id`, `author_id`, `type`, `payload`, `workout_id`",
+                    timeColumn = "ts",
+                    indices = listOf(
+                        "CREATE INDEX IF NOT EXISTS `index_events_space_id_id` " +
+                            "ON `events` (`space_id`, `id`)",
+                    ),
+                )
+
+                rebuildWithUid(
+                    db,
+                    table = "exercises",
+                    ddl = "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`edge_mm` REAL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL",
+                    columns = "`id`, `space_id`, `name`, `form`, `created_at`, `edge_mm`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, `led_by_protocol`",
+                    timeColumn = "created_at",
+                    indices = listOf(
+                        "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                            "ON `exercises` (`space_id`, `id`)",
+                    ),
+                )
+
+                rebuildWithUid(
+                    db,
+                    table = "programs",
+                    ddl = "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`prepare_sec` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`exercise_id` INTEGER, " +
+                        "`category` TEXT NOT NULL, " +
+                        "`uid` TEXT NOT NULL",
+                    columns = "`id`, `space_id`, `name`, `prepare_sec`, `position`, `created_at`, " +
+                        "`exercise_id`, `category`",
+                    timeColumn = "created_at",
+                    indices = listOf(
+                        "CREATE INDEX IF NOT EXISTS `index_programs_space_id_id` " +
+                            "ON `programs` (`space_id`, `id`)",
+                    ),
+                )
+
+                rebuildWithUid(
+                    db,
+                    table = "slots",
+                    ddl = "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`at_time` TEXT, " +
+                        "`repeat_rule` TEXT NOT NULL, " +
+                        "`anchor_date` TEXT NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`uid` TEXT NOT NULL",
+                    columns = "`id`, `space_id`, `name`, `at_time`, `repeat_rule`, `anchor_date`, " +
+                        "`created_at`",
+                    timeColumn = "created_at",
+                    indices = listOf(
+                        "CREATE INDEX IF NOT EXISTS `index_slots_space_id_id` ON `slots` (`space_id`, `id`)",
+                    ),
+                )
+
+                rebuildWithUid(
+                    db,
+                    table = "slot_exercises",
+                    ddl = "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`slot_id` INTEGER NOT NULL, " +
+                        "`exercise_id` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`rest_sec` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "FOREIGN KEY(`slot_id`) REFERENCES `slots`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE ",
+                    columns = "`id`, `slot_id`, `exercise_id`, `position`, `rest_sec`",
+                    timeColumn = null,
+                    indices = listOf(
+                        "CREATE INDEX IF NOT EXISTS `index_slot_exercises_slot_id` " +
+                            "ON `slot_exercises` (`slot_id`)",
+                    ),
+                )
+
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v8`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v8`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v8`")
+            }
+        }
+
+        /**
+         * Version 8 -> 9: the journal's workout link, said in uids.
+         *
+         * One nullable column, so a plain `ALTER TABLE ADD COLUMN` will do — no rebuild, no
+         * default, and every row that belonged to no workout stays saying exactly that.
+         *
+         * ── The backfill is the whole point ─────────────────────────────────────────
+         * Adding the column empty and letting only new rows fill it would split the history:
+         * rows written before this version would be found by the numeric link and rows written
+         * after by the uid, and any reader that preferred one would lose the other half of a
+         * workout. So every existing row is pointed at the uid of the start event its number
+         * already named, in one statement — the ids are in the same table, so this is a
+         * lookup and not a guess.
+         *
+         * A row whose `workout_id` names a start event that is NOT in this journal keeps its
+         * dangling number and gets no uid. That is the honest outcome: the row says it belongs
+         * to a workout this database has never seen, and inventing an identity for it would
+         * turn "I do not know that workout" into a claim about one.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `workout_uid` TEXT")
+                db.execSQL(
+                    "UPDATE `events` SET `workout_uid` = " +
+                        "(SELECT `start`.`uid` FROM `events` AS `start` WHERE `start`.`id` = `events`.`workout_id`) " +
+                        "WHERE `workout_id` IS NOT NULL"
+                )
+            }
+        }
+
+        /**
+         * Rebuilds one table with a `uid` column on the end, gives every existing row an id of
+         * its own, and only then creates the indices — the unique one included, so a row left
+         * without an id fails the upgrade instead of passing it.
+         *
+         * [timeColumn] is the column whose value seeds the uid's leading timestamp, or null
+         * for a table that records no time.
+         */
+        private fun rebuildWithUid(
+            db: SupportSQLiteDatabase,
+            table: String,
+            ddl: String,
+            columns: String,
+            timeColumn: String?,
+            indices: List<String>,
+        ) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS `_new_$table` ($ddl)")
+            db.execSQL(
+                "INSERT INTO `_new_$table` ($columns, `uid`) SELECT $columns, '' FROM `$table`"
+            )
+            db.execSQL("DROP TABLE `$table`")
+            db.execSQL("ALTER TABLE `_new_$table` RENAME TO `$table`")
+
+            val select = if (timeColumn == null) "SELECT `id`, NULL FROM `$table`"
+            else "SELECT `id`, `$timeColumn` FROM `$table`"
+            val rows = ArrayList<Pair<Long, String?>>()
+            db.query(select).use { c ->
+                while (c.moveToNext()) rows += c.getLong(0) to if (c.isNull(1)) null else c.getString(1)
+            }
+            val fallback = System.currentTimeMillis()
+            for ((id, stamp) in rows) {
+                db.execSQL(
+                    "UPDATE `$table` SET `uid` = ? WHERE `id` = ?",
+                    arrayOf<Any>(newUid(atMillis = epochMillisOf(stamp) ?: fallback), id),
+                )
+            }
+
+            for (statement in indices) db.execSQL(statement)
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_${table}_uid` ON `$table` (`uid`)"
+            )
+        }
+
+        /**
+         * A journal timestamp ("2026-08-01T10:00:00") as epoch milliseconds, or null when it
+         * will not parse.
+         *
+         * The stored string carries no zone — that is the very defect schema version 8's
+         * sibling change is about — so it is read in the device's CURRENT zone. For seeding a
+         * uid that is more than good enough: the value only has to put old rows in roughly
+         * the right order relative to each other, and a whole-journal shift of a few hours
+         * changes nothing about that order.
+         */
+        private fun epochMillisOf(raw: String?): Long? {
+            if (raw == null) return null
+            return runCatching {
+                java.time.LocalDateTime.parse(raw)
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+            }.getOrNull()
+        }
+
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-            MIGRATION_6_7,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

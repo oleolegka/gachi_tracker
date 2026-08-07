@@ -320,9 +320,27 @@ data class Bodyweight(
     }
 }
 
-/** Set reversal: payload = {"cancels": id}. */
+/**
+ * Set reversal — the journal is append-only, so undoing a set is a new event naming the old
+ * one rather than a delete.
+ *
+ * ── Two fields for one link, and the uid is the real one ────────────────────────
+ * [cancelsUid] is the identity of the event being reversed ([JournalEvent.uid]); [cancels] is
+ * the local row number it used to be said with. Both are written, and the readers believe the
+ * uid — a reversal that travelled here from another journal would otherwise cancel whichever
+ * unrelated row happened to have that number on this phone, which is a set silently
+ * disappearing out of somebody's history.
+ *
+ * BOTH ARE NULLABLE, which is not sloppiness. A payload written before version 9 has only the
+ * number, and one that arrives from a journal with no numbers at all has only the uid; a
+ * reversal with NEITHER names nothing and is dropped by [cancelledEventUids] rather than
+ * throwing, on the same grounds as [formFromEventOrNull].
+ */
 @Serializable
-data class SetCancel(@SerialName("cancels") val cancels: Long)
+data class SetCancel(
+    @SerialName("cancels") val cancels: Long? = null,
+    @SerialName("cancels_uid") val cancelsUid: String? = null,
+)
 
 /**
  * Payload of [TYPE_WORKOUT_STARTED].
@@ -366,17 +384,24 @@ data class WorkoutStarted(
 /**
  * Payload of [TYPE_WORKOUT_EXERCISE_ADDED].
  *
- * [workoutId] duplicates the `workout_id` COLUMN this event is written with, and the
- * duplication is on purpose: the column is local (schema version 5) while the payload is the
- * format meant to survive a trip through the bot's journal, which has no such column. Reads
- * take the column and fall back to this field, so a row that arrives without one still lands
- * in the right workout.
+ * ── The workout is named twice, in the payload and in a column ──────────────────
+ * The columns (`workout_id` since schema version 5, `workout_uid` since 9) are how this app
+ * finds the rows of a workout in one query. The payload says the same thing again so that the
+ * event is COMPLETE ON ITS OWN — an exported or merged journal is a stream of events, not a
+ * table carrying this app's columns, and a row arriving without them still has to land in the
+ * right workout.
+ *
+ * [workoutUid] is the identity; [workoutId] is the local row number it replaced and means
+ * nothing off the phone that wrote it. Reads go through
+ * [xyz.oleolegka.gachimuchi.domain.workoutRef], which consults the columns, then the uid here,
+ * then the number — in ONE place, so that no reader gets to pick its own order.
  */
 @Serializable
 data class WorkoutExerciseAdded(
     @SerialName("workout_id") val workoutId: Long,
     @SerialName("exercise_id") val exerciseId: Long,
     @SerialName("rest_sec") val restSec: Int,
+    @SerialName("workout_uid") val workoutUid: String? = null,
 ) {
     init {
         // zero is a legitimate answer ("go straight into the next set"); a negative one is

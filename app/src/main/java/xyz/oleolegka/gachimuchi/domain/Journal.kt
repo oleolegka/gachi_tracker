@@ -24,9 +24,44 @@ data class JournalEvent(
      * [xyz.oleolegka.gachimuchi.data.db.EventEntity.workoutId]. Defaulted so that the many
      * places which build an event by hand (tests, fixtures) keep meaning "no workout", which
      * is what they meant before workouts existed.
+     *
+     * SUPERSEDED BY [workoutUid], which is what the reducers read first. This stays for rows
+     * written before schema version 9 and for rows whose workout is not in this journal.
      */
     val workoutId: Long? = null,
+    /**
+     * The identity of this row — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.uid].
+     *
+     * Defaulted to a fresh one so that the fixtures which build events by hand each get a
+     * distinct identity without having to say so. A shared default (the empty string, say)
+     * would make every hand-built event look like the same row to anything matching on uid,
+     * which is precisely what the tests here are for.
+     */
+    val uid: String = newUid(),
+    /** The workout this row was recorded during, by identity rather than by local number. */
+    val workoutUid: String? = null,
 )
+
+/**
+ * What a row says about the workout it belongs to — an identity where the row has one, and a
+ * local number where it is old enough not to.
+ *
+ * ONE TYPE FOR BOTH so that "which workout is this" is answered in one place instead of at
+ * every reader, each with its own idea of which link wins. Null is not represented here: a row
+ * that names no workout has no [WorkoutRef] at all.
+ */
+data class WorkoutRef(val uid: String?, val id: Long?) {
+    /**
+     * Whether this reference points at the workout opened by [start].
+     *
+     * The uid decides whenever the reference has one — including when it does NOT match, which
+     * is the important half: a row carrying a uid that names another workout must not fall
+     * back to its stale number and land in this one. The number is consulted only for a row
+     * that never had a uid to begin with.
+     */
+    fun matches(start: JournalEvent): Boolean =
+        if (uid != null) uid == start.uid else id != null && id == start.id
+}
 
 /** A parsed domain event: the raw journal row plus its typed form. */
 data class ActivityEvent(
@@ -38,21 +73,36 @@ data class ActivityEvent(
     val key: String?,
     val form: ActivityForm,
     /** Carried through from the journal row so that a workout can be folded out of these. */
-    val workoutId: Long? = null,
+    val workout: WorkoutRef? = null,
+    /** Identity of the underlying journal row — see [JournalEvent.uid]. */
+    val uid: String = newUid(),
 )
 
 /**
- * Ids of the sets reversed by [TYPE_SET_CANCEL] events.
+ * Identities of the sets reversed by [TYPE_SET_CANCEL] events.
+ *
+ * ── Uids, not row numbers ───────────────────────────────────────────────────────
+ * The reversal states the identity of what it cancels whenever it has one, and this resolves
+ * the rest: a payload from before schema version 9 carries only a local row number, which is
+ * looked up in this same journal and turned into the uid it meant. A number that names no row
+ * here resolves to nothing and cancels nothing — which is the honest answer, and a strictly
+ * better one than the old behaviour of cancelling whatever row happened to hold that number.
  *
  * A reversal that cannot be read is skipped rather than thrown on — see [formFromEventOrNull]
  * for why one bad row must not be able to take the app down. The cost is stated plainly: the
  * set that reversal belonged to goes back to counting, which is visible in the feed and can
  * be cancelled again, whereas the alternative is four screens that do not open.
  */
-fun cancelledEventIds(events: List<JournalEvent>): Set<Long> =
-    events.filter { it.type == TYPE_SET_CANCEL }
-        .mapNotNull { runCatching { payloadJson.decodeFromString<SetCancel>(it.payload).cancels }.getOrNull() }
-        .toSet()
+fun cancelledEventUids(events: List<JournalEvent>): Set<String> {
+    val reversals = events.filter { it.type == TYPE_SET_CANCEL }
+    if (reversals.isEmpty()) return emptySet()
+    // built only when something actually needs translating, since it walks the whole journal
+    val uidOfNumber: Map<Long, String> by lazy { events.associate { it.id to it.uid } }
+    return reversals.mapNotNullTo(HashSet()) { row ->
+        val payload = runCatching { payloadJson.decodeFromString<SetCancel>(row.payload) }.getOrNull()
+        payload?.cancelsUid ?: payload?.cancels?.let { uidOfNumber[it] }
+    }
+}
 
 /**
  * Domain events from the journal, in journal order.
@@ -76,11 +126,11 @@ fun readActivities(
 ): List<ActivityEvent> {
     val typeSet = types.toSet()
     val wantKey = key?.let { normPhrase(it) }
-    val cancelled = if (includeCancelled) emptySet() else cancelledEventIds(events)
+    val cancelled = if (includeCancelled) emptySet() else cancelledEventUids(events)
     val out = ArrayList<ActivityEvent>()
     for (row in events) {
         if (row.type !in typeSet) continue
-        if (row.id in cancelled) continue
+        if (row.uid in cancelled) continue
         val form = formFromEventOrNull(row.type, row.payload) ?: continue
         if (dateFrom != null && form.opDate < dateFrom) continue
         if (dateTo != null && form.opDate > dateTo) continue
@@ -88,7 +138,8 @@ fun readActivities(
         out.add(
             ActivityEvent(
                 id = row.id, ts = row.ts, authorId = row.authorId, type = row.type,
-                opDate = form.opDate, key = form.key, form = form, workoutId = row.workoutId,
+                opDate = form.opDate, key = form.key, form = form, workout = row.workoutRef(),
+                uid = row.uid,
             )
         )
     }

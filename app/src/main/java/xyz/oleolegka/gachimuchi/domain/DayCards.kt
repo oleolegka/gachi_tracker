@@ -132,7 +132,7 @@ fun dayCards(
 ): DayCards {
     val iso = date.toString()
     val canRecord = !date.isAfter(today)
-    val openId = openWorkoutId(events, today.toString())
+    val openUid = openWorkoutRow(events, today.toString())?.uid
     val workouts = workoutsOn(events, iso)
     val startedFromSlot = workouts.mapNotNullTo(HashSet()) { it.slotId }
 
@@ -155,7 +155,7 @@ fun dayCards(
     }
 
     for (workout in workouts) {
-        rows += placedWorkout(workout, slots, recordOf, running = workout.id == openId)
+        rows += placedWorkout(workout, slots, recordOf, running = workout.uid == openUid)
     }
 
     for (group in looseGroups(events, iso)) {

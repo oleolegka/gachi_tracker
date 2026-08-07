@@ -25,7 +25,7 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.normPhrase
 import xyz.oleolegka.gachimuchi.domain.openWorkout
-import xyz.oleolegka.gachimuchi.domain.openWorkoutId
+import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.payloadJson
 import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.toSlot as draftToSlot
@@ -89,13 +89,16 @@ class ActivityRepository(private val db: AppDatabase) {
      * is no longer something a caller can choose: [LOCAL_AUTHOR_ID] is the only value, and
      * the column survives only because the server schema has it (see Entities.kt).
      */
-    suspend fun record(form: ActivityForm, attachToWorkout: Boolean = true): Long =
-        db.events().insert(
+    suspend fun record(form: ActivityForm, attachToWorkout: Boolean = true): Long {
+        val workout = if (attachToWorkout) openWorkoutRow(allEvents(), today()) else null
+        return db.events().insert(
             EventEntity(
                 ts = now(), type = form.type, payload = form.toPayload(),
-                workoutId = if (attachToWorkout) currentWorkoutId() else null,
+                // both links, and the uid is the one the reducers believe: see EventEntity
+                workoutId = workout?.id, workoutUid = workout?.uid,
             )
         )
+    }
 
     // --- workouts (domain/Workout.kt folds them back out) ---
 
@@ -103,7 +106,7 @@ class ActivityRepository(private val db: AppDatabase) {
     private fun today(): String = LocalDate.now().toString()
 
     /** The workout in progress, or null — see [openWorkout] for what "in progress" means. */
-    suspend fun currentWorkoutId(): Long? = openWorkoutId(allEvents(), today())
+    suspend fun currentWorkoutId(): Long? = openWorkoutRow(allEvents(), today())?.id
 
     suspend fun currentWorkout(): Workout? = openWorkout(allEvents(), today())
 
@@ -138,13 +141,18 @@ class ActivityRepository(private val db: AppDatabase) {
      * [WorkoutExerciseAdded] for why the payload carries it too.
      */
     suspend fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int): Long {
+        val workoutUid = db.events().byId(workoutId)?.uid
         val id = db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_WORKOUT_EXERCISE_ADDED,
                 payload = payloadJson.encodeToString(
-                    WorkoutExerciseAdded(workoutId = workoutId, exerciseId = exerciseId, restSec = restSec)
+                    WorkoutExerciseAdded(
+                        workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
+                        workoutUid = workoutUid,
+                    )
                 ),
                 workoutId = workoutId,
+                workoutUid = workoutUid,
             )
         )
         setDefaultRest(exerciseId, restSec)
@@ -167,7 +175,11 @@ class ActivityRepository(private val db: AppDatabase) {
         db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_SET_CANCEL,
-                payload = payloadJson.encodeToString(SetCancel(eventId)),
+                // both links: the uid is what the reducers read, the number is what a build
+                // older than schema version 9 would look for
+                payload = payloadJson.encodeToString(
+                    SetCancel(cancels = eventId, cancelsUid = db.events().byId(eventId)?.uid)
+                ),
             )
         )
 
@@ -332,7 +344,7 @@ fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
 
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,
-    workoutId = workoutId,
+    workoutId = workoutId, uid = uid, workoutUid = workoutUid,
 )
 
 fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
