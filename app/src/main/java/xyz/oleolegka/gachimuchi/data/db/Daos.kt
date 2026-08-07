@@ -70,6 +70,22 @@ interface ExerciseDao {
      */
     @Query("UPDATE exercises SET seeded = 0 WHERE space_id = :spaceId AND id IN (:ids)")
     suspend fun clearSeedMark(ids: List<Long>, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Remembers the rest last chosen for an exercise.
+     *
+     * A one-column update rather than Room's @Update of a whole entity, for the same reason
+     * [SlotDao.updateFields] is one: the caller here is "the user picked 2:30 while adding
+     * this to a workout" and it has no business rewriting the name, the edge or the protocol.
+     * Writing the entity back would overwrite those with whatever the caller happened to be
+     * holding, which for a hangboard exercise means overwriting its IDENTITY (§12-A).
+     */
+    @Query("UPDATE exercises SET default_rest_sec = :sec WHERE space_id = :spaceId AND id = :id")
+    suspend fun setDefaultRest(id: Long, sec: Int?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /** Same, for "run this by its protocol". Null puts the row back to inferring it. */
+    @Query("UPDATE exercises SET led_by_protocol = :led WHERE space_id = :spaceId AND id = :id")
+    suspend fun setLedByProtocol(id: Long, led: Boolean?, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 @Dao

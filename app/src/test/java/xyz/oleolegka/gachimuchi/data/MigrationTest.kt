@@ -23,31 +23,57 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import xyz.oleolegka.gachimuchi.data.db.AliasDao
+import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
-import xyz.oleolegka.gachimuchi.data.db.EventDao
-import xyz.oleolegka.gachimuchi.data.db.EventEntity
+import xyz.oleolegka.gachimuchi.data.db.COLUMN_SEEDED
+import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
 import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
+import xyz.oleolegka.gachimuchi.data.db.SlotDao
+import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.toPayload
 
 /*
- * The catalog, the aliases and the slots as they were up to schema version 3: without the
- * demo-seed mark added in version 4.
+ * SNAPSHOTS OF THE OLD SCHEMA, one class per table per version it differed in.
  *
- * These snapshots have to exist. The old databases below used to be declared with the
- * CURRENT entity classes, which meant Room generated today's DDL for them and the "old"
- * database in the test already had every column the migration was about to add. That made
- * every migration test pass for the wrong reason and would have hidden a real one: the
- * 3 -> 4 upgrade adds a column, and against a table that already has it, ALTER TABLE fails.
- * A phone would have refused to open its database while the test suite stayed green.
+ * These have to exist. The old databases below used to be declared with the CURRENT entity
+ * classes, which meant Room generated today's DDL for them and the "old" database in the test
+ * already had every column the migration was about to add. That made every migration test
+ * pass for the wrong reason and would have hidden a real one: an upgrade that adds a column
+ * fails with ALTER TABLE against a table that already has it. A phone would have refused to
+ * open its database while the test suite stayed green.
+ *
+ * The rule that keeps them honest: a snapshot may only reuse a current entity class for a
+ * table that has NOT changed since. Adding a column to a live entity therefore breaks
+ * compilation or the assertions here, loudly, which is the point — the alternative is a
+ * migration silently tested against the schema it produces.
  */
+
+/** The journal before the workout link of version 5. */
+@Entity(tableName = "events", indices = [Index(value = ["space_id", "id"])])
+data class EventEntityV4(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: String,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    @ColumnInfo(name = "author_id") val authorId: Long = LOCAL_AUTHOR_ID,
+    val type: String,
+    val payload: String,
+)
+
+@Dao
+interface LegacyEventDao {
+    @Insert
+    suspend fun insert(event: EventEntityV4): Long
+}
 
 @Entity(tableName = "exercises", indices = [Index(value = ["space_id", "id"])])
 data class ExerciseEntityV3(
@@ -81,6 +107,24 @@ data class SlotEntityV3(
     @ColumnInfo(name = "created_at") val createdAt: String,
 )
 
+/**
+ * The catalog of version 4: marked with the demo-seed flag, but before the workout
+ * preferences of version 5. The aliases and the slots did not change between 4 and 5, so
+ * their CURRENT entities are the version 4 snapshot and no class is declared for them.
+ */
+@Entity(tableName = "exercises", indices = [Index(value = ["space_id", "id"])])
+data class ExerciseEntityV4(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
+)
+
 /** Just enough to put rows into the old tables; reading happens through the current DAOs. */
 @Dao
 interface LegacyCatalogDao {
@@ -94,6 +138,12 @@ interface LegacyCatalogDao {
     suspend fun insertSlot(slot: SlotEntityV3): Long
 }
 
+@Dao
+interface LegacyCatalogDaoV4 {
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV4): Long
+}
+
 /**
  * Version 1 of the schema, exactly as it shipped: the four tables that existed before the
  * timer, and nothing else.
@@ -103,12 +153,12 @@ interface LegacyCatalogDao {
  * invented here, which is precisely the schema that cannot be wrong.
  */
 @Database(
-    entities = [EventEntity::class, ExerciseEntityV3::class, AliasEntityV3::class, SlotEntityV3::class],
+    entities = [EventEntityV4::class, ExerciseEntityV3::class, AliasEntityV3::class, SlotEntityV3::class],
     version = 1,
     exportSchema = false,
 )
 abstract class SchemaV1Database : RoomDatabase() {
-    abstract fun events(): EventDao
+    abstract fun events(): LegacyEventDao
     abstract fun catalog(): LegacyCatalogDao
 }
 
@@ -187,7 +237,7 @@ interface ProgramDaoV2 {
 
 @Database(
     entities = [
-        EventEntity::class,
+        EventEntityV4::class,
         ExerciseEntityV3::class,
         AliasEntityV3::class,
         SlotEntityV3::class,
@@ -199,7 +249,7 @@ interface ProgramDaoV2 {
     exportSchema = false,
 )
 abstract class SchemaV2Database : RoomDatabase() {
-    abstract fun events(): EventDao
+    abstract fun events(): LegacyEventDao
     abstract fun catalog(): LegacyCatalogDao
     abstract fun programs(): ProgramDaoV2
 }
@@ -212,7 +262,7 @@ abstract class SchemaV2Database : RoomDatabase() {
  */
 @Database(
     entities = [
-        EventEntity::class,
+        EventEntityV4::class,
         ExerciseEntityV3::class,
         AliasEntityV3::class,
         SlotEntityV3::class,
@@ -224,8 +274,37 @@ abstract class SchemaV2Database : RoomDatabase() {
     exportSchema = false,
 )
 abstract class SchemaV3Database : RoomDatabase() {
-    abstract fun events(): EventDao
+    abstract fun events(): LegacyEventDao
     abstract fun catalog(): LegacyCatalogDao
+}
+
+/**
+ * Version 4: the demo-seed mark is on the catalog, and nothing knows about workouts yet.
+ * The journal has no `workout_id` and the catalog no rest preference — this is the phone the
+ * 4 -> 5 migration actually runs on, and the only one that matters in practice, since it is
+ * the version currently installed.
+ *
+ * The aliases and the slots are the CURRENT entities: those two tables did not change in
+ * version 5, so a snapshot of them would be a copy that can only rot.
+ */
+@Database(
+    entities = [
+        EventEntityV4::class,
+        ExerciseEntityV4::class,
+        AliasEntity::class,
+        SlotEntity::class,
+        ProgramEntity::class,
+        ProgramGroupEntity::class,
+        ProgramBlockEntity::class,
+    ],
+    version = 4,
+    exportSchema = false,
+)
+abstract class SchemaV4Database : RoomDatabase() {
+    abstract fun events(): LegacyEventDao
+    abstract fun catalog(): LegacyCatalogDaoV4
+    abstract fun aliases(): AliasDao
+    abstract fun slots(): SlotDao
 }
 
 /**
@@ -269,7 +348,7 @@ class MigrationTest {
             opDate = "2026-08-01", reps = 5, weightKg = 80.0,
         )
         v1.events().insert(
-            EventEntity(ts = "2026-08-01T10:00:00", type = set.type, payload = set.toPayload())
+            EventEntityV4(ts = "2026-08-01T10:00:00", type = set.type, payload = set.toPayload())
         )
         v1.catalog().insertAlias(AliasEntityV3(key = "bench", value = exerciseId))
         v1.catalog().insertSlot(
@@ -320,7 +399,12 @@ class MigrationTest {
         return programId
     }
 
-    private fun openVersion2(): AppDatabase =
+    /**
+     * Opens the database at the CURRENT version, running whatever migrations the file on
+     * disk needs to get there. Every test below goes through this: what is being verified is
+     * always "an old phone, upgraded to today's build", so there is only ever one target.
+     */
+    private fun openCurrent(): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, dbName)
             .addMigrations(*AppDatabase.MIGRATIONS)
             .build()
@@ -330,7 +414,7 @@ class MigrationTest {
     fun `the journal, the catalog, the aliases and the slots all survive the upgrade`() = runTest {
         writeVersion1()
 
-        val v2 = openVersion2()
+        val v2 = openCurrent()
 
         val events = v2.events().all()
         assertEquals(1, events.size)
@@ -349,7 +433,7 @@ class MigrationTest {
     fun `the program tables exist after the upgrade and accept a program`() = runTest {
         writeVersion1()
 
-        val v2 = openVersion2()
+        val v2 = openCurrent()
         val repo = ProgramRepository(v2)
 
         assertEquals(0, repo.count())
@@ -379,19 +463,19 @@ class MigrationTest {
         writeVersion1()
 
         // the first open runs the migration and writes the new identity
-        openVersion2().also { it.events().count() }.close()
+        openCurrent().also { it.events().count() }.close()
         opened = null
 
         // the second open takes the "already at the right version" path, where Room
         // compares the database against the entity definitions and refuses a mismatch
-        val again = openVersion2()
+        val again = openCurrent()
         assertEquals(1, again.events().count())
         assertEquals(0, again.programs().countPrograms())
     }
 
     @Test
     fun `a fresh install creates the current version directly, without any migration`() = runTest {
-        val fresh = openVersion2()
+        val fresh = openCurrent()
         assertEquals(0, fresh.events().count())
         assertEquals(0, fresh.programs().countPrograms())
     }
@@ -402,7 +486,7 @@ class MigrationTest {
     fun `a program written before the upgrade survives it, unlinked and uncategorised`() = runTest {
         val programId = writeVersion2()
 
-        val v3 = openVersion2()
+        val v3 = openCurrent()
         val stored = ProgramRepository(v3).programById(programId)
 
         assertNotNull("a hand-written protocol must not be lost to a schema change", stored)
@@ -418,7 +502,7 @@ class MigrationTest {
     @Test
     fun `after the upgrade a program can be linked and filed, and both come back`() = runTest {
         val programId = writeVersion2()
-        val v3 = openVersion2()
+        val v3 = openCurrent()
         val repo = ProgramRepository(v3)
         val exerciseId = v3.exercises().all().single().id
 
@@ -436,12 +520,12 @@ class MigrationTest {
     fun `the upgraded database passes Room's schema check on the next open`() = runTest {
         writeVersion2()
 
-        openVersion2().also { it.programs().countPrograms() }.close()
+        openCurrent().also { it.programs().countPrograms() }.close()
         opened = null
 
         // the second open compares the database against the entity definitions and refuses a
         // mismatch, which is what would catch a column type or a default written wrongly
-        val again = openVersion2()
+        val again = openCurrent()
         assertEquals(1, again.programs().countPrograms())
     }
 
@@ -469,7 +553,7 @@ class MigrationTest {
             opDate = "2026-05-01", reps = 5, weightKg = 80.0,
         )
         v3.events().insert(
-            EventEntity(ts = "2026-05-01T10:00:00", type = set.type, payload = set.toPayload())
+            EventEntityV4(ts = "2026-05-01T10:00:00", type = set.type, payload = set.toPayload())
         )
         v3.catalog().insertAlias(AliasEntityV3(key = "bench", value = exerciseId))
         v3.catalog().insertSlot(
@@ -486,7 +570,7 @@ class MigrationTest {
     fun `everything already on the phone comes through the mark as the user's own`() = runTest {
         writeVersion3()
 
-        val v4 = openVersion2()
+        val v4 = openCurrent()
 
         // the rows are all still there
         assertEquals(1, v4.events().count())
@@ -509,13 +593,139 @@ class MigrationTest {
     fun `the marked database passes Room's schema check on the next open`() = runTest {
         writeVersion3()
 
-        openVersion2().also { it.events().count() }.close()
+        openCurrent().also { it.events().count() }.close()
         opened = null
 
         // Room compares the database against the entity definitions here, which is what
         // catches a column declared NOT NULL in one place and nullable in the other
-        val again = openVersion2()
+        val again = openCurrent()
         assertEquals(1, again.events().count())
         assertEquals(1, again.exercises().all().size)
+    }
+
+    // --- version 4 -> 5: the workout link and the exercise's rest preference ---------------
+
+    /**
+     * A phone in use before workouts existed: a journal of sets nobody started a workout for,
+     * a catalog exercise, an alias and a plan slot. This is the version installed right now,
+     * so it is the upgrade that will actually happen to somebody's data.
+     */
+    private suspend fun writeVersion4(): Long {
+        val v4 = Room.databaseBuilder(context, SchemaV4Database::class.java, dbName).build()
+        opened = v4
+
+        val exerciseId = v4.catalog().insertExercise(
+            ExerciseEntityV4(
+                name = "Hangs 20 mm", form = ExerciseForm.HOLD.code,
+                createdAt = "2026-07-01T10:00:00", edgeMm = 20.0,
+                protocolWorkSec = 7.0, protocolRestSec = 3.0,
+            )
+        )
+        for (day in listOf("2026-07-01", "2026-07-03")) {
+            val set = strengthSetOf(
+                exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                    id = exerciseId, name = "Bench press", form = ExerciseForm.STRENGTH,
+                ),
+                opDate = day, reps = 5, weightKg = 80.0,
+            )
+            v4.events().insert(
+                EventEntityV4(ts = "${day}T10:00:00", type = set.type, payload = set.toPayload())
+            )
+        }
+        v4.aliases().upsert(AliasEntity(key = "bench", value = exerciseId))
+        v4.slots().insert(
+            SlotEntity(
+                name = "Gym", atTime = "19:00", repeatRule = "weekly",
+                anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
+            )
+        )
+        v4.close()
+        opened = null
+        return exerciseId
+    }
+
+    @Test
+    fun `sets recorded before workouts existed survive, belonging to no workout`() = runTest {
+        writeVersion4()
+
+        val v5 = openCurrent()
+
+        // the journal is intact, payloads included
+        val events = v5.events().all()
+        assertEquals(2, events.size)
+        assertTrue(events.first().payload.contains("Bench press"))
+        assertEquals(1, v5.slots().all().size)
+        assertNotNull(v5.aliases().byKey("bench"))
+
+        /*
+         * And every one of those rows reads as "recorded outside any workout", which is the
+         * literal truth about them: the app had no workouts when they were written, so there
+         * is no workout they could honestly be filed under. Inventing one to fill the column
+         * would have manufactured history that never happened.
+         */
+        assertTrue(events.all { it.workoutId == null })
+
+        // same for the catalog: nothing has been said about the rest or about the protocol,
+        // and null is how "nothing has been said" is spelled — see ExerciseEntity
+        val exercise = v5.exercises().all().single()
+        assertEquals("Hangs 20 mm", exercise.name)
+        assertEquals(20.0, exercise.edgeMm!!, 1e-9)
+        assertNull(exercise.defaultRestSec)
+        assertNull(exercise.ledByProtocol)
+    }
+
+    @Test
+    fun `the columns the upgrade added are real and hold what is written to them`() = runTest {
+        val exerciseId = writeVersion4()
+        val repo = ActivityRepository(openCurrent())
+
+        // this is the assertion that a column merely APPEARING is not enough: the migration
+        // has to leave one a value round-trips through, in the type the entity declares
+        val workoutId = repo.startWorkout(opDate = "2026-08-07")
+        repo.addExerciseToWorkout(workoutId, exerciseId, restSec = 150)
+        repo.setLedByProtocol(exerciseId, false)
+
+        val stored = repo.exercise(exerciseId)!!
+        assertEquals(150, stored.defaultRestSec)
+        // false, not null: the two are different answers and a nullable INTEGER has to keep
+        // them apart, which is exactly what a wrongly declared column would flatten
+        assertEquals(false, stored.ledByProtocol)
+
+        val added = repo.allEvents().single { it.type == TYPE_WORKOUT_EXERCISE_ADDED }
+        assertEquals(workoutId, added.workoutId)
+    }
+
+    @Test
+    fun `the workout columns pass Room's schema check on the next open`() = runTest {
+        writeVersion4()
+
+        openCurrent().also { it.events().count() }.close()
+        opened = null
+
+        // the second open is where Room compares the database against the entity definitions;
+        // a column added as NOT NULL, or as the wrong affinity, is refused here rather than
+        // on a phone
+        val again = openCurrent()
+        assertEquals(2, again.events().count())
+        assertEquals(1, again.exercises().all().size)
+    }
+
+    @Test
+    fun `a phone that skipped every release in between still arrives intact`() = runTest {
+        // 1 -> 5 in one go. Nobody upgrades one version at a time, and a chain that only ever
+        // gets tested link by link is a chain whose middle is untested.
+        writeVersion1()
+
+        val v5 = openCurrent()
+
+        assertEquals(1, v5.events().count())
+        assertTrue(v5.events().all().single().workoutId == null)
+        val exercise = v5.exercises().all().single()
+        assertFalse(exercise.seeded)
+        assertNull(exercise.defaultRestSec)
+        assertEquals(20.0, exercise.edgeMm!!, 1e-9)
+        assertNotNull(v5.aliases().byKey("bench"))
+        assertEquals(1, v5.slots().all().size)
+        assertEquals(0, v5.programs().countPrograms())
     }
 }

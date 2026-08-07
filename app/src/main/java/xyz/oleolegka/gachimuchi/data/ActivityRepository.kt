@@ -17,10 +17,18 @@ import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.Workout
+import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.openWorkout
+import xyz.oleolegka.gachimuchi.domain.openWorkoutId
 import xyz.oleolegka.gachimuchi.domain.payloadJson
 import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.toSlot as draftToSlot
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -47,11 +55,97 @@ class ActivityRepository(private val db: AppDatabase) {
 
     suspend fun eventCount(): Int = db.events().count()
 
-    /** Appends an activity form to the journal. Returns the event id. */
+    /**
+     * Appends an activity form to the journal, filed under the workout in progress if there
+     * is one. Returns the event id.
+     *
+     * The attachment happens HERE rather than at the call sites on purpose: every screen that
+     * logs anything goes through this one method, and a screen that forgot to pass the
+     * workout would write a set that silently falls out of the workout it was done in. The
+     * cost is that recording folds the journal to find the open workout — at personal scale
+     * (thousands of rows) that is nothing, and it keeps one definition of "which workout is
+     * open" instead of a second one written in SQL that would drift from the domain's.
+     *
+     * The DEMO SEED is excluded by author. Its sets are backdated synthetic history and
+     * pressing "demo data" while a real workout is open must not pour them into it.
+     */
     suspend fun record(form: ActivityForm, authorId: Long = LOCAL_AUTHOR_ID): Long =
         db.events().insert(
-            EventEntity(ts = now(), authorId = authorId, type = form.type, payload = form.toPayload())
+            EventEntity(
+                ts = now(), authorId = authorId, type = form.type, payload = form.toPayload(),
+                workoutId = if (authorId == LOCAL_AUTHOR_ID) currentWorkoutId() else null,
+            )
         )
+
+    // --- workouts (domain/Workout.kt folds them back out) ---
+
+    /** Today, as the journal writes dates. */
+    private fun today(): String = LocalDate.now().toString()
+
+    /** The workout in progress, or null — see [openWorkout] for what "in progress" means. */
+    suspend fun currentWorkoutId(): Long? = openWorkoutId(allEvents(), today())
+
+    suspend fun currentWorkout(): Workout? = openWorkout(allEvents(), today())
+
+    /**
+     * Opens a workout and returns its id, which IS the id of the event just written.
+     *
+     * [opDate] defaults to today and is passed explicitly when old training is being typed
+     * up. A workout dated in the past is silent — nothing in it counts anything down; see
+     * [WorkoutStarted].
+     *
+     * [slotId] records which planned session this was started from, when the user picked one.
+     */
+    suspend fun startWorkout(
+        opDate: String = today(),
+        slotId: Long? = null,
+        authorId: Long = LOCAL_AUTHOR_ID,
+    ): Long = db.events().insert(
+        EventEntity(
+            ts = now(), authorId = authorId, type = TYPE_WORKOUT_STARTED,
+            payload = payloadJson.encodeToString(WorkoutStarted(opDate = opDate, slotId = slotId)),
+        )
+    )
+
+    /**
+     * Puts an exercise into a workout with a chosen rest, before any set of it exists.
+     *
+     * Two writes, and they are two different facts. The journal event says "this exercise is
+     * part of THAT workout, at this rest" and is history. The catalog column says "this is
+     * the rest I want for this exercise from now on" and is the answer the next workout will
+     * be offered. Neither can be derived from the other: the workout needs to keep the rest
+     * it was actually run at even after the preference changes.
+     *
+     * The workout link is written into the COLUMN as well as the payload, so that one query
+     * finds everything belonging to a workout regardless of event type — see
+     * [WorkoutExerciseAdded] for why the payload carries it too.
+     */
+    suspend fun addExerciseToWorkout(
+        workoutId: Long,
+        exerciseId: Long,
+        restSec: Int,
+        authorId: Long = LOCAL_AUTHOR_ID,
+    ): Long {
+        val id = db.events().insert(
+            EventEntity(
+                ts = now(), authorId = authorId, type = TYPE_WORKOUT_EXERCISE_ADDED,
+                payload = payloadJson.encodeToString(
+                    WorkoutExerciseAdded(workoutId = workoutId, exerciseId = exerciseId, restSec = restSec)
+                ),
+                workoutId = workoutId,
+            )
+        )
+        setDefaultRest(exerciseId, restSec)
+        return id
+    }
+
+    /** Remembers the rest chosen for an exercise — see [ExerciseDao.setDefaultRest]. */
+    suspend fun setDefaultRest(exerciseId: Long, restSec: Int?) =
+        db.exercises().setDefaultRest(exerciseId, restSec)
+
+    /** "Run this by its protocol" / "just count the rest" / null to go back to inferring it. */
+    suspend fun setLedByProtocol(exerciseId: Long, ledByProtocol: Boolean?) =
+        db.exercises().setLedByProtocol(exerciseId, ledByProtocol)
 
     /**
      * Wipes the DEMO SEED events (by author). This is the only delete in the journal and
@@ -83,6 +177,17 @@ class ActivityRepository(private val db: AppDatabase) {
      * Creates an exercise. Deduplication by NORMALIZED name is advisory, same as on the
      * server (there is no UNIQUE index): if an exercise with that name already exists,
      * its id is returned.
+     *
+     * ── What a found row does and does not pick up ──────────────────────────────
+     * Name, form, edge and protocol of an existing row are NEVER touched. Those four are the
+     * exercise's IDENTITY (§12-A puts edge and protocol in it), and quietly rewriting them
+     * from whatever a caller passed would move an exercise's history onto a different
+     * exercise — the failure this whole catalog exists to prevent.
+     *
+     * [defaultRestSec] is the one exception, and only when it is given. It is a PREFERENCE,
+     * not identity: "I want two and a half minutes between these" is a statement about the
+     * next set, it replaces the previous answer to the same question by design, and it
+     * carries no history that a rewrite could strand.
      */
     suspend fun ensureExercise(
         name: String,
@@ -91,17 +196,21 @@ class ActivityRepository(private val db: AppDatabase) {
         workSec: Double? = null,
         restSec: Double? = null,
         seeded: Boolean = false,
+        defaultRestSec: Int? = null,
     ): Long {
         val want = normPhrase(name)
         // an exercise that is already there is the USER'S, whatever created this call: the
         // seed mark is set on insert and never stamped onto a row found by name, so pressing
         // "demo data" cannot make a real exercise deletable
-        db.exercises().all().firstOrNull { normPhrase(it.name) == want }?.let { return it.id }
+        db.exercises().all().firstOrNull { normPhrase(it.name) == want }?.let { found ->
+            if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
+            return found.id
+        }
         return db.exercises().insert(
             ExerciseEntity(
                 name = name, form = form.code, createdAt = now(),
                 edgeMm = edgeMm, protocolWorkSec = workSec, protocolRestSec = restSec,
-                seeded = seeded,
+                seeded = seeded, defaultRestSec = defaultRestSec,
             )
         )
     }
@@ -248,10 +357,13 @@ fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
     edgeMm = edgeMm,
     workSec = protocolWorkSec,
     restSec = protocolRestSec,
+    defaultRestSec = defaultRestSec,
+    ledByProtocolFlag = ledByProtocol,
 )
 
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,
+    workoutId = workoutId,
 )
 
 fun SlotEntity.toSlot() = Slot(
