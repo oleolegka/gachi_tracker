@@ -105,13 +105,22 @@ fun DayCardList(
 ) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         if (day.isEmpty) {
+            /*
+             * The note names the button underneath it rather than reporting a count of zero.
+             * This is the first thing a new install shows, and it used to be able to lean on
+             * demo data to make the day look inhabited; with that gone, an empty day is the
+             * whole first impression and it has to say where training gets written down.
+             */
             DashedNote(
                 if (day.canRecord) {
-                    "Nothing planned and nothing recorded"
+                    "Nothing planned and nothing recorded. Start a workout below, or log a " +
+                        "single entry."
                 } else {
                     // a day that has not happened cannot have "nothing recorded" held
-                    // against it, so it is not told that it does
-                    "Nothing planned for this day"
+                    // against it, so it is not told that it does. It is also only ever drawn
+                    // on the calendar (Today is never in the future), which is why the
+                    // sentence can name the "Plan a session" button sitting under this list
+                    "Nothing planned for this day. Plan a session below and it appears here."
                 }
             )
         }

@@ -16,12 +16,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -41,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
-import xyz.oleolegka.gachimuchi.domain.offersWholeCatalog
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -58,26 +59,29 @@ import java.time.LocalDate
  *
  * The order is recency-first (see [pickerOrder]), so mid-workout the exercise you want is
  * usually in the first few rows and no typing happens at all. Search covers the rest and
- * matches ALIASES as well as names (§11), which is what makes "bench" find "Bench press".
+ * matches the NAME, as a substring, so "bench" finds "Bench press".
  *
- * There is DELIBERATELY no fuzzy matching or "did you mean": §11 settled that an unknown
- * word must never be guessed at. Either you pick from the list or you create a new
- * exercise on purpose.
+ * There is DELIBERATELY no fuzzy matching and no "did you mean": §11 settled that an unknown
+ * word must never be guessed at. Either you pick from the list or you create a new exercise
+ * on purpose.
  *
- * Which is why a word that matches NOTHING falls back to the whole catalog rather than to
- * an empty list (see [xyz.oleolegka.gachimuchi.domain.offersWholeCatalog]). That is the
- * opposite of guessing: nothing is preselected, and it is the only moment at which the
- * alias mechanism can be used at all, because a word is learned by being in the search box
- * when an exercise is tapped. A list narrowed to nothing removes every exercise the word
- * could be attached to and leaves "create a new one" as the only exit — which is how a
- * second "Bench press" gets into a catalog that already has one.
+ * ── A search that finds nothing shows nothing ───────────────────────────────────
+ * It used to show the WHOLE catalog instead, and the reason was not about searching at all:
+ * the app learned synonyms by watching which row was tapped while a word was in this box, so
+ * a list narrowed to nothing was the one state in which the word could never be taught. The
+ * synonyms are gone (domain/Session.kt), and with them that reason.
+ *
+ * So the list now says what it means. The two exits it used to hide are named out loud
+ * instead — clear the search, or create the exercise — because they are not the same move
+ * and the difference matters: one finds an exercise that already has a history, the other
+ * starts a second one beside it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExercisePickerSheet(
     state: UiState,
     today: LocalDate,
-    onPick: (Long, String?) -> Unit,
+    onPick: (Long) -> Unit,
     /**
      * Creating a new catalog exercise, or NULL for a caller that only picks from what is
      * already there — the slot editor, which plans sessions out of exercises the user
@@ -127,7 +131,7 @@ fun ExercisePickerSheet(
                     query = query,
                     onQuery = { query = it },
                     onPick = { id ->
-                        onPick(id, query.takeIf { it.isNotBlank() })
+                        onPick(id)
                         onDismiss()
                     },
                     onNew = onCreate?.let { { creating = true } },
@@ -150,22 +154,14 @@ private fun PickExisting(
     val colors = LocalGachiColors.current
     val order = remember(state.events) { pickerOrder(exerciseUsage(state.events)) }
     val usage = remember(state.events) { exerciseUsage(state.events) }
-    /*
-     * A word that matches nothing falls back to the whole catalog rather than to an empty
-     * list — that is where a synonym is taught (see [offersWholeCatalog]). The flag is kept
-     * so the text below can say why the list did not narrow.
-     */
-    val teaching = remember(state.exercises, state.aliases, query) {
-        val matches = state.exercises.count { matchesExerciseQuery(it.name, state.aliasesOf(it.id), query) }
-        offersWholeCatalog(query, matches, state.exercises.size)
-    }
-    val items = remember(state.exercises, state.aliases, query, order, teaching) {
+    val items = remember(state.exercises, query, order) {
         state.exercises
-            .filter { teaching || matchesExerciseQuery(it.name, state.aliasesOf(it.id), query) }
+            .filter { matchesExerciseQuery(it.name, query) }
             .sortedWith { a, b -> order.compare(a.id, b.id) }
     }
 
     val catalogEmpty = state.exercises.isEmpty()
+    val searching = query.isNotBlank()
 
     Text("Exercise", style = MaterialTheme.typography.titleMedium)
     // nothing to search through on a first run, and a search box would only invite typing
@@ -177,7 +173,17 @@ private fun PickExisting(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            placeholder = { Text("Search by name or alias") },
+            // the way back to the whole catalog, which used to happen by itself when a
+            // search matched nothing; now that the list stays narrowed it has to be reachable
+            // without deleting the word character by character
+            trailingIcon = {
+                if (searching) {
+                    IconButton(onClick = { onQuery("") }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Clear the search")
+                    }
+                }
+            },
+            placeholder = { Text("Search by name") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
         )
     }
@@ -195,12 +201,12 @@ private fun PickExisting(
     HorizontalDivider()
 
     /*
-     * The list did not narrow, and the reason has to be said: an unexplained full list
-     * after typing reads as a broken search. It is also the moment the two ways forward
-     * have to be spelled out, because they are not interchangeable — tapping teaches the
-     * word to something that already exists, creating starts a separate history.
+     * An empty list has to say WHY it is empty, and the two reasons want opposite sentences:
+     * a catalog with nothing in it is a first run, while a search that found nothing is a
+     * list that has been narrowed and can be un-narrowed. Saying "nothing here" to both
+     * would leave the second one looking like a dead end when the way out is one tap away.
      */
-    if (teaching || items.isEmpty()) {
+    if (items.isEmpty()) {
         Text(
             when {
                 /*
@@ -217,20 +223,12 @@ private fun PickExisting(
                     "Nothing in the catalog yet. An exercise is created once and then reused " +
                         "for every set of it."
 
-                teaching && onNew == null ->
-                    "Nothing is called \"$query\" yet. Tap the exercise you mean and the word " +
-                        "becomes one of its names, so it finds it next time."
-
-                teaching ->
-                    "Nothing is called \"$query\" yet. Tap the exercise you mean and the word " +
-                        "becomes one of its names, so it finds it next time - or create it as a " +
-                        "new exercise, with a history of its own."
-
-                onNew == null -> "Nothing matches."
+                onNew == null ->
+                    "No exercise is called \"$query\". Clear the search to see the whole catalog."
 
                 else ->
-                    "Nothing matches. Create it as a new exercise, and the typed word becomes " +
-                        "its alias."
+                    "No exercise is called \"$query\". Clear the search to see the whole " +
+                        "catalog, or create it as a new exercise with a history of its own."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = colors.inkMuted,

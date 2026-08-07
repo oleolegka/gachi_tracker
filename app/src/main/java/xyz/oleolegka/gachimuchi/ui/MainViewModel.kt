@@ -19,13 +19,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
 import xyz.oleolegka.gachimuchi.data.ProgramRepository
-import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
-import xyz.oleolegka.gachimuchi.data.seed.DemoSeed
-import xyz.oleolegka.gachimuchi.data.seed.DemoWipePlan
-import xyz.oleolegka.gachimuchi.data.seed.applyDemoWipe
-import xyz.oleolegka.gachimuchi.data.seed.planDemoWipe
-import xyz.oleolegka.gachimuchi.data.seed.removalSummary
 import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.CelebrationCue
@@ -63,15 +57,17 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
- * Screen state: the whole journal, catalog, aliases and slot list, with the reducers
- * applied on the spot by the domain functions. Per-screen slicing lives in the screens
- * themselves — there is very little data (a personal diary), and an extra "view state per
- * screen" layer would only get in the way.
+ * Screen state: the whole journal, catalog and slot list, with the reducers applied on the
+ * spot by the domain functions. Per-screen slicing lives in the screens themselves — there
+ * is very little data (a personal diary), and an extra "view state per screen" layer would
+ * only get in the way.
+ *
+ * [loading] means "the database has not answered yet", and nothing else. It is what keeps a
+ * dialog raised on the first frame from describing an empty catalog as the whole truth.
  */
 data class UiState(
     val events: List<JournalEvent> = emptyList(),
     val exercises: List<ExerciseEntity> = emptyList(),
-    val aliases: List<AliasEntity> = emptyList(),
     val slots: List<Slot> = emptyList(),
     val loading: Boolean = true,
 ) {
@@ -82,10 +78,6 @@ data class UiState(
 
     /** The catalog row as the domain sees it — what the entry card builds its forms from. */
     fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.toRef()
-
-    /** Words that lead to an exercise: the picker searches by them as well as by name. */
-    fun aliasesOf(exerciseId: Long): List<String> =
-        aliases.filter { it.value == exerciseId && !it.blocked }.map { it.key }
 }
 
 /**
@@ -109,26 +101,15 @@ data class LogReceipt(
     val failed: Boolean = false,
 )
 
-/** The demo-data question waiting for an answer — see [MainViewModel.demoPrompt]. */
-sealed interface DemoPrompt {
-    /** Write the synthetic history. */
-    data object Write : DemoPrompt
-
-    /** Remove it again, taking exactly what [plan] says. */
-    data class Remove(val plan: DemoWipePlan) : DemoPrompt
-}
-
 class MainViewModel(
     private val repo: ActivityRepository,
     private val programRepo: ProgramRepository,
     private val timer: TimerController,
 ) : ViewModel() {
 
-    private val seeding = MutableStateFlow(false)
-
     val state: StateFlow<UiState> =
-        combine(repo.events, repo.exercises, repo.aliases, repo.slots, seeding) { events, exercises, aliases, slots, busy ->
-            UiState(events, exercises, aliases, slots, loading = busy)
+        combine(repo.events, repo.exercises, repo.slots) { events, exercises, slots ->
+            UiState(events, exercises, slots, loading = false)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
     /**
@@ -161,16 +142,15 @@ class MainViewModel(
     val activeExerciseId: StateFlow<Long?> = _activeExerciseId.asStateFlow()
 
     /**
-     * Points the entry card at an exercise. [learnedWord], when given, is the text that
-     * was typed into the search field before the exercise was tapped: §11 turns it into
-     * an alias, so the same word finds the same exercise next time without a search.
+     * Points the entry card at an exercise, and that is the whole of it.
+     *
+     * It used to take a second argument as well — the text left in the search box when the
+     * row was tapped — and learn it as a synonym for the exercise. Nothing is learned now
+     * (see domain/Session.kt on why the synonyms went), so choosing an exercise is a
+     * selection and not also a silent write.
      */
-    fun selectExercise(id: Long?, learnedWord: String? = null) {
+    fun selectExercise(id: Long?) {
         _activeExerciseId.value = id
-        val word = learnedWord?.trim()
-        if (id != null && !word.isNullOrEmpty()) {
-            viewModelScope.launch { repo.learnAlias(word, id) }
-        }
     }
 
     /**
@@ -282,10 +262,9 @@ class MainViewModel(
     }
 
     /**
-     * Creates a catalog exercise and immediately points the entry card at it. The name is
-     * learned as an alias straight away, so typing it later finds this exercise.
-     * For holds, edge and protocol are part of the identity (§12-A) and are stored on the
-     * exercise rather than asked for on every set.
+     * Creates a catalog exercise and immediately points the entry card at it. For holds,
+     * edge and protocol are part of the identity (§12-A) and are stored on the exercise
+     * rather than asked for on every set.
      */
     fun createExercise(
         name: String,
@@ -295,9 +274,7 @@ class MainViewModel(
         restSec: Double? = null,
     ) {
         viewModelScope.launch {
-            val id = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
-            repo.learnAlias(name, id)
-            _activeExerciseId.value = id
+            _activeExerciseId.value = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
         }
     }
 
@@ -316,84 +293,6 @@ class MainViewModel(
     /** Deletes a slot and, with it, every occurrence of it — past days included. */
     fun deleteSlot(id: Long) {
         viewModelScope.launch { repo.deleteSlot(id) }
-    }
-
-    // --- demo data, on request and reversible --------------------------------------------
-    //
-    // It used to be written on first launch and there was no way to remove it. Both halves
-    // of that were wrong, and the second one is why the first one mattered: ninety days of
-    // invented training went into the journal the app exists to keep honest, mixed with
-    // whatever the user recorded afterwards, permanently. Now it is asked for, it is
-    // confirmed, and it can be taken back out (data/seed/DemoCleanup.kt).
-    //
-    // Both directions go through the same two steps — say what will happen, then do it —
-    // because both are destructive: writing buries the empty states a new user should see,
-    // and removing deletes rows.
-
-    private val _demoPrompt = MutableStateFlow<DemoPrompt?>(null)
-
-    /** The question the settings screen is currently asking, or null. */
-    val demoPrompt: StateFlow<DemoPrompt?> = _demoPrompt.asStateFlow()
-
-    private val _demoNote = MutableStateFlow<String?>(null)
-
-    /** What the last demo-data action did, in a sentence, until the screen is left. */
-    val demoNote: StateFlow<String?> = _demoNote.asStateFlow()
-
-    fun askWriteDemoData() {
-        _demoNote.value = null
-        _demoPrompt.value = DemoPrompt.Write
-    }
-
-    /**
-     * Works out what a removal would take BEFORE asking, so the question can be about real
-     * numbers instead of a promise. On a phone with no demo data on it the answer is that,
-     * and the dialog says so rather than offering a button that does nothing.
-     */
-    fun askRemoveDemoData() {
-        _demoNote.value = null
-        viewModelScope.launch {
-            val plan = runCatching { planDemoWipe(repo) }.getOrNull()
-            if (plan == null) {
-                _demoNote.value = "The demo data could not be looked up. Nothing was changed."
-            } else {
-                _demoPrompt.value = DemoPrompt.Remove(plan)
-            }
-        }
-    }
-
-    fun dismissDemoPrompt() {
-        _demoPrompt.value = null
-    }
-
-    fun dismissDemoNote() {
-        _demoNote.value = null
-    }
-
-    /**
-     * Carries out the question that was asked. A removal executes the plan the user was
-     * shown, not a freshly computed one: between the two there is a dialog, and re-reading
-     * the database would mean the confirmation described one thing and the delete did
-     * another.
-     */
-    fun confirmDemoPrompt() {
-        val prompt = _demoPrompt.value ?: return
-        _demoPrompt.value = null
-        viewModelScope.launch {
-            seeding.value = true
-            _demoNote.value = when (prompt) {
-                DemoPrompt.Write -> runCatching { DemoSeed.seed(repo, LocalDate.now()) }.fold(
-                    onSuccess = { "Demo data written: ${it.events} entries over ${it.activeDays} days." },
-                    onFailure = { "The demo data could not be written. Nothing was changed." },
-                )
-
-                is DemoPrompt.Remove -> runCatching { applyDemoWipe(repo, prompt.plan) }.fold(
-                    onSuccess = { removalSummary(prompt.plan) },
-                    onFailure = { "The demo data could not be removed." },
-                )
-            }
-            seeding.value = false
-        }
     }
 
     // --- the workout timer -------------------------------------------------------------
@@ -604,7 +503,7 @@ class MainViewModel(
         viewModelScope.launch { receipt.eventIds.forEach { repo.cancelSet(it) } }
     }
 
-    /** Writes the starter programs on first launch, alongside the demo history. */
+    /** Writes the starter programs on first launch. They are the only thing written unasked. */
     fun seedProgramsIfEmpty() {
         viewModelScope.launch { runCatching { programRepo.seedStartersIfEmpty() } }
     }

@@ -90,7 +90,7 @@ class SessionTest {
     // --- prefilling ------------------------------------------------------------------
 
     @Test
-    fun `the entry card prefills from the last set of that exercise, across aliases`() {
+    fun `the entry card prefills from the last set of that exercise, whatever it was called`() {
         val events = listOf(
             ev(StrengthSet(exercise = "bench", reps = 8, weightKg = 55.0, exerciseId = 1, opDate = "2026-08-01")),
             ev(StrengthSet(exercise = "Bench press", reps = 5, weightKg = 62.5, exerciseId = 1, opDate = "2026-08-04")),
@@ -209,7 +209,7 @@ class SessionTest {
 
     @Test
     fun `an explicit rest in the payload wins over the derived gap`() {
-        // the bot and the demo seed do write rest_after_sec; the app derives it instead
+        // the bot does write rest_after_sec; the app derives it instead
         val events = listOf(
             ev(
                 StrengthSet(
@@ -265,32 +265,24 @@ class SessionTest {
     }
 
     @Test
-    fun `search matches names and learned aliases, an empty query matches everything`() {
-        assertTrue(matchesExerciseQuery("Bench press", emptyList(), "bench"))
-        assertTrue(matchesExerciseQuery("Bench press", emptyList(), ""))
-        assertTrue(matchesExerciseQuery("Hangs 20 mm", listOf("hang20", "fingers"), "finger"))
-        assertTrue(!matchesExerciseQuery("Bench press", listOf("bench"), "squat"))
+    fun `search matches a substring of the name, an empty query matches everything`() {
+        assertTrue(matchesExerciseQuery("Bench press", "bench"))
+        assertTrue(matchesExerciseQuery("Bench press", "press"))
+        assertTrue(matchesExerciseQuery("Bench press", ""))
+        assertTrue(matchesExerciseQuery("Bench press", "   "))
+        assertTrue(!matchesExerciseQuery("Bench press", "squat"))
     }
 
     @Test
-    fun `a word that matches nothing still offers the catalog, which is where it is taught`() {
-        // the whole alias mechanism hangs on this: a word becomes an alias by being in the
-        // search box when an exercise is tapped, so a list filtered down to nothing leaves
-        // no exercise to teach it to and a duplicate as the only way forward
-        assertTrue(offersWholeCatalog(query = "jim", matchCount = 0, catalogSize = 4))
-    }
-
-    @Test
-    fun `a word that matches something narrows the list as usual`() {
-        assertTrue(!offersWholeCatalog(query = "bench", matchCount = 1, catalogSize = 4))
-    }
-
-    @Test
-    fun `an empty query and an empty catalog have nothing to fall back to`() {
-        // an empty query already lists everything, and an empty catalog offers creation
-        assertTrue(!offersWholeCatalog(query = "", matchCount = 0, catalogSize = 4))
-        assertTrue(!offersWholeCatalog(query = "   ", matchCount = 0, catalogSize = 4))
-        assertTrue(!offersWholeCatalog(query = "jim", matchCount = 0, catalogSize = 0))
+    fun `a word that is not in any name matches nothing at all`() {
+        /*
+         * The list used to fall back to the WHOLE catalog here, so that a synonym could be
+         * taught by tapping a row while the word was still in the search box. There are no
+         * synonyms to teach any more, and a search box that quietly ignores what was typed
+         * is worse than one that finds nothing: the picker says so and offers to clear it.
+         */
+        assertTrue(!matchesExerciseQuery("Bench press", "jim"))
+        assertTrue(!matchesExerciseQuery("Squat", "jim"))
     }
 
     // --- a catalog row that carries a zero ---------------------------------------------

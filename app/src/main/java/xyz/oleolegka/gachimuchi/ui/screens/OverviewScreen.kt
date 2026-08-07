@@ -85,8 +85,9 @@ fun OverviewScreen(
                 if (tiles.isEmpty()) {
                     EmptyState(
                         title = "No workouts of any kind yet",
-                        hint = "The first entry shows up here and becomes the baseline every " +
-                            "record is measured against.",
+                        hint = "Start on Today: a workout, or a single entry. The first one " +
+                            "shows up here as a tile and becomes the baseline every record " +
+                            "is measured against.",
                     )
                 }
             }

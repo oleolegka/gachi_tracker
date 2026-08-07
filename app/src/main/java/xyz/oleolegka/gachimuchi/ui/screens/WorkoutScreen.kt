@@ -133,7 +133,17 @@ fun WorkoutScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (workout.isEmpty) {
-                item { DashedNote("Nothing recorded in this workout yet") }
+                // the sentence follows the button at the bottom, and stops where the button
+                // stops: a finished workout with nothing in it has no "carry on" to offer
+                item {
+                    DashedNote(
+                        if (onContinue != null) {
+                            "Nothing recorded yet. Continue the workout and the first set lands here."
+                        } else {
+                            "Nothing was recorded in this workout."
+                        }
+                    )
+                }
             }
 
             items(workout.exercises.size, key = { workout.exercises[it].exerciseId }) { index ->

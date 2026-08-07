@@ -136,11 +136,4 @@ class LoggingFlowTest {
         assertNotNull(sets[1].record)
         assertTrue(sets[1].record!!.text.contains("1RM"))
     }
-
-    @Test
-    fun `picking an exercise after a search teaches the typed word as an alias`() = runTest {
-        val id = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH)
-        repo.learnAlias("jim", id) // what the user typed before tapping the row
-        assertEquals(id, repo.resolveExercise("jim")!!.id)
-    }
 }

@@ -162,10 +162,7 @@ fun SlotEditorDialog(
         ExercisePickerSheet(
             state = state,
             today = today,
-            // the typed word is dropped rather than learned as an alias: teaching a word is a
-            // write to the catalog, and this dialog has no way to make one — it hands a draft
-            // back and touches nothing until Save. The logging screen still teaches it.
-            onPick = { id, _ -> draft = draft.withExerciseAdded(id) },
+            onPick = { id -> draft = draft.withExerciseAdded(id) },
             // planning picks from what is already trained; creating an exercise asks the
             // §12-A identity questions, which belong to the moment of the first set
             onCreate = null,

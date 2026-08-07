@@ -9,13 +9,13 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
+import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -23,20 +23,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import xyz.oleolegka.gachimuchi.data.db.AliasDao
-import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
-import xyz.oleolegka.gachimuchi.data.db.COLUMN_SEEDED
-import xyz.oleolegka.gachimuchi.data.db.EventDao
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
-import xyz.oleolegka.gachimuchi.data.db.ExerciseDao
-import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
 import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
-import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
@@ -115,8 +108,7 @@ data class SlotEntityV3(
 
 /**
  * The catalog of version 4: marked with the demo-seed flag, but before the workout
- * preferences of version 5. The aliases and the slots did not change between 4 and 5, so
- * their CURRENT entities are the version 4 snapshot and no class is declared for them.
+ * preferences of version 5.
  */
 @Entity(tableName = "exercises", indices = [Index(value = ["space_id", "id"])])
 data class ExerciseEntityV4(
@@ -128,7 +120,87 @@ data class ExerciseEntityV4(
     @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
     @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
     @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
-    @ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
+    @ColumnInfo(name = "seeded") val seeded: Boolean = false,
+)
+
+/*
+ * The aliases and the slots as they stood from version 4 onwards: the demo-seed mark and
+ * nothing else after it. They used to be represented here by the CURRENT entities, which the
+ * rule above allowed because neither table changed between 4 and 6.
+ *
+ * Version 7 changed both — one dropped, one rebuilt without the mark — so the reuse is no
+ * longer legal and these snapshots exist. There is nothing left to reuse in the alias case:
+ * the table is gone from the app entirely, and this class is now the only description of it
+ * anywhere in the repository. That is the point of a snapshot; it describes a database that
+ * still exists on phones, not one the code still believes in.
+ */
+
+@Entity(tableName = "aliases", primaryKeys = ["space_id", "key"])
+data class AliasEntityV4(
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val key: String,
+    val value: Long,
+    val uses: Int = 1,
+    val blocked: Boolean = false,
+    @ColumnInfo(name = "seeded") val seeded: Boolean = false,
+)
+
+@Entity(tableName = "slots", indices = [Index(value = ["space_id", "id"])])
+data class SlotEntityV4(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    @ColumnInfo(name = "at_time") val atTime: String?,
+    @ColumnInfo(name = "repeat_rule") val repeatRule: String,
+    @ColumnInfo(name = "anchor_date") val anchorDate: String,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "seeded") val seeded: Boolean = false,
+)
+
+/**
+ * The catalog of versions 5 and 6: the mark plus the workout preferences. One class for both
+ * because version 6 added a table and touched no column — the rule above allows one snapshot
+ * to stand for two versions of an unchanged table, it only forbids the CURRENT entity
+ * standing in for a table that has since changed.
+ */
+@Entity(tableName = "exercises", indices = [Index(value = ["space_id", "id"])])
+data class ExerciseEntityV5(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "seeded") val seeded: Boolean = false,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+)
+
+/**
+ * The composition of a slot as version 6 shipped it. Identical to [SlotExerciseEntity] in
+ * every column — version 7 left this table alone — but its foreign key has to name the
+ * `slots` entity THIS test database declares, and that is [SlotEntityV4].
+ */
+@Entity(
+    tableName = "slot_exercises",
+    indices = [Index(value = ["slot_id"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = SlotEntityV4::class,
+            parentColumns = ["id"],
+            childColumns = ["slot_id"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+)
+data class SlotExerciseEntityV6(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "slot_id") val slotId: Long,
+    @ColumnInfo(name = "exercise_id") val exerciseId: Long,
+    val position: Int,
+    @ColumnInfo(name = "rest_sec") val restSec: Int? = null,
 )
 
 /** Just enough to put rows into the old tables; reading happens through the current DAOs. */
@@ -148,22 +220,44 @@ interface LegacyCatalogDao {
 interface LegacyCatalogDaoV4 {
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV4): Long
+
+    @Insert
+    suspend fun insertAlias(alias: AliasEntityV4)
+
+    @Insert
+    suspend fun insertSlot(slot: SlotEntityV4): Long
 }
 
 /**
- * Putting a slot into a database that has no `slot_exercises` table.
+ * Writing into a version 5 or version 6 database.
  *
- * A SNAPSHOT OF THE DAO, not of the entity, and the split is the point. The `slots` table
- * itself did not change in version 6 — only a child table was added — so [SlotEntity] is
- * still the right shape for an old database and the rule above allows reusing it. The
- * current [SlotDao] is not: its composition queries name `slot_exercises`, and Room verifies
- * every @Query against the entities of the database it is declared on AT COMPILE TIME, so
- * hanging it off a schema without that table does not compile.
+ * The journal is inserted through the CURRENT [EventEntity]: `events` has not changed since
+ * version 5, so a snapshot of it would be a copy that can only rot. Everything else goes
+ * through the snapshots above.
  */
 @Dao
-interface LegacySlotDao {
+interface LegacyCatalogDaoV5 {
     @Insert
-    suspend fun insert(slot: SlotEntity): Long
+    suspend fun insertEvent(event: EventEntity): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV5): Long
+
+    @Insert
+    suspend fun insertAlias(alias: AliasEntityV4)
+
+    @Insert
+    suspend fun insertSlot(slot: SlotEntityV4): Long
+
+    /** So that a version 6 database can be left with a GAP at the top of its catalog. */
+    @Query("DELETE FROM exercises WHERE id = :id")
+    suspend fun deleteExercise(id: Long)
+}
+
+@Dao
+interface LegacySlotExerciseDao {
+    @Insert
+    suspend fun insert(row: SlotExerciseEntityV6): Long
 }
 
 /**
@@ -301,20 +395,16 @@ abstract class SchemaV3Database : RoomDatabase() {
 }
 
 /**
- * Version 4: the demo-seed mark is on the catalog, and nothing knows about workouts yet.
- * The journal has no `workout_id` and the catalog no rest preference — this is the phone the
- * 4 -> 5 migration actually runs on, and the only one that matters in practice, since it is
- * the version currently installed.
- *
- * The aliases and the slots are the CURRENT entities: those two tables did not change in
- * version 5, so a snapshot of them would be a copy that can only rot.
+ * Version 4: the demo-seed mark is on the catalog, the aliases and the slots, and nothing
+ * knows about workouts yet. The journal has no `workout_id` and the catalog no rest
+ * preference — this is the phone the 4 -> 5 migration actually runs on.
  */
 @Database(
     entities = [
         EventEntityV4::class,
         ExerciseEntityV4::class,
-        AliasEntity::class,
-        SlotEntity::class,
+        AliasEntityV4::class,
+        SlotEntityV4::class,
         ProgramEntity::class,
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
@@ -325,27 +415,19 @@ abstract class SchemaV3Database : RoomDatabase() {
 abstract class SchemaV4Database : RoomDatabase() {
     abstract fun events(): LegacyEventDao
     abstract fun catalog(): LegacyCatalogDaoV4
-    abstract fun aliases(): AliasDao
-    abstract fun slots(): LegacySlotDao
 }
 
 /**
  * Version 5: the workout link is on the journal and the rest preferences are on the catalog,
  * and a slot is still nothing but a name, a time and a rule — no composition. This is the
  * phone the 5 -> 6 migration actually runs on.
- *
- * EVERY ENTITY HERE IS THE CURRENT ONE, and under the rule at the top of this file that is
- * allowed only because version 6 changed no existing table: it added `slot_exercises` and
- * touched nothing else. The moment a column is added to any of these, this database has to
- * grow a snapshot class for that table or it stops testing anything. The DAO is a different
- * matter and [LegacySlotDao] says why.
  */
 @Database(
     entities = [
         EventEntity::class,
-        ExerciseEntity::class,
-        AliasEntity::class,
-        SlotEntity::class,
+        ExerciseEntityV5::class,
+        AliasEntityV4::class,
+        SlotEntityV4::class,
         ProgramEntity::class,
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
@@ -354,10 +436,37 @@ abstract class SchemaV4Database : RoomDatabase() {
     exportSchema = false,
 )
 abstract class SchemaV5Database : RoomDatabase() {
-    abstract fun events(): EventDao
-    abstract fun exercises(): ExerciseDao
-    abstract fun aliases(): AliasDao
-    abstract fun slots(): LegacySlotDao
+    abstract fun catalog(): LegacyCatalogDaoV5
+}
+
+/**
+ * Version 6: a slot can say what it consists of, and the demo seed is still a feature — the
+ * mark is on the catalog, on the aliases and on the plan, and the `aliases` table is full of
+ * words the app taught itself. This is the phone the 6 -> 7 migration actually runs on, and
+ * the only one that matters in practice, since it is the version currently installed.
+ *
+ * `slot_exercises` and `events` are the two tables version 7 leaves alone; `events` is
+ * therefore inserted through the current entity, while `slot_exercises` gets a snapshot for
+ * a reason that is about the foreign key and not about its columns — see
+ * [SlotExerciseEntityV6].
+ */
+@Database(
+    entities = [
+        EventEntity::class,
+        ExerciseEntityV5::class,
+        AliasEntityV4::class,
+        SlotEntityV4::class,
+        SlotExerciseEntityV6::class,
+        ProgramEntity::class,
+        ProgramGroupEntity::class,
+        ProgramBlockEntity::class,
+    ],
+    version = 6,
+    exportSchema = false,
+)
+abstract class SchemaV6Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV5
+    abstract fun compositions(): LegacySlotExerciseDao
 }
 
 /**
@@ -464,7 +573,7 @@ class MigrationTest {
             .also { opened = it }
 
     @Test
-    fun `the journal, the catalog, the aliases and the slots all survive the upgrade`() = runTest {
+    fun `the journal, the catalog and the slots all survive the upgrade`() = runTest {
         writeVersion1()
 
         val v2 = openCurrent()
@@ -478,7 +587,6 @@ class MigrationTest {
         assertEquals("Hangs 20 mm", exercises.single().name)
         assertEquals(20.0, exercises.single().edgeMm!!, 1e-9)
 
-        assertNotNull(v2.aliases().byKey("bench"))
         assertEquals(1, v2.slots().all().size)
     }
 
@@ -619,28 +727,25 @@ class MigrationTest {
         opened = null
     }
 
+    /**
+     * The 3 -> 4 step added a column that 6 -> 7 has since taken away again, so what this
+     * checks is no longer the column but the WALK: a phone at version 3 has to get through
+     * an add of `seeded` and a drop of it without losing anything on the way, and the add is
+     * still real code that still runs.
+     */
     @Test
-    fun `everything already on the phone comes through the mark as the user's own`() = runTest {
-        writeVersion3()
+    fun `everything already on the phone survives the mark being added and dropped again`() =
+        runTest {
+            writeVersion3()
 
-        val v4 = openCurrent()
+            val v7 = openCurrent()
 
-        // the rows are all still there
-        assertEquals(1, v4.events().count())
-        assertEquals(1, v4.slots().all().size)
-        val exercise = v4.exercises().all().single()
-        assertEquals("Bench press", exercise.name)
-
-        /*
-         * And every one of them reads as "not the seed's". That default is the whole safety
-         * property of this migration: the mark exists only to authorise DELETION, so a row
-         * whose origin is unknown has to come through as unmarked. Guessing the other way
-         * would have armed the remove button against records nobody can get back.
-         */
-        assertFalse(exercise.seeded)
-        assertFalse(v4.slots().all().single().seeded)
-        assertFalse(v4.aliases().byKey("bench")!!.seeded)
-    }
+            assertEquals(1, v7.events().count())
+            assertEquals(1, v7.slots().all().size)
+            assertEquals("Gym", v7.slots().all().single().name)
+            val exercise = v7.exercises().all().single()
+            assertEquals("Bench press", exercise.name)
+        }
 
     @Test
     fun `the marked database passes Room's schema check on the next open`() = runTest {
@@ -685,9 +790,9 @@ class MigrationTest {
                 EventEntityV4(ts = "${day}T10:00:00", type = set.type, payload = set.toPayload())
             )
         }
-        v4.aliases().upsert(AliasEntity(key = "bench", value = exerciseId))
-        v4.slots().insert(
-            SlotEntity(
+        v4.catalog().insertAlias(AliasEntityV4(key = "bench", value = exerciseId))
+        v4.catalog().insertSlot(
+            SlotEntityV4(
                 name = "Gym", atTime = "19:00", repeatRule = "weekly",
                 anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
             )
@@ -708,7 +813,6 @@ class MigrationTest {
         assertEquals(2, events.size)
         assertTrue(events.first().payload.contains("Bench press"))
         assertEquals(1, v5.slots().all().size)
-        assertNotNull(v5.aliases().byKey("bench"))
 
         /*
          * And every one of those rows reads as "recorded outside any workout", which is the
@@ -774,8 +878,8 @@ class MigrationTest {
         val v5 = Room.databaseBuilder(context, SchemaV5Database::class.java, dbName).build()
         opened = v5
 
-        val exerciseId = v5.exercises().insert(
-            ExerciseEntity(
+        val exerciseId = v5.catalog().insertExercise(
+            ExerciseEntityV5(
                 name = "Bench press", form = ExerciseForm.STRENGTH.code,
                 createdAt = "2026-07-01T10:00:00", defaultRestSec = 150,
             )
@@ -786,12 +890,12 @@ class MigrationTest {
             ),
             opDate = "2026-07-01", reps = 5, weightKg = 80.0,
         )
-        v5.events().insert(
+        v5.catalog().insertEvent(
             EventEntity(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
         )
-        v5.aliases().upsert(AliasEntity(key = "bench", value = exerciseId))
-        val slotId = v5.slots().insert(
-            SlotEntity(
+        v5.catalog().insertAlias(AliasEntityV4(key = "bench", value = exerciseId))
+        val slotId = v5.catalog().insertSlot(
+            SlotEntityV4(
                 name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
                 anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
             )
@@ -892,23 +996,212 @@ class MigrationTest {
         assertEquals(1, again.slots().all().size)
     }
 
+    // --- version 6 -> 7: the demo mark and the learned words go -----------------------------
+
+    /** What a version 6 database was left holding, so the tests can name its rows. */
+    private data class Phone(
+        val slotId: Long,
+        /** An exercise the demo seed created, mark and all. */
+        val seededExerciseId: Long,
+        /** An exercise DELETED before the upgrade — its id must never come back. */
+        val goneExerciseId: Long,
+    )
+
+    /**
+     * A phone with the demo seed on it, which is what version 6 shipped: a catalog where some
+     * rows are marked as the seed's and some are the user's, a plan with a composition, a
+     * journal, and a table of words the app taught itself.
+     *
+     * It also has a HOLE at the top of its catalog — an exercise created and deleted again —
+     * because that is the state in which rebuilding a table can quietly start reissuing ids.
+     */
+    private suspend fun writeVersion6(): Phone {
+        val v6 = Room.databaseBuilder(context, SchemaV6Database::class.java, dbName).build()
+        opened = v6
+
+        val mine = v6.catalog().insertExercise(
+            ExerciseEntityV5(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-07-01T10:00:00", defaultRestSec = 150, ledByProtocol = false,
+            )
+        )
+        val seeded = v6.catalog().insertExercise(
+            ExerciseEntityV5(
+                name = "Hangs 20 mm", form = ExerciseForm.HOLD.code,
+                createdAt = "2026-07-01T10:00:00", edgeMm = 20.0,
+                protocolWorkSec = 7.0, protocolRestSec = 3.0, seeded = true,
+            )
+        )
+        val gone = v6.catalog().insertExercise(
+            ExerciseEntityV5(
+                name = "Overhead press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-07-02T10:00:00",
+            )
+        )
+        v6.catalog().deleteExercise(gone)
+
+        val set = strengthSetOf(
+            exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                id = mine, name = "Bench press", form = ExerciseForm.STRENGTH,
+            ),
+            opDate = "2026-07-01", reps = 5, weightKg = 80.0,
+        )
+        v6.catalog().insertEvent(
+            EventEntity(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
+        )
+        v6.catalog().insertAlias(AliasEntityV4(key = "bench", value = mine))
+        v6.catalog().insertAlias(AliasEntityV4(key = "hang20", value = seeded, seeded = true))
+        val slotId = v6.catalog().insertSlot(
+            SlotEntityV4(
+                name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
+                anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00", seeded = true,
+            )
+        )
+        v6.compositions().insert(
+            SlotExerciseEntityV6(slotId = slotId, exerciseId = mine, position = 0, restSec = 180)
+        )
+        v6.compositions().insert(
+            SlotExerciseEntityV6(slotId = slotId, exerciseId = seeded, position = 1, restSec = null)
+        )
+        v6.close()
+        opened = null
+        return Phone(slotId = slotId, seededExerciseId = seeded, goneExerciseId = gone)
+    }
+
+    @Test
+    fun `dropping the seed mark keeps every row it was on, marked or not`() = runTest {
+        val (slotId, seededId, _) = writeVersion6()
+
+        val repo = ActivityRepository(openCurrent())
+
+        /*
+         * The exercise the seed created comes through exactly like the user's own. There is
+         * no such thing as demo data any more, so "it was the demo's" is not a reason to
+         * delete a row during an upgrade — silently, with no dialog and no undo, which is the
+         * one kind of delete this app must never do.
+         */
+        assertEquals(2, repo.allExercises().size)
+        val seeded = repo.exercise(seededId)!!
+        assertEquals("Hangs 20 mm", seeded.name)
+        assertEquals(20.0, seeded.edgeMm!!, 1e-9)
+
+        // and the preferences of version 5 survive being copied into a rebuilt table
+        val mine = repo.allExercises().single { it.name == "Bench press" }
+        assertEquals(150, mine.defaultRestSec)
+        // false, not null: the rebuild has to keep a nullable INTEGER nullable, or "the user
+        // said no" collapses into "nothing has been said"
+        assertEquals(false, mine.ledByProtocol)
+
+        val slot = repo.slot(slotId)!!
+        assertEquals("Gym", slot.name)
+        assertEquals("19:00", slot.atTime)
+        assertEquals(1, repo.eventCount())
+    }
+
+    @Test
+    fun `rebuilding the plan does not take its composition with it`() = runTest {
+        val (slotId, seededId, _) = writeVersion6()
+
+        val repo = ActivityRepository(openCurrent())
+
+        /*
+         * THE ONE THING THAT COULD GO SILENTLY WRONG. `slots` cannot lose a column without
+         * being dropped and recreated, and `slot_exercises` cascades from it — with foreign
+         * keys enabled, dropping the parent deletes the children, and the upgrade would take
+         * every planned session's contents away while looking like a success. Room runs
+         * migrations before it turns foreign keys on, which is what makes the rebuild safe;
+         * this is the assertion that says so rather than assuming it.
+         */
+        val planned = repo.slotExercises(slotId)
+        assertEquals(2, planned.size)
+        assertEquals(seededId, planned[1].exerciseId)
+        // null survives as null, and the order survives as the order
+        assertEquals(listOf(180, null), planned.map { it.restSec })
+    }
+
+    @Test
+    fun `the cascade is still a cascade after the plan table is rebuilt`() = runTest {
+        val (slotId, _, _) = writeVersion6()
+
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+
+        // the rebuilt `slots` is a different table from the one `slot_exercises` was created
+        // against, so the key that ties them has to be re-established by the migration and
+        // not merely survive in the child's own DDL
+        repo.deleteSlot(slotId)
+        assertEquals(0, repo.allSlots().size)
+        assertTrue(db.slots().allExercises().isEmpty())
+    }
+
+    @Test
+    fun `an id that was handed out before the rebuild is never handed out again`() = runTest {
+        val (_, _, goneId) = writeVersion6()
+
+        val repo = ActivityRepository(openCurrent())
+
+        /*
+         * The rebuilt catalog holds no row with that id, so its AUTOINCREMENT counter would
+         * restart below it — unless the migration carries the old counter across, which is
+         * what this checks.
+         *
+         * It matters because the journal outlives the catalog: an entry keeps the
+         * exercise_id of a row that has been deleted. Reissuing the id would silently
+         * re-attach every one of those entries to whatever was created next, which is a
+         * corruption nothing on any screen would show as one.
+         */
+        val fresh = repo.ensureExercise("Front squat", ExerciseForm.STRENGTH)
+        assertTrue("id $fresh belonged to an exercise deleted before the upgrade", fresh > goneId)
+    }
+
+    @Test
+    fun `the words the app taught itself are gone, table and all`() = runTest {
+        writeVersion6()
+
+        val db = openCurrent()
+        // Room's own check on the second open only knows about tables it declares, so the one
+        // that is supposed to be ABSENT has to be asked for directly — through the open helper
+        // rather than through Room, whose query() refuses to run on the test's thread
+        db.openHelper.writableDatabase
+            .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'aliases'")
+            .use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun `the rebuilt tables pass Room's schema check on the next open`() = runTest {
+        writeVersion6()
+
+        openCurrent().also { it.events().count() }.close()
+        opened = null
+
+        /*
+         * This is the assertion that catches a hand-written CREATE TABLE drifting from the
+         * entity: a column affinity, a NOT NULL, an index name. Room compares the database
+         * against the entity definitions on an open that runs no migration, and refuses a
+         * mismatch — here rather than on a phone, where the refusal is a crash on launch.
+         */
+        val again = openCurrent()
+        assertEquals(1, again.events().count())
+        assertEquals(2, again.exercises().all().size)
+        assertEquals(1, again.slots().all().size)
+        assertEquals(2, again.slots().allExercises().size)
+    }
+
     @Test
     fun `a phone that skipped every release in between still arrives intact`() = runTest {
-        // 1 -> 6 in one go. Nobody upgrades one version at a time, and a chain that only ever
+        // 1 -> 7 in one go. Nobody upgrades one version at a time, and a chain that only ever
         // gets tested link by link is a chain whose middle is untested.
         writeVersion1()
 
-        val v6 = openCurrent()
+        val v7 = openCurrent()
 
-        assertEquals(1, v6.events().count())
-        assertTrue(v6.events().all().single().workoutId == null)
-        val exercise = v6.exercises().all().single()
-        assertFalse(exercise.seeded)
+        assertEquals(1, v7.events().count())
+        assertTrue(v7.events().all().single().workoutId == null)
+        val exercise = v7.exercises().all().single()
         assertNull(exercise.defaultRestSec)
         assertEquals(20.0, exercise.edgeMm!!, 1e-9)
-        assertNotNull(v6.aliases().byKey("bench"))
-        assertEquals(1, v6.slots().all().size)
-        assertTrue(v6.slots().allExercises().isEmpty())
-        assertEquals(0, v6.programs().countPrograms())
+        assertEquals(1, v7.slots().all().size)
+        assertTrue(v7.slots().allExercises().isEmpty())
+        assertEquals(0, v7.programs().countPrograms())
     }
 }

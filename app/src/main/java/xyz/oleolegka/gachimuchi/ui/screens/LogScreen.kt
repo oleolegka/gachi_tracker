@@ -117,7 +117,7 @@ fun LogScreen(
     timerActions: TimerActions,
     onEnableTimer: () -> Unit,
     onStartExerciseProgram: (ExerciseRef) -> Unit,
-    onSelectExercise: (Long?, String?) -> Unit,
+    onSelectExercise: (Long?) -> Unit,
     onCreateExercise: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
     onAddSet: (ActivityForm) -> Unit,
     onUndoSet: (Long) -> Unit,
@@ -197,7 +197,7 @@ fun LogScreen(
             session = session,
             activeExerciseId = activeExerciseId,
             catalogEmpty = catalogEmpty,
-            onSelectExercise = { onSelectExercise(it, null) },
+            onSelectExercise = onSelectExercise,
             onPick = { picking = true },
             modifier = Modifier.padding(padding),
         )

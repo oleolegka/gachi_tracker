@@ -80,8 +80,8 @@ fun TodayScreen(
              * There used to be a "Demo data" button here, one tap from the primary screen,
              * with no confirmation, which poured synthetic sets straight into the journal.
              * The one screen that answers "what am I doing today" was the one screen that
-             * could make that answer untrue by accident. It now lives in Settings, behind a
-             * question, with a way back out.
+             * could make that answer untrue by accident. The demo is gone entirely now, and
+             * an empty day says what to do rather than being padded out with invented sets.
              */
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(

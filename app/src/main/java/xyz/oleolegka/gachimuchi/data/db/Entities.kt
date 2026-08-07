@@ -14,13 +14,18 @@ import androidx.room.PrimaryKey
  * deliberate choice in favour of conflict-free sync: two devices appending to opposite
  * ends of the journal merge by union rather than by resolving field conflicts.
  *
- * The catalog [ExerciseEntity], the aliases [AliasEntity], the slots [SlotEntity] and the
- * composition of a slot [SlotExerciseEntity] are NOT part of the journal: they are editable
- * reference data and the plan (§12-B explicitly allows editing the plan).
+ * The catalog [ExerciseEntity], the slots [SlotEntity] and the composition of a slot
+ * [SlotExerciseEntity] are NOT part of the journal: they are editable reference data and the
+ * plan (§12-B explicitly allows editing the plan).
  *
  * `space_id` (the profile) is present everywhere, exactly as on the server:
  * multi-tenancy is preserved in the schema even though the app has exactly one profile
  * so far ([LOCAL_SPACE_ID]).
+ *
+ * The server schema also has a `dictionary` table of learned synonyms, which this one
+ * mirrored until schema version 7. It is gone (see [AppDatabase] on the 6 -> 7 migration):
+ * the words were only ever taught by a parser of free text, and in the app an exercise is
+ * picked from a list.
  */
 
 /** The single local profile. The space_id column is kept for schema compatibility. */
@@ -28,23 +33,6 @@ const val LOCAL_SPACE_ID = 1L
 
 /** Author of local records (on the server this is the Telegram id). */
 const val LOCAL_AUTHOR_ID = 1L
-
-/** Author of the demo seed: negative, so that wiping the seed cannot touch real records. */
-const val SEED_AUTHOR_ID = -777L
-
-/**
- * Marks a row as something the DEMO SEED created (schema version 4).
- *
- * Events carry their origin in [SEED_AUTHOR_ID] and always did. The catalog, the aliases
- * and the slots did not, and that was the hole: demo hangs, demo words and a demo plan were
- * written into a real profile with nothing to tell them apart from the user's own, so the
- * only way to get rid of them was to clear the app's data and lose the journal with them.
- *
- * The flag is set on INSERT only. An exercise the seed found already there (the catalog
- * deduplicates by name) belongs to the user and stays unmarked, so removing the demo data
- * cannot take it away.
- */
-const val COLUMN_SEEDED = "seeded"
 
 @Entity(
     tableName = "events",
@@ -82,8 +70,8 @@ data class EventEntity(
 )
 
 /**
- * A canonical exercise (§11): statistics and records aggregate by `id` rather than by
- * word — "squat" and "squats" are two aliases of one row.
+ * A canonical exercise (§11): statistics and records aggregate by `id` rather than by the
+ * word an entry happens to carry, so "squat" and "squats" cannot end up as two histories.
  *
  * [edgeMm], [protocolWorkSec] and [protocolRestSec] are an EXTENSION over the server
  * table (which has five columns). The reason is §12-A: hangboard identity is
@@ -106,8 +94,6 @@ data class ExerciseEntity(
     @androidx.room.ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
     @androidx.room.ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
     @androidx.room.ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
-    /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
-    @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
     /**
      * The rest between sets last chosen for this exercise, in seconds (schema version 5),
      * or null while nothing has been chosen yet.
@@ -138,23 +124,6 @@ data class ExerciseEntity(
      * everywhere else rather than freezing today's guess into every existing row.
      */
     @androidx.room.ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
-)
-
-/**
- * An alias: word -> exercise_id (the generic `dictionary` table, repurposed).
- * [blocked] preserves the server behaviour of "a word leads to two different exercises,
- * so the word is no longer evidence".
- */
-@Entity(tableName = "aliases", primaryKeys = ["space_id", "key"])
-data class AliasEntity(
-    @androidx.room.ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
-    val key: String,
-    /** The exercise_id the word points at. */
-    val value: Long,
-    val uses: Int = 1,
-    val blocked: Boolean = false,
-    /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
-    @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
 )
 
 /**
@@ -269,8 +238,6 @@ data class SlotEntity(
     @androidx.room.ColumnInfo(name = "repeat_rule") val repeatRule: String,
     @androidx.room.ColumnInfo(name = "anchor_date") val anchorDate: String,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
-    /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
-    @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
 )
 
 /**
@@ -293,9 +260,6 @@ data class SlotEntity(
  *
  * [position] is written from the list index on every save (the composition is replaced, not
  * diffed), so the stored order and the order on screen cannot drift apart.
- *
- * There is no `seeded` column: the demo seed writes no compositions, and if it ever does,
- * these rows go when their slot does.
  */
 @Entity(
     tableName = "slot_exercises",

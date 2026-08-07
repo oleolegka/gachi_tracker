@@ -5,7 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Journal reducer tests: read filters, reversals, groupings, aggregation across aliases. */
+/** Journal reducer tests: read filters, reversals, groupings, aggregation by exercise_id. */
 class JournalTest {
 
     private var nextId = 1L
@@ -61,7 +61,7 @@ class JournalTest {
     }
 
     @Test
-    fun `aggregation by exercise_id merges aliases and skips records without an id`() {
+    fun `aggregation by exercise_id merges spellings and skips records without an id`() {
         val events = listOf(
             strength("2026-08-01", "bench", 60.0, 5, 1),
             strength("2026-08-02", "bench press", 62.5, 5, 1),  // different word, same id
@@ -130,19 +130,5 @@ class JournalTest {
         // the readable reversal still counts; the unreadable one is simply not evidence
         assertEquals(setOf(first.id), cancelledEventIds(listOf(first, broken, real)))
         assertEquals(0, readActivities(listOf(first, broken, real)).size)
-    }
-
-    @Test
-    fun `the exercises a journal points at include the ones whose sets were cancelled`() {
-        val set = strength("2026-08-06", "Bench press", 60.0, 5, 7)
-        val cancel = JournalEvent(
-            97, "2026-08-06T11:00:00", 1, 1, TYPE_SET_CANCEL,
-            payloadJson.encodeToString(SetCancel(set.id)),
-        )
-        val broken = JournalEvent(96, "2026-08-06T12:00:00", 1, 1, TYPE_HOLD_SET, "not json")
-
-        // this is what stops the demo wipe deleting a catalog row that real history names,
-        // whether or not the reducers still count that history
-        assertEquals(setOf(7L), exerciseIdsReferencedBy(listOf(set, cancel, broken)))
     }
 }

@@ -3,8 +3,6 @@ package xyz.oleolegka.gachimuchi.data
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
-import xyz.oleolegka.gachimuchi.data.db.AliasDao
-import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
@@ -50,8 +48,6 @@ class ActivityRepository(private val db: AppDatabase) {
 
     val exercises: Flow<List<ExerciseEntity>> = db.exercises().observeAll()
 
-    val aliases: Flow<List<AliasEntity>> = db.aliases().observeAll()
-
     /**
      * The plan, each slot carrying what it is meant to consist of.
      *
@@ -81,25 +77,23 @@ class ActivityRepository(private val db: AppDatabase) {
      * (thousands of rows) that is nothing, and it keeps one definition of "which workout is
      * open" instead of a second one written in SQL that would drift from the domain's.
      *
-     * The DEMO SEED is excluded by author. Its sets are backdated synthetic history and
-     * pressing "demo data" while a real workout is open must not pour them into it.
-     *
      * [attachToWorkout] = false is the caller saying "this one is on its own". It exists
      * because the app now offers "log a single entry" as a thing distinct from training, and
      * without it that offer would be a lie whenever a workout happened to be open: the entry
      * would be filed inside the workout and would show up as part of it. Silence is not
      * available here — the entry lands somewhere either way, and only the caller knows which
      * of the two the user asked for.
+     *
+     * There used to be a second condition on the attachment, excluding rows written by the
+     * demo seed's author id. Every row the app writes is the user's own now, so the author
+     * is no longer something a caller can choose: [LOCAL_AUTHOR_ID] is the only value, and
+     * the column survives only because the server schema has it (see Entities.kt).
      */
-    suspend fun record(
-        form: ActivityForm,
-        authorId: Long = LOCAL_AUTHOR_ID,
-        attachToWorkout: Boolean = true,
-    ): Long =
+    suspend fun record(form: ActivityForm, attachToWorkout: Boolean = true): Long =
         db.events().insert(
             EventEntity(
-                ts = now(), authorId = authorId, type = form.type, payload = form.toPayload(),
-                workoutId = if (authorId == LOCAL_AUTHOR_ID && attachToWorkout) currentWorkoutId() else null,
+                ts = now(), type = form.type, payload = form.toPayload(),
+                workoutId = if (attachToWorkout) currentWorkoutId() else null,
             )
         )
 
@@ -122,16 +116,13 @@ class ActivityRepository(private val db: AppDatabase) {
      *
      * [slotId] records which planned session this was started from, when the user picked one.
      */
-    suspend fun startWorkout(
-        opDate: String = today(),
-        slotId: Long? = null,
-        authorId: Long = LOCAL_AUTHOR_ID,
-    ): Long = db.events().insert(
-        EventEntity(
-            ts = now(), authorId = authorId, type = TYPE_WORKOUT_STARTED,
-            payload = payloadJson.encodeToString(WorkoutStarted(opDate = opDate, slotId = slotId)),
+    suspend fun startWorkout(opDate: String = today(), slotId: Long? = null): Long =
+        db.events().insert(
+            EventEntity(
+                ts = now(), type = TYPE_WORKOUT_STARTED,
+                payload = payloadJson.encodeToString(WorkoutStarted(opDate = opDate, slotId = slotId)),
+            )
         )
-    )
 
     /**
      * Puts an exercise into a workout with a chosen rest, before any set of it exists.
@@ -146,15 +137,10 @@ class ActivityRepository(private val db: AppDatabase) {
      * finds everything belonging to a workout regardless of event type — see
      * [WorkoutExerciseAdded] for why the payload carries it too.
      */
-    suspend fun addExerciseToWorkout(
-        workoutId: Long,
-        exerciseId: Long,
-        restSec: Int,
-        authorId: Long = LOCAL_AUTHOR_ID,
-    ): Long {
+    suspend fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int): Long {
         val id = db.events().insert(
             EventEntity(
-                ts = now(), authorId = authorId, type = TYPE_WORKOUT_EXERCISE_ADDED,
+                ts = now(), type = TYPE_WORKOUT_EXERCISE_ADDED,
                 payload = payloadJson.encodeToString(
                     WorkoutExerciseAdded(workoutId = workoutId, exerciseId = exerciseId, restSec = restSec)
                 ),
@@ -174,21 +160,13 @@ class ActivityRepository(private val db: AppDatabase) {
         db.exercises().setLedByProtocol(exerciseId, ledByProtocol)
 
     /**
-     * Wipes the DEMO SEED events (by author). This is the only delete in the journal and
-     * the only admissible one: the seed was never part of the user's history — it is
-     * synthetic data written so the screens are not empty. Real records
-     * (author = [LOCAL_AUTHOR_ID]) are left alone.
-     */
-    suspend fun clearSeedEvents(): Int = db.events().deleteBySeedAuthor()
-
-    /**
      * Cancels a set: the journal is append-only, so a REVERSING event is written while
      * the set itself stays in the history (the reducers exclude it).
      */
-    suspend fun cancelSet(eventId: Long, authorId: Long = LOCAL_AUTHOR_ID): Long =
+    suspend fun cancelSet(eventId: Long): Long =
         db.events().insert(
             EventEntity(
-                ts = now(), authorId = authorId, type = TYPE_SET_CANCEL,
+                ts = now(), type = TYPE_SET_CANCEL,
                 payload = payloadJson.encodeToString(SetCancel(eventId)),
             )
         )
@@ -221,13 +199,9 @@ class ActivityRepository(private val db: AppDatabase) {
         edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
-        seeded: Boolean = false,
         defaultRestSec: Int? = null,
     ): Long {
         val want = normPhrase(name)
-        // an exercise that is already there is the USER'S, whatever created this call: the
-        // seed mark is set on insert and never stamped onto a row found by name, so pressing
-        // "demo data" cannot make a real exercise deletable
         db.exercises().all().firstOrNull { normPhrase(it.name) == want }?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
             return found.id
@@ -236,58 +210,9 @@ class ActivityRepository(private val db: AppDatabase) {
             ExerciseEntity(
                 name = name, form = form.code, createdAt = now(),
                 edgeMm = edgeMm, protocolWorkSec = workSec, protocolRestSec = restSec,
-                seeded = seeded, defaultRestSec = defaultRestSec,
+                defaultRestSec = defaultRestSec,
             )
         )
-    }
-
-    /**
-     * Learns an alias word -> exercise_id. The mechanics come from the server: both the
-     * phrase itself and its FIRST WORD are learned; if the word already points at a
-     * different exercise, the word is blocked (from then on phrases and the picker
-     * decide) instead of being silently relearned.
-     */
-    /**
-     * [seeded] = true is the demo seed learning a word, and it behaves differently in one
-     * respect: it only ever ADDS words that are not there yet. It does not repoint an
-     * existing alias, does not bump its use count and does not block it. Demo data must not
-     * be able to change where a word the user taught the app leads, and a word the seed did
-     * create is marked so that removing the demo takes it back out again.
-     */
-    suspend fun learnAlias(word: String, exerciseId: Long, seeded: Boolean = false) {
-        val phrase = normPhrase(word) ?: return
-        val existingPhrase = db.aliases().byKey(phrase)
-        if (!(seeded && existingPhrase != null)) {
-            db.aliases().upsert(
-                AliasEntity(key = phrase, value = exerciseId, seeded = existingPhrase?.seeded ?: seeded)
-            )
-        }
-        val first = phrase.substringBefore(' ')
-        if (first == phrase) return
-        val existing = db.aliases().byKey(first)
-        when {
-            existing == null ->
-                db.aliases().upsert(AliasEntity(key = first, value = exerciseId, seeded = seeded))
-
-            seeded -> Unit // the seed never touches a word that already means something
-            existing.blocked -> Unit
-            existing.value == exerciseId ->
-                db.aliases().upsert(existing.copy(uses = existing.uses + 1))
-
-            else -> db.aliases().upsert(existing.copy(blocked = true))
-        }
-    }
-
-    /** Word -> exercise (via aliases: the whole phrase first, then the first word). */
-    suspend fun resolveExercise(word: String): ExerciseEntity? {
-        val phrase = normPhrase(word) ?: return null
-        val dao: AliasDao = db.aliases()
-        dao.byKey(phrase)?.takeIf { !it.blocked }?.let { return db.exercises().byId(it.value) }
-        val first = phrase.substringBefore(' ')
-        if (first != phrase) {
-            dao.byKey(first)?.takeIf { !it.blocked }?.let { return db.exercises().byId(it.value) }
-        }
-        return null
     }
 
     // --- calendar slots (§12-B) ---
@@ -299,11 +224,10 @@ class ActivityRepository(private val db: AppDatabase) {
         atTime: String? = null,
         repeatRule: String,
         anchorDate: String,
-        seeded: Boolean = false,
     ): Long = db.slots().insert(
         SlotEntity(
             name = name.trim(), atTime = atTime, repeatRule = repeatRule,
-            anchorDate = anchorDate, createdAt = now(), seeded = seeded,
+            anchorDate = anchorDate, createdAt = now(),
         )
     )
 
@@ -384,29 +308,6 @@ class ActivityRepository(private val db: AppDatabase) {
      * see [SlotExerciseEntity]. It has to go: those rows are reachable only through the slot.
      */
     suspend fun deleteSlot(id: Long) = db.slots().deleteByIds(listOf(id))
-
-    /** The plan is freely editable (append-only applies to facts, not to the plan). */
-    suspend fun deleteSlots(ids: List<Long>) = db.slots().deleteByIds(ids)
-
-    // --- removing the demo data (data/seed/DemoCleanup.kt decides WHAT, this is HOW) ---
-
-    /** Slot rows as stored, seed mark included — [slots] drops it on the way to the domain. */
-    suspend fun allSlotRows(): List<SlotEntity> = db.slots().all()
-
-    suspend fun allAliases(): List<AliasEntity> = db.aliases().all()
-
-    suspend fun deleteExercises(ids: List<Long>) {
-        if (ids.isNotEmpty()) db.exercises().deleteByIds(ids)
-    }
-
-    suspend fun deleteAliases(keys: List<String>) {
-        if (keys.isNotEmpty()) db.aliases().deleteByKeys(keys)
-    }
-
-    /** Turns seeded exercises into ordinary ones — see [ExerciseDao.clearSeedMark]. */
-    suspend fun keepExercises(ids: List<Long>) {
-        if (ids.isNotEmpty()) db.exercises().clearSeedMark(ids)
-    }
 }
 
 /**

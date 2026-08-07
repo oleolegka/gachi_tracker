@@ -7,8 +7,8 @@ import kotlin.math.roundToInt
  * §12-A amendment.
  *
  * A record is NOT a stored field but a REDUCER over the journal: pure functions compare
- * a new set against the PREVIOUS sets of the same exercise (aggregated by exercise_id,
- * which merges aliases). The database schema is untouched by any of this.
+ * a new set against the PREVIOUS sets of the same exercise (aggregated by exercise_id, not
+ * by the name written on the entry). The database schema is untouched by any of this.
  *
  * WHAT IS COMPUTED:
  * - strength: (a) estimated 1RM by the Epley formula (max est1rm) and (b) the best
