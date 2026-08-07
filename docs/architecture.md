@@ -5,13 +5,44 @@ the app does; this file covers why it does it that way.
 
 ## The journal is append-only
 
-Entries are never deleted. Cancelling a set writes a separate reversing event, and the
-reducers exclude the pair when they fold the journal into state.
+Entries are never deleted. Correcting one writes an `entry_amended` event carrying a patch of
+its payload; removing one writes an `entry_deleted` naming it. The older `set_cancel` is the
+same act said in an older word and is still read. Nothing is ever updated in place.
 
 Two things follow. The history stays truthful — it records what happened and when it was
 corrected, rather than quietly rewriting itself. And synchronising several devices later
 becomes a merge by union of immutable events instead of conflict resolution, which is the
 part that usually sinks offline-first apps.
+
+### One funnel decides what the journal now says
+
+`domain/Amendments.kt` is the only place corrections are applied, and every reducer starts
+there. That is a rule with a scar behind it: the reversing event used to be applied in one
+reducer only, so a cancelled row could be gone from the logging feed and still be inside its
+workout.
+
+The fold, in full:
+
+- a live deletion wins over every amendment, whenever it was written — correcting something
+  that should not exist is not a reason to keep it;
+- otherwise live amendments are laid over the payload in time order, so the last word wins
+  FIELD BY FIELD. Two corrections of different fields both survive;
+- "live" is recursive, and that is what makes undoing an undo work: a deletion that has itself
+  been deleted stops hiding anything, following the chain to its end. There is no restore
+  event, because deleting the deletion is one;
+- an amendment changes VALUES and the DATE. It may not change which exercise or workout an
+  entry belongs to — that is a deletion and a new entry, because an exercise's history has to
+  be the entries that always were its own. Those keys are refused on the way in and ignored on
+  the way out, so a journal merged in from another phone cannot do it either;
+- it applies to the service events too. A workout started by mistake, an exercise added to the
+  wrong one and a workout finished by mistake are all removable, and a workout can be redated
+  or renamed by correcting the event that started it.
+
+Two costs, stated. The fold happens per read and the journal is walked more than once for a
+screen that asks several reducers — personal scale makes that free, and it would not survive a
+shared journal. And an amendment can in principle leave a payload unreadable, which the readers
+skip; the repository parses the merged result before writing and refuses, so such a row can
+only arrive from outside.
 
 ## A hangboard exercise is identified by name, edge and protocol
 
@@ -354,6 +385,10 @@ the search, or create the exercise.
   would push every gym day into the darkest bucket and flatten the year.
 - **Repeat rules are once, daily or weekly.** No end date, no skipped occurrence, no
   "every second Tuesday".
+- **Nothing forces a new reducer through the correction funnel.** `liveEvents` is a call every
+  reader has to make, not a type it has to accept, so a reducer written next month can read the
+  raw list and be wrong in exactly the way this one was. The defence is a test that asks every
+  reader the same question in one place, which catches it and cannot prevent it.
 - **Back does not undo a hop between hold siblings.** The form detail screen can switch to
   a sibling edge or protocol in place; back closes the screen rather than stepping back
   through the siblings visited. That in-screen move is the one thing the navigation rule
