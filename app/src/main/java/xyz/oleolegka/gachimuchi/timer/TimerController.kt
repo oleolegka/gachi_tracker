@@ -94,8 +94,37 @@ import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
  * The one thing the rests do NOT share is the wake lock. FloorController says why, at
  * length: a rest tolerates arriving a second late, and holding the CPU for every rest of a
  * ninety-minute session is not a second-order cost.
+ *
+ * ── Two of those three mechanisms are two THREADS, and they meet at every boundary ─
+ * The countdown coroutine runs on [Dispatchers.Default]; the alarm arrives in
+ * [TimerReceiver.onReceive] on the main thread; the notification buttons arrive there too.
+ * Since the alarm is armed at the end of the current step and fires whether or not the
+ * process is alive, EVERY step boundary of a live run is handled twice, once from each side,
+ * within milliseconds of itself — the mechanisms are described as first line and backstop,
+ * but nothing demotes the backstop while the first line is working.
+ *
+ * All the state that keeps that from being audible — [signalledStep], [boundarySignalAtMs],
+ * [lastTickSecond], [loop] — is read and then written, which is not something two threads can
+ * do to the same field and get one answer. So every path that touches it holds [lock]. That
+ * is the same treatment [FloorController] gives its own state and for the same reason;
+ * without it, "have I already signalled this step" was a check-then-act on a plain field with
+ * no barrier between the two threads, and losing it produced the doubled beep on 7:3.
+ *
+ * [syncService], [serviceNeeded] and [currentNotification] are deliberately OUTSIDE the lock.
+ * They are the three things a floor calls back into, and taking the lock in them would make
+ * the lock order run both ways — this class takes FloorController's monitor while holding
+ * [lock] on every start and stop — which is a deadlock rather than a race. They only read a
+ * [StateFlow] and ask the floors a question, so there is nothing in them to protect.
  */
-class TimerController internal constructor(context: Context) {
+class TimerController internal constructor(
+    context: Context,
+    /**
+     * The hardware side of a signal. A constructor parameter, like [FloorController]'s, so a
+     * test can hand in one that counts instead of one that talks to a vibrator Robolectric
+     * only half models. Null everywhere in the app.
+     */
+    signalsOverride: Signals? = null,
+) {
     /*
      * The constructor is internal rather than private so that tests can build a fresh
      * controller instead of sharing the process-wide one. A test hook that reset the
@@ -106,8 +135,14 @@ class TimerController internal constructor(context: Context) {
 
     private val app = context.applicationContext
     private val store = TimerStore(app)
-    private val signals = Signals(app)
+    private val signals: Signals = signalsOverride ?: Signals(app)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Guards every field below that is read before it is written. Held by the countdown
+     * coroutine and by the alarm/button thread alike; see the note on threads above.
+     */
+    private val lock = Any()
 
     val speaker = Speaker(app)
 
@@ -159,6 +194,17 @@ class TimerController internal constructor(context: Context) {
     /** The step the last signal was fired for, so a redraw cannot double-signal. */
     private var signalledStep: Int = -1
 
+    /**
+     * The monotonic moment the boundary signal for [signalledStep] actually went out, or null
+     * when that step got no signal (a fresh start, a boundary too stale to sound).
+     *
+     * Handed to `timerCue`, which uses it to keep a countdown tick off the boundary beep. NOT
+     * derivable from the state: a boundary noticed a second late is signalled a second late,
+     * and the step's nominal start no longer says when the speaker was busy. See
+     * `tickAllowed` in domain/Runner.kt for the whole of it.
+     */
+    private var boundarySignalAtMs: Long? = null
+
     /** Whole seconds remaining at the last countdown tick, so each second ticks once. */
     private var lastTickSecond: Int = -1
 
@@ -169,7 +215,7 @@ class TimerController internal constructor(context: Context) {
     private var signalEra: Int = 0
 
     init {
-        restore()
+        synchronized(lock) { restore() }
         /*
          * The floors are taken up only now, and with an answer to "is a conductor running?"
          * that is only knowable once [restore] has finished. Doing it inside FloorController's
@@ -183,14 +229,16 @@ class TimerController internal constructor(context: Context) {
     // --- what the screens call ---------------------------------------------------------
 
     fun setEnabled(value: Boolean) {
-        store.setEnabled(value)
-        if (value) {
-            prepareSpeech()
-        } else {
-            stop()
-            // and the rests go with it: a timer switched off that keeps buzzing about a bench
-            // twenty minutes later is the switch not meaning what it says
-            floors.clearAll()
+        synchronized(lock) {
+            store.setEnabled(value)
+            if (value) {
+                prepareSpeech()
+            } else {
+                stop()
+                // and the rests go with it: a timer switched off that keeps buzzing about a
+                // bench twenty minutes later is the switch not meaning what it says
+                floors.clearAll()
+            }
         }
     }
 
@@ -205,9 +253,11 @@ class TimerController internal constructor(context: Context) {
     fun prepareSpeech() = speaker.prepare()
 
     fun updateSettings(settings: xyz.oleolegka.gachimuchi.domain.TimerSettings) {
-        store.update(settings)
-        if (settings.speak) speaker.prepare()
-        refresh()
+        synchronized(lock) {
+            store.update(settings)
+            if (settings.speak) speaker.prepare()
+            refresh()
+        }
     }
 
     /**
@@ -220,38 +270,41 @@ class TimerController internal constructor(context: Context) {
         exerciseId: Long? = null,
         origin: RunOrigin = RunOrigin.PROGRAM,
     ) {
-        val steps = program.flatten()
-        if (steps.isEmpty()) return
-        /*
-         * FIRST, before any state exists. A floor checks whether a conductor is running at
-         * the instant it is about to sound, and it has no way to see one that starts a
-         * hundred milliseconds later — so the mute has to be in place before this method
-         * builds anything. Doing it after the snapshot, or leaving FloorController to notice
-         * the run appearing, both leave that window open.
-         */
-        floors.conductorStarted()
-        val now = SystemClock.elapsedRealtime()
-        signalledStep = -1
-        lastTickSecond = -1
-        // an offer from the previous run is stale the moment a new one starts
-        clearOutcome()
-        // cancel any pending teardown and open the audio track NOW, so the first boundary
-        // pays for a beep and not for building the thing that beeps
-        signalEra++
-        scope.launch { signals.prime() }
-        val snapshot = RunSnapshot(
-            programId = program.id,
-            programName = program.name,
-            steps = steps,
-            state = startRun(steps, now),
-            bootRef = currentBootRef(),
-            exerciseId = exerciseId,
-            origin = origin,
-        )
-        NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_ALERT)
-        if (store.settings.value.speak) speaker.prepare()
-        apply(snapshot, startService = true)
-        announceStep(snapshot)
+        synchronized(lock) {
+            val steps = program.flatten()
+            if (steps.isEmpty()) return
+            /*
+             * FIRST, before any state exists. A floor checks whether a conductor is running at
+             * the instant it is about to sound, and it has no way to see one that starts a
+             * hundred milliseconds later — so the mute has to be in place before this method
+             * builds anything. Doing it after the snapshot, or leaving FloorController to notice
+             * the run appearing, both leave that window open.
+             */
+            floors.conductorStarted()
+            val now = SystemClock.elapsedRealtime()
+            signalledStep = -1
+            boundarySignalAtMs = null
+            lastTickSecond = -1
+            // an offer from the previous run is stale the moment a new one starts
+            clearOutcome()
+            // cancel any pending teardown and open the audio track NOW, so the first boundary
+            // pays for a beep and not for building the thing that beeps
+            signalEra++
+            scope.launch { signals.prime() }
+            val snapshot = RunSnapshot(
+                programId = program.id,
+                programName = program.name,
+                steps = steps,
+                state = startRun(steps, now),
+                bootRef = currentBootRef(),
+                exerciseId = exerciseId,
+                origin = origin,
+            )
+            NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_ALERT)
+            if (store.settings.value.speak) speaker.prepare()
+            apply(snapshot, startService = true)
+            announceStep(snapshot)
+        }
     }
 
     fun pause() = mutate { snapshot, now ->
@@ -282,19 +335,21 @@ class TimerController internal constructor(context: Context) {
      * as much in the journal as a complete one.
      */
     fun stop() {
-        _run.value?.let { keepOutcome(it) }
-        loop?.cancel()
-        loop = null
-        _run.value = null
-        store.clearRun()
-        cancelAlarm()
-        releaseWakeLock()
-        releaseSignalsAfterTheirTail()
-        TimerNotifications.cancelAll(app)
-        // before the service is touched, so the floors are released against a state where no
-        // conductor exists any more AND so that they have said whether they still need it
-        floors.conductorStopped()
-        syncService(mayStart = false)
+        synchronized(lock) {
+            _run.value?.let { keepOutcome(it) }
+            loop?.cancel()
+            loop = null
+            _run.value = null
+            store.clearRun()
+            cancelAlarm()
+            releaseWakeLock()
+            releaseSignalsAfterTheirTail()
+            TimerNotifications.cancelAll(app)
+            // before the service is touched, so the floors are released against a state where
+            // no conductor exists any more AND so that they have said whether they still need it
+            floors.conductorStopped()
+            syncService(mayStart = false)
+        }
     }
 
     /** Re-reads the clock and redraws, without changing anything. */
@@ -302,8 +357,10 @@ class TimerController internal constructor(context: Context) {
 
     /** The offer was answered (either way). Nothing is written here. */
     fun clearOutcome() {
-        _outcome.value = null
-        store.clearOutcome()
+        synchronized(lock) {
+            _outcome.value = null
+            store.clearOutcome()
+        }
     }
 
     // --- what the service and the receiver call ----------------------------------------
@@ -404,16 +461,26 @@ class TimerController internal constructor(context: Context) {
         _outcome.value = saved
     }
 
+    /**
+     * Settle, transform, apply — as one indivisible step.
+     *
+     * The lock is the point rather than a precaution. This is a read of [_run] followed by a
+     * write of it, and it is reached from the countdown coroutine and from the alarm receiver
+     * at the same boundary, every boundary. Two of these interleaving is two step advances
+     * from one, which is what turned a step change into two beeps.
+     */
     private inline fun mutate(
         announce: Boolean = false,
         transform: (RunSnapshot, Long) -> RunSnapshot,
     ) {
-        val current = _run.value ?: return
-        val now = SystemClock.elapsedRealtime()
-        val settled = current.copy(state = settleRun(current.steps, current.state, now))
-        val next = transform(settled, now)
-        apply(next.copy(state = settleRun(next.steps, next.state, now)), startService = false)
-        if (announce) announceStep(_run.value ?: return)
+        synchronized(lock) {
+            val current = _run.value ?: return
+            val now = SystemClock.elapsedRealtime()
+            val settled = current.copy(state = settleRun(current.steps, current.state, now))
+            val next = transform(settled, now)
+            apply(next.copy(state = settleRun(next.steps, next.state, now)), startService = false)
+            if (announce) announceStep(_run.value ?: return)
+        }
     }
 
     /**
@@ -537,9 +604,16 @@ class TimerController internal constructor(context: Context) {
         if (index == signalledStep) return
         signalledStep = index
         lastTickSecond = -1
+        // cleared first: every path out of here that does NOT sound leaves this step without a
+        // signal to protect, and a moment left over from the previous step would guard the
+        // wrong thing
+        boundarySignalAtMs = null
         val step = snapshot.steps.getOrNull(index) ?: return
         val startedAt = snapshot.state.stepEndAtMs - step.durationMs
         if (!isMomentNow(startedAt)) return
+        // the moment the speaker is BUSY FROM, which on a late boundary is not the moment the
+        // step began. `timerCue` keeps the countdown ticks clear of it.
+        boundarySignalAtMs = SystemClock.elapsedRealtime()
         signals.boundary(store.settings.value, step.kind)
     }
 
@@ -599,32 +673,54 @@ class TimerController internal constructor(context: Context) {
         if (!snapshot.state.running) return
         loop = scope.launch {
             while (isActive) {
-                val current = _run.value ?: return@launch
-                if (!current.state.running) return@launch
-                val settings = store.settings.value
-                val cue = timerCue(
-                    steps = current.steps,
-                    state = current.state,
-                    countdownTicks = settings.countdownTicks,
-                    now = SystemClock.elapsedRealtime(),
-                )
-
-                if (cue.boundary) {
-                    mutate { snap, _ -> snap }
-                    announceStep(_run.value ?: return@launch)
-                    return@launch
-                }
-
-                cue.tickSecond?.let { second ->
-                    if (second != lastTickSecond) {
-                        lastTickSecond = second
-                        signals.tick(settings)
-                    }
-                }
-
-                delay((cue.wakeAtMs - SystemClock.elapsedRealtime()).coerceIn(MIN_SLEEP_MS, MAX_SLEEP_MS))
+                /*
+                 * The decision and the sleep are separated because they must be: the decision
+                 * reads and writes the fields the alarm thread also touches and so has to hold
+                 * the lock, and a coroutine cannot suspend while holding one. So the pass under
+                 * the lock ends by saying how long to sleep, and the sleep happens outside it —
+                 * which is also what stops the alarm thread waiting on a monitor for as long as
+                 * the countdown is idle.
+                 */
+                val sleep = synchronized(lock) { loopPass() } ?: return@launch
+                delay(sleep)
             }
         }
+    }
+
+    /**
+     * One pass of the countdown: fire whatever the cue says is due and report how long to
+     * sleep, or null when there is nothing left to loop for.
+     *
+     * Called only from the loop, only under [lock]. [mutate] re-enters the lock from here,
+     * which a monitor allows and which is the point — the boundary and everything it drags
+     * with it stay inside the one critical section.
+     */
+    private fun loopPass(): Long? {
+        val current = _run.value ?: return null
+        if (!current.state.running) return null
+        val settings = store.settings.value
+        val cue = timerCue(
+            steps = current.steps,
+            state = current.state,
+            countdownTicks = settings.countdownTicks,
+            now = SystemClock.elapsedRealtime(),
+            boundaryAtMs = boundarySignalAtMs,
+        )
+
+        if (cue.boundary) {
+            mutate { snap, _ -> snap }
+            announceStep(_run.value ?: return null)
+            return null
+        }
+
+        cue.tickSecond?.let { second ->
+            if (second != lastTickSecond) {
+                lastTickSecond = second
+                signals.tick(settings)
+            }
+        }
+
+        return (cue.wakeAtMs - SystemClock.elapsedRealtime()).coerceIn(MIN_SLEEP_MS, MAX_SLEEP_MS)
     }
 
     /**
@@ -639,7 +735,9 @@ class TimerController internal constructor(context: Context) {
         val era = ++signalEra
         scope.launch {
             delay(Signals.SIGNAL_TAIL_MS)
-            if (era == signalEra) signals.release()
+            // under the lock, like every other read of the era: the run that would bump it
+            // lives on a different thread, and the whole point of the counter is to see it
+            synchronized(lock) { if (era == signalEra) signals.release() }
         }
     }
 
