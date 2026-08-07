@@ -141,6 +141,15 @@ data class PortableExercise(
     @SerialName("one_sided") val oneSided: Boolean = false,
     /** How much of the body weight this exercise actually lifts (schema version 14). */
     @SerialName("bodyweight_share") val bodyweightShare: Double? = null,
+    /**
+     * Whether the exercise is kept out of the pickers (schema version 15).
+     *
+     * It travels for the same reason the rest of the preferences do: hiding half a catalog is
+     * work, and a restore that handed back every abandoned exercise would be handing back the
+     * mess the hiding was for. It is not part of the identity, so a hidden row and a shown one
+     * still merge into each other.
+     */
+    @SerialName("hidden") val hidden: Boolean = false,
 )
 
 /** A plan slot with the session it is meant to consist of. */
@@ -458,34 +467,15 @@ data class ImportReport(
 }
 
 /**
- * An exercise's identity for the second pass of the merge: what makes two catalog rows the
- * same exercise when they do not share a uid.
+ * What makes two catalog rows the same exercise when they do not share a uid.
  *
- * ── Why the name is not enough, and why the form is in here ─────────────────────
- * §12-A puts the edge and the work:rest protocol INTO hangboard identity — "Hangs 20 mm 7:3"
- * and "Hangs 15 mm 7:3" are two exercises that share a name and must never share a history.
- * The form is here for the mirror-image reason, and it is an addition to the rule as stated:
- * a "Plank" logged as a duration and a "Plank" logged as strength write different payload
- * shapes, so welding them would produce one history that half the readers cannot read. Two
- * rows that disagree about their form are not one exercise recorded twice.
- *
- * The name is compared normalized ([normPhrase]), so spacing and case do not split a history.
+ * The rule itself is [ExerciseIdentity] in domain/Catalog.kt and is not restated here: the
+ * merge, the row that gets created when an exercise is first logged, and the UNIQUE index in
+ * the database all have to mean exactly the same thing by "the same exercise", and a second
+ * definition living in the file format would be a second thing to keep in step.
  */
-data class ExerciseIdentity(
-    val name: String,
-    val form: Int,
-    val edgeMm: Double?,
-    val workSec: Double?,
-    val restSec: Double?,
-)
-
-fun PortableExercise.identity(): ExerciseIdentity = ExerciseIdentity(
-    name = normPhrase(name) ?: name.trim().lowercase(),
-    form = form,
-    edgeMm = edgeMm,
-    workSec = protocolWorkSec,
-    restSec = protocolRestSec,
-)
+fun PortableExercise.identity(): ExerciseIdentity =
+    exerciseIdentity(name, form, edgeMm, protocolWorkSec, protocolRestSec)
 
 /**
  * How the catalog in a file lines up with the catalog on this phone.

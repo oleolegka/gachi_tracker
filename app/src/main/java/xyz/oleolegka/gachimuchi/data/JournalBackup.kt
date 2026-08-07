@@ -174,6 +174,9 @@ class JournalBackup(
                     oneSided = row.oneSided,
                     bodyweightShare = row.bodyweightShare,
                     uid = row.uid,
+                    hidden = row.hidden,
+                    // identity_key is left to the entity's own default, which computes it from
+                    // the four values above: a key carried in the file could disagree with them
                 )
             )
         }
@@ -376,6 +379,7 @@ private fun ExerciseEntity.toPortable(): PortableExercise = PortableExercise(
     ledByProtocol = ledByProtocol,
     oneSided = oneSided,
     bodyweightShare = bodyweightShare,
+    hidden = hidden,
 )
 
 /**

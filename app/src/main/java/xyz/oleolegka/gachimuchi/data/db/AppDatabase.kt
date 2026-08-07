@@ -7,6 +7,8 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.serialization.json.contentOrNull
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.freeExerciseName
 import xyz.oleolegka.gachimuchi.domain.newUid
 
 /**
@@ -35,7 +37,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -886,6 +888,175 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 14 -> 15: the identity of an exercise becomes a constraint, and an exercise
+         * can be hidden.
+         *
+         * ── What was actually wrong ────────────────────────────────────────────────
+         * §12-A has said since it was written that an exercise is its name plus its edge plus
+         * its protocol. The readers obeyed it. The WRITER did not: creating an exercise looked
+         * for a row with the same normalized name and returned it, edge and protocol thrown
+         * away without a word. Adding hangs on a 15 mm edge while 20 mm hangs existed gave you
+         * the 20 mm row and welded two histories together, permanently and invisibly. The rule
+         * had no expression in the schema at all — no index, no constraint, nothing that could
+         * have refused.
+         *
+         * So `identity_key` is added, carrying the four defining values folded into one string
+         * (see [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity]), with a UNIQUE index over it.
+         * A single string rather than a five-column UNIQUE index because three of those columns
+         * are nullable and SQLite counts NULLs as distinct — such an index would have permitted
+         * any number of rows called "Bench press" with no edge and no protocol, which is every
+         * strength exercise there is.
+         *
+         * ── The key is computed by TODAY's code, on purpose ────────────────────────
+         * The opposite of the rule [MIGRATION_10_11] follows for type strings. A type string
+         * describes data as it was written and must not move; a key describes how THIS BUILD
+         * looks rows up, and a migration that seeded a stale format would leave every row
+         * invisible to the lookup that prevents duplicates. If the format ever changes, the
+         * migration that changes it rewrites every key, and this one keeps producing whatever
+         * the code it runs inside considers a key.
+         *
+         * ── Duplicates already in the catalog, and why the upgrade renames them ────
+         * A UNIQUE index cannot be created over data that violates it: on a catalog holding two
+         * rows of one identity, `CREATE UNIQUE INDEX` fails, the migration throws, and — with
+         * destructive fallback deliberately off — the app does not open at all. On the one
+         * device holding the history. That is not an acceptable way to find out.
+         *
+         * Three ways out were available. MERGING the rows means repointing every set that names
+         * the loser, inside payloads, in a migration — the most dangerous edit in the app,
+         * performed without anybody watching. GIVING ONE ROW A KEY NOBODY ELSE HAS while leaving
+         * its name alone hides the problem: two rows called "Hangs", identical on screen, one of
+         * which silently receives every future set. What happens instead is that the second row
+         * is RENAMED — "Hangs", then "Hangs (2)" — which changes one word of the user's data,
+         * keeps both histories exactly where they were, keeps every event pointing at the row it
+         * always pointed at, and puts the collision where it can be seen and dealt with (rename
+         * it properly, or hide it). A duplicate that is visible is a duplicate that can be
+         * fixed; a duplicate that is tidied away is a lie about the catalog.
+         *
+         * In practice this should touch nothing: the old lookup deduplicated by name, so a
+         * journal written only by this app cannot hold two rows of one identity. It exists for
+         * a catalog that arrived from a restored backup, or was edited by hand.
+         *
+         * ── And `hidden` ──────────────────────────────────────────────────────────
+         * NOT NULL with false for every existing row, which is what they all are. It rides
+         * along in the same table rebuild rather than waiting for a version of its own, because
+         * the rebuild is the expensive part and doing it twice would buy nothing. Hiding is not
+         * deleting — see [ExerciseEntity.hidden].
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v15` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'exercises'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`edge_mm` REAL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`one_sided` INTEGER NOT NULL, " +
+                        "`bodyweight_share` REAL, " +
+                        "`hidden` INTEGER NOT NULL, " +
+                        "`identity_key` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`edge_mm`, `protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`, `bodyweight_share`, `hidden`, " +
+                        "`identity_key`) " +
+                        "SELECT `id`, `space_id`, `name`, `form`, `created_at`, `edge_mm`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`, `bodyweight_share`, 0, '' " +
+                        "FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+
+                fillIdentityKeys(db)
+
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_uid` ON `exercises` (`uid`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_space_id_identity_key` " +
+                        "ON `exercises` (`space_id`, `identity_key`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v15`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v15`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v15`")
+            }
+        }
+
+        /**
+         * Gives every catalog row the key its own columns say it should have, renaming the
+         * second row of a colliding pair so that the unique index can be created at all.
+         *
+         * In id order, so that the row that has been there longest keeps its name and the later
+         * one is the one that is marked. Keys are tracked per profile because the index is, and
+         * because two profiles are not each other's duplicates.
+         */
+        private fun fillIdentityKeys(db: SupportSQLiteDatabase) {
+            data class Row(
+                val id: Long,
+                val spaceId: Long,
+                val name: String,
+                val form: Int,
+                val edge: Double?,
+                val work: Double?,
+                val rest: Double?,
+            )
+
+            val rows = ArrayList<Row>()
+            db.query(
+                "SELECT `id`, `space_id`, `name`, `form`, `edge_mm`, `protocol_work_sec`, " +
+                    "`protocol_rest_sec` FROM `exercises` ORDER BY `id`"
+            ).use { c ->
+                while (c.moveToNext()) {
+                    rows += Row(
+                        id = c.getLong(0),
+                        spaceId = c.getLong(1),
+                        name = c.getString(2),
+                        form = c.getInt(3),
+                        edge = if (c.isNull(4)) null else c.getDouble(4),
+                        work = if (c.isNull(5)) null else c.getDouble(5),
+                        rest = if (c.isNull(6)) null else c.getDouble(6),
+                    )
+                }
+            }
+
+            val taken = HashMap<Long, MutableSet<String>>()
+            for (row in rows) {
+                val used = taken.getOrPut(row.spaceId) { HashSet() }
+                val name = freeExerciseName(row.name, row.form, row.edge, row.work, row.rest, used)
+                val key = exerciseIdentityKey(name, row.form, row.edge, row.work, row.rest)
+                used += key
+                db.execSQL(
+                    "UPDATE `exercises` SET `name` = ?, `identity_key` = ? WHERE `id` = ?",
+                    arrayOf<Any>(name, key, row.id),
+                )
+            }
+        }
+
+        /**
          * One set payload with `bodyweight_kg` filled in from the weigh-ins, or null when there
          * is nothing to do — not an own-weight set, a snapshot already there, no weigh-in on or
          * before its day, or a payload that will not parse.
@@ -1073,7 +1244,7 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

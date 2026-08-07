@@ -318,9 +318,12 @@ class WorkoutFlowTest {
             defaultRestSec = 150,
         )
 
-        // the same exercise looked up again with a different identity and a new rest: the
-        // rest is a preference and moves, the identity is §12-A and must not
-        val again = repo.ensureExercise("hangs 20 mm", ExerciseForm.STRENGTH, defaultRestSec = 240)
+        // the same exercise looked up again — the same four values, said in another spelling —
+        // with a new rest: the rest is a preference and moves, the identity does not
+        val again = repo.ensureExercise(
+            "hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            defaultRestSec = 240,
+        )
         assertEquals(id, again)
 
         val stored = repo.exercise(id)!!
@@ -331,7 +334,7 @@ class WorkoutFlowTest {
         assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
 
         // and saying nothing about the rest leaves the remembered one alone
-        repo.ensureExercise("hangs 20 mm", ExerciseForm.HOLD)
+        repo.ensureExercise("hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
         assertEquals(240, repo.exercise(id)!!.defaultRestSec)
     }
 

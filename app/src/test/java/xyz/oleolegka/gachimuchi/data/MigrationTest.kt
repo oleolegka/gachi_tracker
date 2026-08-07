@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -35,6 +36,8 @@ import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.isUid
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
@@ -710,6 +713,64 @@ interface LegacyCatalogDaoV12 {
 )
 abstract class SchemaV12Database : RoomDatabase() {
     abstract fun catalog(): LegacyCatalogDaoV12
+}
+
+/**
+ * The catalog of versions 13 and 14: sides and the body-weight share, and NOTHING that says
+ * two rows cannot be the same exercise.
+ *
+ * That last part is the point of this double. Version 15 adds the identity key and its unique
+ * index, and the interesting question is what the upgrade does to a catalog that already holds
+ * two rows one index would refuse — which cannot be set up through the app at all, only by
+ * writing the rows as a version 14 phone could.
+ */
+@Entity(
+    tableName = "exercises",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class ExerciseEntityV14(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
+    @ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
+)
+
+@Dao
+interface LegacyCatalogDaoV14 {
+    @Insert
+    suspend fun insertEvent(event: EventEntity): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV14): Long
+}
+
+@Database(
+    entities = [
+        EventEntity::class,
+        ExerciseEntityV14::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 14,
+    exportSchema = false,
+)
+abstract class SchemaV14Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV14
 }
 
 /**
@@ -2263,5 +2324,196 @@ class MigrationTest {
         val started = startedPayload(repo.allEvents(), strayId)
         assertNull(started.slotUid)
         assertEquals(phone.slotId + 99, started.slotId)
+    }
+
+    // --- version 14 -> 15: the identity becomes a constraint, and rows can be hidden --------
+
+    /** What a version 14 phone was left holding, so the assertions can name it afterwards. */
+    private data class PhoneV14(
+        val hangsId: Long,
+        val twinId: Long,
+        val benchId: Long,
+        val setOnTwinId: Long,
+    )
+
+    /**
+     * A version 14 database whose catalog holds a pair of rows that version 15 would refuse:
+     * the same name, form, edge and protocol, twice.
+     *
+     * It is written through a version 14 database on purpose. The pair cannot be created
+     * through today's app at all — which is the point of the whole change — so the only honest
+     * way to ask "what does the upgrade do with one" is to write it as the old schema could,
+     * and a hand-edited or restored catalog is exactly where such a pair comes from.
+     *
+     * A hang is logged against the SECOND of the two, because that is the row the upgrade will
+     * mark, and "the marked row keeps its own history" is the thing worth proving.
+     */
+    private suspend fun writeVersion14(): PhoneV14 {
+        val v14 = Room.databaseBuilder(context, SchemaV14Database::class.java, dbName).build()
+        opened = v14
+
+        val hangsId = v14.catalog().insertExercise(
+            ExerciseEntityV14(
+                name = "Hangs", form = ExerciseForm.HOLD.code, createdAt = "2026-08-01T10:00:00",
+                edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0,
+                defaultRestSec = 180, ledByProtocol = false, oneSided = true,
+                bodyweightShare = 1.0,
+            )
+        )
+        // the same exercise again, spelled differently — one identity, two rows
+        val twinId = v14.catalog().insertExercise(
+            ExerciseEntityV14(
+                name = "HANGS", form = ExerciseForm.HOLD.code, createdAt = "2026-08-01T10:05:00",
+                edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0,
+            )
+        )
+        val benchId = v14.catalog().insertExercise(
+            ExerciseEntityV14(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-01T10:10:00",
+            )
+        )
+
+        val hang = """{"activity":"hangs","added_kg":10.0,"own_weight":true,""" +
+            """"exercise_id":$twinId,"op_date":"2026-08-02","activity_key":"hangs"}"""
+        val setOnTwinId = v14.catalog().insertEvent(
+            EventEntity(
+                ts = "2026-08-02T10:00:00",
+                type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET,
+                payload = hang,
+            )
+        )
+
+        v14.close()
+        opened = null
+        return PhoneV14(hangsId, twinId, benchId, setOnTwinId)
+    }
+
+    /**
+     * The upgrade must not fail on a catalog it disagrees with, and must not silently make the
+     * disagreement go away either. Both rows survive; the later one is marked so the index can
+     * exist at all.
+     */
+    @Test
+    fun `two catalog rows claiming one identity both come through, the later one marked`() = runTest {
+        val phone = writeVersion14()
+
+        val db = openCurrent()
+        val kept = db.exercises().byId(phone.hangsId)
+        val marked = db.exercises().byId(phone.twinId)
+
+        assertNotNull("the first row was lost", kept)
+        assertNotNull("the duplicate was deleted rather than kept", marked)
+        assertEquals("the row that was there first keeps its name", "Hangs", kept!!.name)
+        assertEquals("HANGS (2)", marked!!.name)
+        assertNotEquals(kept.identityKey, marked.identityKey)
+        assertEquals(3, db.exercises().all().size)
+    }
+
+    /**
+     * The reason renaming was chosen over merging: nothing about the history moves. The hang
+     * logged against the marked row is still the marked row's, and the row it was logged
+     * against still has the uid it had.
+     */
+    @Test
+    fun `the marked row keeps its identity and everything logged against it`() = runTest {
+        val phone = writeVersion14()
+
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+        val marked = db.exercises().byId(phone.twinId)!!
+
+        assertTrue("the uid must not be reissued by a rebuild", isUid(marked.uid))
+        val sets = holdSetsOfExercise(repo.allEvents(), marked.toRef().link)
+        assertEquals("the set left the row it was logged against", 1, sets.size)
+        assertEquals(10.0, sets.single().addedKg!!, 1e-9)
+        // and it did not land on the row that kept the name
+        assertTrue(holdSetsOfExercise(repo.allEvents(), db.exercises().byId(phone.hangsId)!!.toRef().link).isEmpty())
+    }
+
+    /** Everything the catalog knew before the rebuild is still there afterwards. */
+    @Test
+    fun `every column of a catalog row survives the rebuild, and none of them is hidden`() = runTest {
+        val phone = writeVersion14()
+
+        val exercise = openCurrent().exercises().byId(phone.hangsId)!!
+
+        assertEquals(20.0, exercise.edgeMm!!, 1e-9)
+        assertEquals(7.0, exercise.protocolWorkSec!!, 1e-9)
+        assertEquals(3.0, exercise.protocolRestSec!!, 1e-9)
+        assertEquals(180, exercise.defaultRestSec)
+        assertEquals(false, exercise.ledByProtocol)
+        assertTrue(exercise.oneSided)
+        assertEquals(1.0, exercise.bodyweightShare!!, 1e-9)
+        /*
+         * False, and it is a TRUE statement rather than a placeholder: nothing in the catalog
+         * was hidden before there was a way to hide it.
+         */
+        assertFalse(exercise.hidden)
+        assertEquals(
+            exerciseIdentityKey("Hangs", ExerciseForm.HOLD.code, 20.0, 7.0, 3.0),
+            exercise.identityKey,
+        )
+    }
+
+    /**
+     * A catalog with no duplicates in it must come through with nobody's name touched. The
+     * marking is a last resort, and a phone that never needed it should not be able to tell
+     * this migration ran.
+     */
+    @Test
+    fun `a catalog with nothing to resolve comes through with every name as it was`() = runTest {
+        val phone = writeVersion14()
+
+        val bench = openCurrent().exercises().byId(phone.benchId)!!
+
+        assertEquals("Bench press", bench.name)
+        assertEquals(exerciseIdentityKey("Bench press", ExerciseForm.STRENGTH.code), bench.identityKey)
+    }
+
+    @Test
+    fun `the identity index is unique after the upgrade, and the database says so itself`() = runTest {
+        writeVersion14()
+
+        val db = openCurrent()
+        val failure = runCatching {
+            db.exercises().insert(
+                xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                    name = "bench press", form = ExerciseForm.STRENGTH.code,
+                    createdAt = "2026-08-07T10:00:00",
+                )
+            )
+        }.exceptionOrNull()
+
+        assertTrue(
+            "expected the upgraded database to refuse a duplicate, got $failure",
+            failure is android.database.sqlite.SQLiteConstraintException,
+        )
+    }
+
+    @Test
+    fun `an id handed out before the identity rebuild is never handed out again`() = runTest {
+        val phone = writeVersion14()
+
+        val db = openCurrent()
+        val fresh = db.exercises().insert(
+            xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                name = "Front squat", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-07T10:00:00",
+            )
+        )
+
+        assertTrue("the rebuilt table restarted its counter", fresh > phone.benchId)
+    }
+
+    @Test
+    fun `the identity and hidden columns pass Room's schema check on the next open`() = runTest {
+        writeVersion14()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(3, again.exercises().all().size)
     }
 }
