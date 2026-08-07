@@ -192,4 +192,101 @@ class SlotDraftTest {
         assertTrue(once.contains("planned once"))
         assertTrue(once.contains("logged are not touched"))
     }
+
+    // --- what the session is made of -------------------------------------------------------
+
+    @Test
+    fun `a plan with no exercises in it is a complete plan`() {
+        val draft = newSlotDraft(monday).copy(name = "Gym")
+        assertTrue(draft.exercises.isEmpty())
+        // the assertion the whole feature hangs on: nothing about the composition can ever
+        // stand between the user and saving a slot
+        assertNull(draft.problem())
+        assertEquals(emptyList<PlannedExercise>(), draft.toSlot()!!.exercises)
+    }
+
+    @Test
+    fun `a slot with a composition opens in the editor and saves back unchanged`() {
+        val slot = Slot(
+            3, "Gym", "18:00", REPEAT_WEEKLY, monday.toString(),
+            exercises = listOf(PlannedExercise(11, restSec = 180), PlannedExercise(12)),
+        )
+        val draft = slot.toDraft()
+        assertEquals(slot.exercises, draft.exercises)
+        assertEquals(slot, draft.toSlot(id = 3))
+    }
+
+    @Test
+    fun `exercises are added in the order they are picked, duplicates included`() {
+        val draft = newSlotDraft(monday).copy(name = "Gym")
+            .withExerciseAdded(11)
+            .withExerciseAdded(12, restSec = 150)
+            .withExerciseAdded(11)
+
+        assertEquals(listOf(11L, 12L, 11L), draft.exercises.map { it.exerciseId })
+        assertEquals(listOf(null, 150, null), draft.exercises.map { it.restSec })
+    }
+
+    @Test
+    fun `moving an exercise reorders the plan, and moving off either end does nothing`() {
+        val draft = newSlotDraft(monday).copy(name = "Gym")
+            .withExerciseAdded(11).withExerciseAdded(12).withExerciseAdded(13)
+
+        assertEquals(listOf(12L, 11L, 13L), draft.withExerciseMoved(0, 1).exercises.map { it.exerciseId })
+        assertEquals(listOf(11L, 13L, 12L), draft.withExerciseMoved(2, -1).exercises.map { it.exerciseId })
+
+        // off the ends, and against an index that is no longer there: the list comes back as
+        // it was rather than clamping onto the wrong row
+        assertEquals(draft.exercises, draft.withExerciseMoved(0, -1).exercises)
+        assertEquals(draft.exercises, draft.withExerciseMoved(2, 1).exercises)
+        assertEquals(draft.exercises, draft.withExerciseMoved(7, -1).exercises)
+        assertEquals(draft.exercises, draft.withExerciseMoved(1, 0).exercises)
+    }
+
+    @Test
+    fun `removing takes out the row that was tapped and nothing else`() {
+        val draft = newSlotDraft(monday).copy(name = "Gym")
+            .withExerciseAdded(11).withExerciseAdded(12).withExerciseAdded(13)
+
+        assertEquals(listOf(11L, 13L), draft.withExerciseRemoved(1).exercises.map { it.exerciseId })
+        // a stale index is a no-op: the tap arrived against a list that has since changed
+        assertEquals(draft.exercises, draft.withExerciseRemoved(3).exercises)
+        assertEquals(draft.exercises, draft.withExerciseRemoved(-1).exercises)
+    }
+
+    @Test
+    fun `a rest is set per exercise, and zero means no answer rather than no rest`() {
+        val draft = newSlotDraft(monday).copy(name = "Gym")
+            .withExerciseAdded(11).withExerciseAdded(12)
+
+        assertEquals(listOf(180, null), draft.withExerciseRest(0, 180).exercises.map { it.restSec })
+        // back to "whatever this exercise usually gets"
+        assertEquals(
+            listOf(null, null),
+            draft.withExerciseRest(0, 180).withExerciseRest(0, null).exercises.map { it.restSec },
+        )
+        // zero and a negative are not rests of no seconds, they are the absence of an answer
+        assertNull(draft.withExerciseRest(1, 0).exercises[1].restSec)
+        assertNull(draft.withExerciseRest(1, -30).exercises[1].restSec)
+        assertNull(draft.withExerciseAdded(13, restSec = 0).exercises.last().restSec)
+
+        assertEquals(draft.exercises, draft.withExerciseRest(9, 120).exercises)
+    }
+
+    @Test
+    fun `what is planned in a slot is readable from the plan by id`() {
+        val gym = Slot(
+            1, "Gym", "18:00", REPEAT_WEEKLY, monday.toString(),
+            exercises = listOf(PlannedExercise(11, 180), PlannedExercise(12)),
+        )
+        val stretching = Slot(2, "Stretching", null, REPEAT_DAILY, monday.toString())
+        val plan = listOf(gym, stretching)
+
+        assertEquals(gym.exercises, plannedExercises(plan, 1))
+        // a slot with nothing in it and a slot that is not there answer the same way, because
+        // starting a workout must not depend on either
+        assertTrue(plannedExercises(plan, 2).isEmpty())
+        assertTrue(plannedExercises(plan, 999).isEmpty())
+        assertTrue(plannedExercises(plan, null).isEmpty())
+    }
 }

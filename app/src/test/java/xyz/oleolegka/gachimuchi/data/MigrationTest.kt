@@ -27,19 +27,25 @@ import xyz.oleolegka.gachimuchi.data.db.AliasDao
 import xyz.oleolegka.gachimuchi.data.db.AliasEntity
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.COLUMN_SEEDED
+import xyz.oleolegka.gachimuchi.data.db.EventDao
+import xyz.oleolegka.gachimuchi.data.db.EventEntity
+import xyz.oleolegka.gachimuchi.data.db.ExerciseDao
+import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
 import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
-import xyz.oleolegka.gachimuchi.data.db.SlotDao
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
+import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
+import xyz.oleolegka.gachimuchi.domain.toDraft
 import xyz.oleolegka.gachimuchi.domain.toPayload
 
 /*
@@ -142,6 +148,22 @@ interface LegacyCatalogDao {
 interface LegacyCatalogDaoV4 {
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV4): Long
+}
+
+/**
+ * Putting a slot into a database that has no `slot_exercises` table.
+ *
+ * A SNAPSHOT OF THE DAO, not of the entity, and the split is the point. The `slots` table
+ * itself did not change in version 6 — only a child table was added — so [SlotEntity] is
+ * still the right shape for an old database and the rule above allows reusing it. The
+ * current [SlotDao] is not: its composition queries name `slot_exercises`, and Room verifies
+ * every @Query against the entities of the database it is declared on AT COMPILE TIME, so
+ * hanging it off a schema without that table does not compile.
+ */
+@Dao
+interface LegacySlotDao {
+    @Insert
+    suspend fun insert(slot: SlotEntity): Long
 }
 
 /**
@@ -304,7 +326,38 @@ abstract class SchemaV4Database : RoomDatabase() {
     abstract fun events(): LegacyEventDao
     abstract fun catalog(): LegacyCatalogDaoV4
     abstract fun aliases(): AliasDao
-    abstract fun slots(): SlotDao
+    abstract fun slots(): LegacySlotDao
+}
+
+/**
+ * Version 5: the workout link is on the journal and the rest preferences are on the catalog,
+ * and a slot is still nothing but a name, a time and a rule — no composition. This is the
+ * phone the 5 -> 6 migration actually runs on.
+ *
+ * EVERY ENTITY HERE IS THE CURRENT ONE, and under the rule at the top of this file that is
+ * allowed only because version 6 changed no existing table: it added `slot_exercises` and
+ * touched nothing else. The moment a column is added to any of these, this database has to
+ * grow a snapshot class for that table or it stops testing anything. The DAO is a different
+ * matter and [LegacySlotDao] says why.
+ */
+@Database(
+    entities = [
+        EventEntity::class,
+        ExerciseEntity::class,
+        AliasEntity::class,
+        SlotEntity::class,
+        ProgramEntity::class,
+        ProgramGroupEntity::class,
+        ProgramBlockEntity::class,
+    ],
+    version = 5,
+    exportSchema = false,
+)
+abstract class SchemaV5Database : RoomDatabase() {
+    abstract fun events(): EventDao
+    abstract fun exercises(): ExerciseDao
+    abstract fun aliases(): AliasDao
+    abstract fun slots(): LegacySlotDao
 }
 
 /**
@@ -710,22 +763,152 @@ class MigrationTest {
         assertEquals(1, again.exercises().all().size)
     }
 
+    // --- version 5 -> 6: what a planned session is made of ---------------------------------
+
+    /**
+     * A phone in use before a slot could say what it consisted of: a plan, a catalog, a word
+     * and a journal entry filed under no workout. Returns the slot id, because everything
+     * this migration is about hangs off it.
+     */
+    private suspend fun writeVersion5(): Long {
+        val v5 = Room.databaseBuilder(context, SchemaV5Database::class.java, dbName).build()
+        opened = v5
+
+        val exerciseId = v5.exercises().insert(
+            ExerciseEntity(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-07-01T10:00:00", defaultRestSec = 150,
+            )
+        )
+        val set = strengthSetOf(
+            exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                id = exerciseId, name = "Bench press", form = ExerciseForm.STRENGTH,
+            ),
+            opDate = "2026-07-01", reps = 5, weightKg = 80.0,
+        )
+        v5.events().insert(
+            EventEntity(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
+        )
+        v5.aliases().upsert(AliasEntity(key = "bench", value = exerciseId))
+        val slotId = v5.slots().insert(
+            SlotEntity(
+                name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
+                anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
+            )
+        )
+        v5.close()
+        opened = null
+        return slotId
+    }
+
+    @Test
+    fun `a plan written before compositions existed comes through with nothing planned in it`() =
+        runTest {
+            val slotId = writeVersion5()
+
+            val repo = ActivityRepository(openCurrent())
+            val slot = repo.slot(slotId)
+
+            assertNotNull("a plan must not be lost to a schema change", slot)
+            assertEquals("Gym", slot!!.name)
+            assertEquals("19:00", slot.atTime)
+            assertEquals(REPEAT_WEEKLY, slot.repeatRule)
+
+            /*
+             * And it reads as "nothing is planned in it", which is not a placeholder for data
+             * that failed to migrate: an empty composition is a COMPLETE plan (see
+             * domain/Schedule.kt), and it is the literal truth about a slot written by a build
+             * that had no way to say anything else.
+             */
+            assertTrue(slot.exercises.isEmpty())
+            assertTrue(repo.slotExercises(slotId).isEmpty())
+
+            // and nothing else moved
+            assertEquals(1, repo.eventCount())
+            assertEquals(1, repo.allSlots().size)
+        }
+
+    @Test
+    fun `the table the upgrade added is real and a composition round-trips through it`() = runTest {
+        val slotId = writeVersion5()
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+        val exerciseId = db.exercises().all().single().id
+
+        // a table merely APPEARING is not enough: it has to hold values in the types the
+        // entity declares, the optional rest included
+        repo.saveSlot(
+            repo.slot(slotId)!!.toDraft().copy(
+                exercises = listOf(
+                    PlannedExercise(exerciseId, restSec = 180),
+                    PlannedExercise(exerciseId, restSec = null),
+                )
+            ),
+            id = slotId,
+        )
+
+        val stored = repo.slot(slotId)!!.exercises
+        assertEquals(listOf(exerciseId, exerciseId), stored.map { it.exerciseId })
+        // null survives as null rather than collapsing into a zero: the two are different
+        // answers, exactly as with led_by_protocol above
+        assertEquals(listOf(180, null), stored.map { it.restSec })
+    }
+
+    @Test
+    fun `deleting an upgraded slot takes its composition with it`() = runTest {
+        val slotId = writeVersion5()
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+        val exerciseId = db.exercises().all().single().id
+
+        repo.saveSlot(
+            repo.slot(slotId)!!.toDraft().copy(exercises = listOf(PlannedExercise(exerciseId))),
+            id = slotId,
+        )
+        assertEquals(1, db.slots().allExercises().size)
+
+        /*
+         * The cascade has to survive the migration, and that is a property of the table the
+         * MIGRATION wrote rather than of the entity: a CREATE TABLE without the foreign key
+         * would still open, still store, and still read back — and would quietly leave a row
+         * per deleted plan behind, reachable by nothing.
+         */
+        repo.deleteSlot(slotId)
+        assertEquals(0, repo.allSlots().size)
+        assertTrue(db.slots().allExercises().isEmpty())
+    }
+
+    @Test
+    fun `the composition table passes Room's schema check on the next open`() = runTest {
+        writeVersion5()
+
+        openCurrent().also { it.events().count() }.close()
+        opened = null
+
+        // the second open compares the database against the entity definitions, which is what
+        // catches a column affinity or an index name written differently here and there
+        val again = openCurrent()
+        assertEquals(1, again.events().count())
+        assertEquals(1, again.slots().all().size)
+    }
+
     @Test
     fun `a phone that skipped every release in between still arrives intact`() = runTest {
-        // 1 -> 5 in one go. Nobody upgrades one version at a time, and a chain that only ever
+        // 1 -> 6 in one go. Nobody upgrades one version at a time, and a chain that only ever
         // gets tested link by link is a chain whose middle is untested.
         writeVersion1()
 
-        val v5 = openCurrent()
+        val v6 = openCurrent()
 
-        assertEquals(1, v5.events().count())
-        assertTrue(v5.events().all().single().workoutId == null)
-        val exercise = v5.exercises().all().single()
+        assertEquals(1, v6.events().count())
+        assertTrue(v6.events().all().single().workoutId == null)
+        val exercise = v6.exercises().all().single()
         assertFalse(exercise.seeded)
         assertNull(exercise.defaultRestSec)
         assertEquals(20.0, exercise.edgeMm!!, 1e-9)
-        assertNotNull(v5.aliases().byKey("bench"))
-        assertEquals(1, v5.slots().all().size)
-        assertEquals(0, v5.programs().countPrograms())
+        assertNotNull(v6.aliases().byKey("bench"))
+        assertEquals(1, v6.slots().all().size)
+        assertTrue(v6.slots().allExercises().isEmpty())
+        assertEquals(0, v6.programs().countPrograms())
     }
 }
