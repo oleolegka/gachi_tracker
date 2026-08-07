@@ -116,7 +116,7 @@ fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
 
 /** The current record of an exercise — a reducer over the WHOLE history (for dashboards, not for "just broke it"). */
 data class ExerciseRecord(
-    val exerciseId: Long,
+    val exercise: ExerciseLink,
     val axis: RecordHit.Axis,
     val value: Double,
     val opDate: String,
@@ -128,16 +128,17 @@ data class ExerciseRecord(
  * and the date it was set (§12-C: a record ALWAYS comes with a date). Returns null if
  * there were no weighted sets.
  */
-fun strengthRecord(sets: List<ActivityEvent>, exerciseId: Long): ExerciseRecord? {
+fun strengthRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
     val weighted = sets.mapNotNull { ev ->
-        (ev.form as? StrengthSet)?.takeIf { it.exerciseId == exerciseId && it.weightKg != null }
+        (ev.form as? StrengthSet)
+            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null }
             ?.let { it to ev.opDate }
     }
     if (weighted.isEmpty()) return null
     val (best, day) = weighted.maxBy { est1rm(it.first.weightKg!!, it.first.reps) }
     val value = est1rm(best.weightKg!!, best.reps)
     return ExerciseRecord(
-        exerciseId, RecordHit.Axis.EST_1RM, value, day,
+        exercise, RecordHit.Axis.EST_1RM, value, day,
         "1RM ${fmtNum(value)} kg (${fmtNum(best.weightKg)}×${best.reps})",
     )
 }
@@ -147,16 +148,17 @@ fun strengthRecord(sets: List<ActivityEvent>, exerciseId: Long): ExerciseRecord?
  * and its date. If the history carries no weight at all (a plank), the maximum hold in
  * seconds is used instead.
  */
-fun holdRecord(sets: List<ActivityEvent>, exerciseId: Long): ExerciseRecord? {
+fun holdRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
     val mine = sets.mapNotNull { ev ->
-        (ev.form as? HoldSet)?.takeIf { it.exerciseId == exerciseId }?.let { it to ev.opDate }
+        (ev.form as? HoldSet)?.takeIf { it.exerciseLink()?.matches(exercise) == true }
+            ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return null
     val withWeight = mine.filter { it.first.addedKg != null }
     if (withWeight.isNotEmpty()) {
         val (best, day) = withWeight.maxBy { it.first.addedKg!! }
         return ExerciseRecord(
-            exerciseId, RecordHit.Axis.HOLD_WEIGHT, best.addedKg!!, day,
+            exercise, RecordHit.Axis.HOLD_WEIGHT, best.addedKg!!, day,
             "added weight ${fmtNum(best.addedKg)} kg",
         )
     }
@@ -164,7 +166,7 @@ fun holdRecord(sets: List<ActivityEvent>, exerciseId: Long): ExerciseRecord? {
     if (withSeconds.isEmpty()) return null
     val (best, day) = withSeconds.maxBy { it.first.holdSec!! }
     return ExerciseRecord(
-        exerciseId, RecordHit.Axis.HOLD_SECONDS, best.holdSec!!, day,
+        exercise, RecordHit.Axis.HOLD_SECONDS, best.holdSec!!, day,
         "hold ${fmtNum(best.holdSec)} s",
     )
 }

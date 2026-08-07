@@ -150,6 +150,19 @@ sealed interface ActivityForm {
 
     /** Id of the canonical catalog exercise (§11); null for body weight and legacy records. */
     val exerciseId: Long? get() = null
+
+    /**
+     * IDENTITY of the canonical catalog exercise — the same link as [exerciseId], said in the
+     * form that means something off this phone (schema version 10).
+     *
+     * Null for body weight (which names no exercise at all, by design) and for entries written
+     * before version 10 that the migration could not resolve, which is exactly the set of
+     * entries pointing at a catalog row that no longer exists.
+     *
+     * Never read directly: [exerciseLink] is the one funnel that decides which of the two a
+     * given entry is judged by.
+     */
+    val exerciseUid: String? get() = null
 }
 
 /**
@@ -169,6 +182,7 @@ data class StrengthSet(
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("exercise_key") val exerciseKey: String = requireKey("exercise", exercise),
@@ -219,6 +233,7 @@ data class HoldSet(
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
@@ -249,6 +264,7 @@ data class Duration(
     @SerialName("activity") val activity: String,
     @SerialName("duration_sec") val durationSec: Int,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
 ) : ActivityForm {
@@ -266,6 +282,7 @@ data class Duration(
 data class Tick(
     @SerialName("activity") val activity: String,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
 ) : ActivityForm {
@@ -289,6 +306,7 @@ data class Cardio(
     @SerialName("duration_sec") val durationSec: Int? = null,
     @SerialName("pace_sec_per_km") val paceSecPerKm: Double? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
 ) : ActivityForm {
@@ -402,6 +420,8 @@ data class WorkoutExerciseAdded(
     @SerialName("exercise_id") val exerciseId: Long,
     @SerialName("rest_sec") val restSec: Int,
     @SerialName("workout_uid") val workoutUid: String? = null,
+    /** Identity of the exercise being added — the same link as [exerciseId]. */
+    @SerialName("exercise_uid") val exerciseUid: String? = null,
 ) {
     init {
         // zero is a legitimate answer ("go straight into the next set"); a negative one is

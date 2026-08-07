@@ -429,7 +429,7 @@ private fun SubmitButton(repeat: Boolean, enabled: Boolean, label: String? = nul
 
 @Composable
 private fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
-    val last = remember(state.events, exercise.id) { lastStrengthSet(state.events, exercise.id) }
+    val last = remember(state.events, exercise.id) { lastStrengthSet(state.events, exercise.link) }
     val prefillWeight = if (last?.ownWeight == true) last.addedKg else last?.weightKg
 
     var weight by remember(exercise.id, last) { mutableStateOf(prefillWeight?.let(::formatNumber) ?: "") }
@@ -476,7 +476,7 @@ private fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String,
  */
 @Composable
 private fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
-    val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.id) }
+    val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
 
@@ -507,7 +507,7 @@ private fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onA
 
 @Composable
 private fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
-    val last = remember(state.events, exercise.id) { lastCardio(state.events, exercise.id) }
+    val last = remember(state.events, exercise.id) { lastCardio(state.events, exercise.link) }
     var km by remember(exercise.id, last) {
         mutableStateOf(last?.distanceM?.let { formatNumber(it / 1000) } ?: "")
     }
@@ -548,7 +548,7 @@ private fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, o
 
 @Composable
 private fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
-    val last = remember(state.events, exercise.id) { lastDuration(state.events, exercise.id) }
+    val last = remember(state.events, exercise.id) { lastDuration(state.events, exercise.link) }
     var minutes by remember(exercise.id, last) {
         mutableStateOf(last?.durationSec?.let { formatNumber(it / 60.0) } ?: "")
     }

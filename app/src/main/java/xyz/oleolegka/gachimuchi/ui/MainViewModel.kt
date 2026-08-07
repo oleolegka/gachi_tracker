@@ -40,16 +40,18 @@ import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
 import xyz.oleolegka.gachimuchi.domain.dayWatchDelayMs
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
-import xyz.oleolegka.gachimuchi.domain.holdSetsByExerciseId
+import xyz.oleolegka.gachimuchi.domain.exerciseLink
+import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
-import xyz.oleolegka.gachimuchi.domain.strengthSetsByExerciseId
+import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
@@ -78,6 +80,16 @@ data class UiState(
 
     /** The catalog row as the domain sees it — what the entry card builds its forms from. */
     fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.toRef()
+
+    /**
+     * How the journal names an exercise the screen is holding a number for.
+     *
+     * The screens navigate by local row number, and the journal is keyed by identity — see
+     * [ExerciseLink]. This is the one place that bridges the two, so no screen invents its own
+     * bridge. An exercise no longer in the catalog falls back to the number, which still finds
+     * every entry written before it was deleted.
+     */
+    fun linkOf(id: Long): ExerciseLink = refById(id)?.link ?: ExerciseLink.ofId(id)
 }
 
 /**
@@ -245,13 +257,13 @@ class MainViewModel(
      * the overlay and the feed cannot disagree about what was a record.
      */
     private suspend fun recordBrokenBy(form: ActivityForm): RecordHit? {
-        val exerciseId = form.exerciseId ?: return null
+        val exercise = form.exerciseLink() ?: return null
         val events = repo.allEvents()
         return when (form) {
             is StrengthSet ->
-                evaluateStrengthRecord(strengthSetsByExerciseId(events, exerciseId), form.weightKg, form.reps)
+                evaluateStrengthRecord(strengthSetsOfExercise(events, exercise), form.weightKg, form.reps)
 
-            is HoldSet -> evaluateHoldRecord(holdSetsByExerciseId(events, exerciseId), form)
+            is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
             else -> null
         }
     }
@@ -357,7 +369,7 @@ class MainViewModel(
         viewModelScope.launch {
             val events = repo.allEvents()
             val settings = timerSettings.value
-            val reps = lastHoldSet(events, exercise.id)?.reps ?: DEFAULT_HOLD_REPS
+            val reps = lastHoldSet(events, exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
                 exercise = exercise,
                 reps = reps,

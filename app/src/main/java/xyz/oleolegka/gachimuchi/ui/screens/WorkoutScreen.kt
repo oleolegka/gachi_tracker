@@ -146,7 +146,7 @@ fun WorkoutScreen(
                 }
             }
 
-            items(workout.exercises.size, key = { workout.exercises[it].exerciseId }) { index ->
+            items(workout.exercises.size, key = { workout.exercises[it].exercise.key }) { index ->
                 val exercise = workout.exercises[index]
                 ExerciseBlock(
                     name = exerciseName(state, exercise),

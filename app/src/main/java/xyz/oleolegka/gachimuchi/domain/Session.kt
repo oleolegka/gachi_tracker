@@ -28,6 +28,16 @@ data class ExerciseRef(
     val id: Long,
     val name: String,
     val form: ExerciseForm,
+    /**
+     * Identity of the catalog row (schema version 8), or null for a caller that holds only a
+     * local number.
+     *
+     * Every form built here is stamped with it, which is what makes an entry able to name its
+     * exercise outside this phone. Null is tolerated rather than required because the fixtures
+     * and a few screens still address exercises by number; such an entry is matched by number
+     * and cannot be merged with another device's, which is the honest consequence.
+     */
+    val uid: String? = null,
     val edgeMm: Double? = null,
     val workSec: Double? = null,
     val restSec: Double? = null,
@@ -61,6 +71,9 @@ data class ExerciseRef(
 
     /** Same rule for the edge: a non-positive one was never filled in. */
     val edge: Double? = edgeMm?.takeIf { it > 0 }
+
+    /** How the journal names this exercise — see [ExerciseLink]. */
+    val link: ExerciseLink = ExerciseLink(uid, id)
 }
 
 /** The activity name carried by a form; body weight has none, so its role is used. */
@@ -94,12 +107,13 @@ fun strengthSetOf(
 ): StrengthSet = if (ownWeight) {
     StrengthSet(
         exercise = exercise.name, reps = reps, ownWeight = true,
-        addedKg = addedKg?.takeIf { it > 0 }, exerciseId = exercise.id, opDate = opDate,
+        addedKg = addedKg?.takeIf { it > 0 }, exerciseId = exercise.id,
+        exerciseUid = exercise.uid, opDate = opDate,
     )
 } else {
     StrengthSet(
         exercise = exercise.name, reps = reps, weightKg = weightKg?.takeIf { it > 0 },
-        exerciseId = exercise.id, opDate = opDate,
+        exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
     )
 }
 
@@ -134,6 +148,7 @@ fun holdSetOf(
     addedKg = addedKg?.takeIf { it > 0 },
     ownWeight = true,
     exerciseId = exercise.id,
+    exerciseUid = exercise.uid,
     restAfterSec = restAfterSec?.takeIf { it > 0 },
     opDate = opDate,
 )
@@ -150,14 +165,21 @@ fun cardioOf(
     durationSec = durationSec?.takeIf { it > 0 },
     paceSecPerKm = paceSecPerKm?.takeIf { it > 0 },
     exerciseId = exercise.id,
+    exerciseUid = exercise.uid,
     opDate = opDate,
 )
 
 fun durationOf(exercise: ExerciseRef, opDate: String, durationSec: Int): Duration =
-    Duration(activity = exercise.name, durationSec = durationSec, exerciseId = exercise.id, opDate = opDate)
+    Duration(
+        activity = exercise.name, durationSec = durationSec, exerciseId = exercise.id,
+        exerciseUid = exercise.uid, opDate = opDate,
+    )
 
 fun tickOf(exercise: ExerciseRef, opDate: String): Tick =
-    Tick(activity = exercise.name, exerciseId = exercise.id, opDate = opDate)
+    Tick(
+        activity = exercise.name, exerciseId = exercise.id, exerciseUid = exercise.uid,
+        opDate = opDate,
+    )
 
 /** Body weight carries neither a name nor an exercise_id — the exercise is only the route in. */
 fun bodyweightOf(opDate: String, weightKg: Double): Bodyweight =
@@ -165,12 +187,12 @@ fun bodyweightOf(opDate: String, weightKg: Double): Bodyweight =
 
 // --- prefilling the entry card -------------------------------------------------------
 
-/** The last non-cancelled strength set of an exercise, by exercise_id and not by name. */
-fun lastStrengthSet(events: List<JournalEvent>, exerciseId: Long): StrengthSet? =
-    strengthSetsByExerciseId(events, exerciseId).lastOrNull()
+/** The last non-cancelled strength set of an exercise, by its identity and not by name. */
+fun lastStrengthSet(events: List<JournalEvent>, exercise: ExerciseLink): StrengthSet? =
+    strengthSetsOfExercise(events, exercise).lastOrNull()
 
-fun lastDuration(events: List<JournalEvent>, exerciseId: Long): Duration? =
-    formsByExerciseId<Duration>(events, exerciseId, TYPE_DURATION).lastOrNull()
+fun lastDuration(events: List<JournalEvent>, exercise: ExerciseLink): Duration? =
+    formsOfExercise<Duration>(events, exercise, TYPE_DURATION).lastOrNull()
 
 /** The last weigh-in. Body weight has no exercise_id, so the whole series is used. */
 fun lastBodyweight(events: List<JournalEvent>): Bodyweight? = bodyweightSeries(events).lastOrNull()
@@ -242,10 +264,10 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
 
     for ((index, ev) in all.withIndex()) {
         if (ev.opDate != opDate) continue
-        val exerciseId = ev.form.exerciseId
-        val groupKey = exerciseId?.let { "id:$it" } ?: "name:${ev.key ?: ev.type}"
+        val exercise = ev.form.exerciseLink()
+        val groupKey = exercise?.key ?: "name:${ev.key ?: ev.type}"
         val bucket = buckets.getOrPut(groupKey) { mutableListOf() }
-        labels.getOrPut(groupKey) { exerciseId to ev.form.activityName() }
+        labels.getOrPut(groupKey) { exercise?.id to ev.form.activityName() }
 
         val previous = bucket.lastOrNull()
         val rest = previous?.let { explicitRestAfter(it.form) }
@@ -275,20 +297,15 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
  */
 private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
     val prior = all.subList(0, index)
-    return when (val form = all[index].form) {
-        is StrengthSet -> form.exerciseId?.let { id ->
-            evaluateStrengthRecord(
-                prior.mapNotNull { (it.form as? StrengthSet)?.takeIf { s -> s.exerciseId == id } },
-                form.weightKg, form.reps,
-            )
-        }
+    val exercise = all[index].form.exerciseLink() ?: return null
+    fun <T : ActivityForm> priorOf(pick: (ActivityForm) -> T?): List<T> =
+        prior.mapNotNull { pick(it.form)?.takeIf { _ -> it.form.exerciseLink()?.matches(exercise) == true } }
 
-        is HoldSet -> form.exerciseId?.let { id ->
-            evaluateHoldRecord(
-                prior.mapNotNull { (it.form as? HoldSet)?.takeIf { h -> h.exerciseId == id } },
-                form,
-            )
-        }
+    return when (val form = all[index].form) {
+        is StrengthSet ->
+            evaluateStrengthRecord(priorOf { it as? StrengthSet }, form.weightKg, form.reps)
+
+        is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
 
         else -> null
     }
@@ -329,11 +346,11 @@ internal fun secondsBetween(fromTs: String, toTs: String): Double? = runCatching
 /** How often and how recently an exercise was used — the ordering of the picker. */
 data class ExerciseUsage(val lastDate: String, val count: Int)
 
-/** Usage of every exercise in the journal, by exercise_id (entries with no id are skipped). */
+/** Usage of every exercise in the journal (entries naming none are skipped). */
 fun exerciseUsage(events: List<JournalEvent>): Map<Long, ExerciseUsage> {
     val out = HashMap<Long, ExerciseUsage>()
     for (ev in readActivities(events)) {
-        val id = ev.form.exerciseId ?: continue
+        val id = ev.form.exerciseLink()?.id ?: continue
         val current = out[id]
         out[id] = ExerciseUsage(
             lastDate = if (current == null || ev.opDate > current.lastDate) ev.opDate else current.lastDate,
