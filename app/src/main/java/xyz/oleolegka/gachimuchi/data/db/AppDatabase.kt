@@ -620,13 +620,22 @@ abstract class AppDatabase : RoomDatabase() {
          *
          * Returning null for "nothing to do" rather than the unchanged string is what keeps
          * the migration from rewriting every row in the journal to the value it already held.
+         *
+         * "A uid already there" means a uid, not a KEY already there. Payloads are written
+         * with `encodeDefaults`, so a form serialised by a build that knows the field but has
+         * nothing to put in it stores `"exercise_uid": null` — the key is present and the link
+         * is not. Reading that as "done" would leave exactly the entries this migration exists
+         * for untouched, and silently: they parse, they resolve by number, and the split
+         * history only shows up as records computed over half the sets.
          */
         private fun withExerciseUid(payload: String, uidOfExercise: Map<Long, String>): String? {
             val json = runCatching {
                 kotlinx.serialization.json.Json.parseToJsonElement(payload)
             }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
 
-            if (json["exercise_uid"] != null) return null
+            val alreadyLinked = (json["exercise_uid"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull
+            if (alreadyLinked != null) return null
             val exerciseId = (json["exercise_id"] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull?.toLongOrNull() ?: return null
             val uid = uidOfExercise[exerciseId] ?: return null
