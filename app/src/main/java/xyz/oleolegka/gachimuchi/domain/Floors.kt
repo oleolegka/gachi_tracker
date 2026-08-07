@@ -35,11 +35,17 @@ import kotlinx.serialization.Serializable
  * so the same treatment is applied here: what may sound, and when, is decided by pure
  * arithmetic that is testable on the JVM, and the caller only obeys.
  *
- * ── Time, and only the monotonic kind ───────────────────────────────────────────
- * Every "now" is a `SystemClock.elapsedRealtime` reading passed in from outside, never read
- * here. A floor stores the MOMENT IT IS READY AT rather than "seconds left", for the reason
- * spelled out at the top of domain/Runner.kt: a decrementing counter is a lie as soon as
- * the process is frozen, and a floor spends most of its life frozen in a pocket.
+ * ── Time, and which clock ───────────────────────────────────────────────────────
+ * Every "now" is a reading passed in from outside; no clock is read in this file. The
+ * running arithmetic is `SystemClock.elapsedRealtime` throughout, and a floor stores the
+ * MOMENT IT IS READY AT rather than "seconds left", for the reason spelled out at the top of
+ * domain/Runner.kt: a decrementing counter is a lie as soon as the process is frozen, and a
+ * floor spends most of its life frozen in a pocket.
+ *
+ * The wall clock is consulted at exactly one point — [carriedAcrossReboot], where the
+ * monotonic clock has been reset out from under a floor and the wall clock is the only
+ * remaining witness to when the rest was due. Nowhere else, because it is the one clock a
+ * user or an NTP sync can move.
  */
 
 /**
@@ -54,6 +60,11 @@ const val FLOOR_STAGGER_MS = 2_000L
 
 /**
  * How late a floor's moment may be and still be worth a noise.
+ *
+ * MUST STAY EQUAL to `SIGNAL_LATENESS_MS` in timer/TimerController.kt, which is a private
+ * copy of this same number. They are one rule with two homes, and nothing checks that they
+ * agree — unifying them means editing the timer, which is deliberately left to whoever writes
+ * the service layer rather than done from here.
  *
  * Same rule, and the same five seconds, as the step boundary in timer/TimerController.kt,
  * and for the same reason: the path that sounds a floor is also the path a process woken by
@@ -178,45 +189,68 @@ fun RestFloor.isFromPreviousBoot(currentBootRef: Long): Boolean =
     isRunStale(bootRef, currentBootRef)
 
 /**
- * A floor from a previous boot, taken up as READY AND ALREADY DEALT WITH.
+ * The same floor, carried onto the clock of the boot that is running now.
  *
- * ── Why ready, and why not resumed ──────────────────────────────────────────────
- * Resuming is not on the table. The stored moment belongs to a dead clock, so counting down
- * to it would count down to an arbitrary number — the same reason a run from before a reboot
- * is thrown away rather than restored (timer/TimerController.restore).
+ * ── Why a floor survives a restart when a conductor's run does not ──────────────
+ * A run cannot be resumed because its state is a SCHEDULE INSIDE a set: a monotonic reading
+ * for every step of it. After a restart those readings mean nothing, and "carry on from the
+ * middle of a hang" is not a thing that can be done at all — which is why a stale run is
+ * thrown away (timer/TimerController.restore).
  *
- * What is left is a choice between dropping the floor and keeping it in a resolved state,
- * and this keeps it, following what the timer does with the part of a run that DOES survive:
- * the clock reading dies, the fact does not. The exercise, the length that was ordered and
- * the wall time it started at are all still true after a reboot; only the countdown is gone.
- * Dropping the floor would delete the one thing the user might still want — that a set of
- * bench was done and a rest was owed against it — and would do it silently.
+ * A floor is one sentence: NOT BEFORE MOMENT T. That sentence is written down twice — once
+ * on the monotonic clock as [RestFloor.readyAtMs], which the restart killed, and once on the
+ * wall clock as [RestFloor.startedAtWallMs] plus [RestFloor.orderedMs], which it did not.
+ * Restoring the floor is therefore arithmetic and not a guess, so it is restored. It used to
+ * be declared ready instead, and that was wrong in the one direction a "not before" can be
+ * wrong in: a reboot can take less time than the rest it interrupted, and saying "you may go"
+ * early is the only way this kind of timer does harm.
  *
- * The honest cost, because this is the wrong direction for a floor to be wrong in: a reboot
- * can take less than the rest it interrupted, so calling the floor ready can be calling it
- * ready early, and early is the only way a "not before" can hurt. Two things bound it. The
- * floor is marked [RestFloor.signalled], so nothing beeps and the app is not telling anybody
- * to go — it is showing a resolved row to somebody who is reading the screen and has their
- * own sense of how long the phone was off. And a reboot noticed by a person in a gym is
- * minutes old by the time it is noticed at all.
+ * ── The wall clock is the weak part of this, and it is clamped in one direction ─
+ * It is the one clock a user or an NTP sync can move. Moved BACKWARDS, it makes the
+ * remainder come out longer than the rest that was ever ordered — a countdown growing past
+ * its own length — so the remainder is capped at [RestFloor.orderedMs]. Resting a few seconds
+ * short of what was asked for is by a wide margin the cheaper of the two errors.
  *
- * NOT rebased through the wall clock, although [RestFloor.startedAtWallMs] and
- * [RestFloor.orderedMs] would make that arithmetically possible. That is a deliberate
- * omission, not an oversight — see the report accompanying this file.
+ * Moved FORWARDS it cannot be clamped, because a forward jump is indistinguishable from time
+ * genuinely having passed. It matures a floor early, and what stands between that and a wrong
+ * signal is the lateness rule in [floorCue]: a floor matured by a jump of any real size is far
+ * outside the window and is resolved without a sound.
+ *
+ * ── Nothing is decided about signalling here ────────────────────────────────────
+ * A floor that turns out to have matured while the device was down comes back with its moment
+ * in the past — possibly before this boot began, which is negative and honest — and [floorCue]
+ * then applies to it exactly the rule it applies to every other late floor: silence if the
+ * moment is stale, a signal if the machine happened to come up within seconds of it. One rule
+ * in one place, rather than a second copy of it here.
  */
-fun RestFloor.settledAcrossReboot(nowElapsed: Long, currentBootRef: Long): RestFloor =
-    copy(readyAtMs = nowElapsed, bootRef = currentBootRef, signalled = true)
+fun RestFloor.carriedAcrossReboot(
+    nowElapsed: Long,
+    nowWall: Long,
+    currentBootRef: Long,
+): RestFloor {
+    val remaining = (startedAtWallMs + orderedMs - nowWall).coerceAtMost(orderedMs)
+    return copy(readyAtMs = nowElapsed + remaining, bootRef = currentBootRef)
+}
 
 /**
- * Floors as a fresh process must take them up: whatever the last boot left behind is
- * resolved ([settledAcrossReboot]), everything else is untouched.
+ * Floors as a fresh process must take them up: anything left behind by an earlier boot is
+ * carried onto the current clock ([carriedAcrossReboot]), everything else is untouched.
+ *
+ * Within one boot the monotonic reading is authoritative and is left exactly alone. It is the
+ * better of the two clocks — nothing can move it — so the wall clock is consulted only when
+ * the monotonic one has been reset out from under the floor.
  */
 fun settleFloors(
     floors: List<RestFloor>,
     nowElapsed: Long,
+    nowWall: Long,
     currentBootRef: Long,
 ): List<RestFloor> = floors.map {
-    if (it.isFromPreviousBoot(currentBootRef)) it.settledAcrossReboot(nowElapsed, currentBootRef) else it
+    if (it.isFromPreviousBoot(currentBootRef)) {
+        it.carriedAcrossReboot(nowElapsed, nowWall, currentBootRef)
+    } else {
+        it
+    }
 }
 
 // --- when a floor is allowed to sound --------------------------------------------------
@@ -239,11 +273,10 @@ private fun floorOrder(floors: List<RestFloor>): List<Int> =
  *
  * Floors that have already been dealt with keep their place in the chain. They occupy the
  * channel they sounded on, so a floor maturing a few hundred milliseconds after one that has
- * just beeped is still pushed clear of it. The one case where that is too cautious is a
- * floor resolved silently across a reboot, whose moment is rewritten to the instant of the
- * restart and can therefore hold back a genuine floor by up to two seconds; that is a
- * two-second delay to a signal that is defined as delayable, in a case that needs a reboot
- * and a maturing rest within the same two seconds.
+ * just beeped is still pushed clear of it. That costs nothing for a floor resolved long ago,
+ * because the chain is anchored to real moments of readiness — including the moments of
+ * floors carried across a restart, which land where they truly matured rather than at the
+ * instant the restart happened.
  */
 private fun dueMoments(floors: List<RestFloor>): LongArray {
     val due = LongArray(floors.size)
@@ -310,6 +343,11 @@ data class FloorCue(
  * A moment more than [FLOOR_SIGNAL_LATENESS_MS] old is resolved without a sound. The process
  * that reaches it is one that has been asleep for an hour, and a rest that ended an hour ago
  * is not news worth an alarm-volume tone.
+ *
+ * The same rule, with nothing added, is what handles a rest that ran out while the device was
+ * off: [carriedAcrossReboot] puts such a floor back on this boot's clock at an old moment, and
+ * old moments are silent. A restart that happened to finish within seconds of the rest ending
+ * is the one case that still sounds, and it should.
  */
 fun floorCue(floors: List<RestFloor>, conductorRunning: Boolean, now: Long): FloorCue {
     if (conductorRunning) return FloorCue(signal = null, floors = floors, wakeAtMs = null)

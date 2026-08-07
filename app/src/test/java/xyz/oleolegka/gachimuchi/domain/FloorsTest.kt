@@ -219,21 +219,110 @@ class FloorsTest {
     }
 
     // --- a floor from a previous boot --------------------------------------------------
+    //
+    // A floor is one sentence — not before moment T — and it is written down on both clocks,
+    // so a restart destroys one copy of it and not the other. These carry it across on the
+    // surviving copy. What they must NOT do is what an earlier version of this file did:
+    // declare the floor ready because its countdown was unreadable. A reboot can be quicker
+    // than the rest it interrupted, and "you may go" said early is the only harm a floor can
+    // do.
+    //
+    // The rest is two minutes and is started 500 s into the boot that later dies.
+
+    private val saved = startFloor(1, "Bench", orderedMs = 120_000, nowElapsed = 500_000, nowWall = WALL)
+
+    /** A floor taken up after a restart, given a monotonic clock [upFor] ms old. */
+    private fun carried(wallNow: Long, upFor: Long = 30_000): RestFloor {
+        // the monotonic clock restarts with the device, so wall-minus-monotonic jumps
+        val bootRef = bootReference(wallNow, upFor)
+        assertTrue("this is only a reboot if the boot reference moved", saved.isFromPreviousBoot(bootRef))
+        return settleFloors(
+            listOf(saved),
+            nowElapsed = upFor,
+            nowWall = wallNow,
+            currentBootRef = bootRef,
+        ).single()
+    }
 
     @Test
-    fun `a floor started before a reboot counts as ready and is never sounded`() {
-        val saved = startFloor(1, "Bench", orderedMs = 120_000, nowElapsed = 500_000, nowWall = WALL)
-        // the monotonic clock restarts at the reboot, so wall-minus-monotonic jumps
-        val bootRef = bootReference(WALL + 300_000, 30_000)
-        assertTrue(saved.isFromPreviousBoot(bootRef))
+    fun `a rest that outlived the reboot keeps counting down what is left of it`() {
+        // down and back up in forty seconds, so eighty of the two minutes remain
+        val settled = carried(wallNow = WALL + 40_000)
+        val at = settled.progressAt(30_000)
 
-        val settled = settleFloors(listOf(saved), nowElapsed = 30_000, currentBootRef = bootRef).single()
-
-        assertTrue("its countdown is a reading of a clock that no longer exists", settled.signalled)
-        assertTrue(settled.progressAt(30_000).ready)
-        assertEquals(0L, settled.progressAt(30_000).overdueMs)
+        assertFalse("declaring this ready would be forty seconds of rest the user never had", at.ready)
+        assertEquals(80_000L, at.remainingMs)
+        assertEquals(1f / 3f, at.fraction, 0.0001f)
+        assertFalse(settled.signalled)
+        assertEquals(110_000L, nextFloorSignalMs(listOf(settled), conductorRunning = false))
         assertNull(floorCue(listOf(settled), conductorRunning = false, now = 30_000).signal)
-        assertNull(nextFloorSignalMs(listOf(settled), conductorRunning = false))
+    }
+
+    @Test
+    fun `a rest that ran out while the device was off is settled in silence`() {
+        // five minutes down against a two minute rest
+        val settled = carried(wallNow = WALL + 300_000)
+        val at = settled.progressAt(30_000)
+
+        assertTrue(at.ready)
+        assertEquals("overdue is measured, not invented", 180_000L, at.overdueMs)
+
+        val cue = floorCue(listOf(settled), conductorRunning = false, now = 30_000)
+        assertNull("nobody was there to hear it", cue.signal)
+        assertTrue(cue.floors.single().signalled)
+        assertNull(cue.wakeAtMs)
+    }
+
+    /** The one restart that still deserves a noise: it finished within seconds of the rest. */
+    @Test
+    fun `a rest that ran out during the last seconds of the reboot still sounds`() {
+        val settled = carried(wallNow = WALL + 123_000)
+
+        assertEquals(27_000L, settled.readyAtMs)
+        assertEquals(1L, floorCue(listOf(settled), conductorRunning = false, now = 30_000).signal?.exerciseId)
+    }
+
+    /**
+     * The wall clock is the one clock that can be moved. Set back ten minutes, it would say
+     * twelve minutes are left of a two minute rest; the remainder is capped at the length that
+     * was ordered instead, because a countdown growing past its own length is unreadable and
+     * resting a few seconds short is the cheaper error.
+     */
+    @Test
+    fun `a wall clock moved backwards cannot stretch a rest past its ordered length`() {
+        val settled = carried(wallNow = WALL - 600_000)
+        val at = settled.progressAt(30_000)
+
+        assertEquals(120_000L, at.remainingMs)
+        assertEquals(0f, at.fraction, 0.0001f)
+    }
+
+    @Test
+    fun `a floor already sounded before the reboot stays sounded, with a truthful overrun`() {
+        val settled = saved.copy(signalled = true)
+            .carriedAcrossReboot(
+                nowElapsed = 30_000,
+                nowWall = WALL + 300_000,
+                currentBootRef = bootReference(WALL + 300_000, 30_000),
+            )
+
+        assertTrue(settled.signalled)
+        assertEquals(180_000L, settled.progressAt(30_000).overdueMs)
+    }
+
+    /**
+     * Carried floors land where they actually matured rather than at the instant of the
+     * restart, so a spent one does not push a live one out of its slot.
+     */
+    @Test
+    fun `a floor carried across a restart does not delay a live one`() {
+        val spent = carried(wallNow = WALL + 300_000)
+        val live = floor(2, "Abs", readyAt = 30_500)
+
+        val cue = floorCue(listOf(spent, live), conductorRunning = false, now = 30_000)
+
+        assertNull(cue.signal)
+        assertEquals("not pushed to 32 500 by a floor that matured before the boot", 30_500L, cue.wakeAtMs)
     }
 
     @Test
@@ -244,8 +333,14 @@ class FloorsTest {
 
         assertFalse(bench.isFromPreviousBoot(bootRef))
         assertEquals(
+            "within a boot the monotonic clock is authoritative and the wall clock is ignored",
             listOf(bench),
-            settleFloors(listOf(bench), nowElapsed = 70_000, currentBootRef = bootRef),
+            settleFloors(
+                listOf(bench),
+                nowElapsed = 70_000,
+                nowWall = WALL + 61_000,
+                currentBootRef = bootRef,
+            ),
         )
     }
 
