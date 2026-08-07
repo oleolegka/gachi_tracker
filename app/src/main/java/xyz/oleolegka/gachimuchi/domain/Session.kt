@@ -109,7 +109,9 @@ fun strengthSetOf(
 ): StrengthSet = if (ownWeight) {
     StrengthSet(
         exercise = exercise.name, reps = reps, ownWeight = true,
-        addedKg = addedKg?.takeIf { it > 0 }, exerciseId = exercise.id,
+        // zero is "nothing was added", which the payload says by leaving the field out; the
+        // sign is KEPT, because a negative one is assistance and not a mistyped positive
+        addedKg = addedKg?.takeIf { it != 0.0 }, exerciseId = exercise.id,
         exerciseUid = exercise.uid, opDate = opDate, warmup = warmup,
     )
 } else {
@@ -150,7 +152,9 @@ fun holdSetOf(
     // a zero on the catalog row would be rejected by the validator and take the screen
     // down at the moment the Add button is pressed
     edgeMm = exercise.edge,
-    addedKg = addedKg?.takeIf { it > 0 },
+    // the sign survives: a hang off a band is recorded as a negative added weight, and
+    // stripping it would silently turn "helped by 15 kg" into an unweighted hang
+    addedKg = addedKg?.takeIf { it != 0.0 },
     ownWeight = true,
     warmup = warmup,
     exerciseId = exercise.id,

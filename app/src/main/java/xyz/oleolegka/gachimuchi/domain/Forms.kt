@@ -137,6 +137,28 @@ private fun requirePosOrNull(name: String, v: Double?): Double? {
     return v
 }
 
+/**
+ * A load the user actually stated: any non-zero finite number, sign included.
+ *
+ * This is the validator for ADDED WEIGHT and for nothing else. A negative value is
+ * legitimate there and means the opposite of what the field's name suggests — see
+ * [StrengthSet.addedKg] for the sign convention and why the field is not split in two.
+ *
+ * ZERO IS STILL REFUSED, exactly as [requirePosOrNull] refused it. "I added nothing" is
+ * said by leaving the field out, and a stored zero would be a second way of saying the same
+ * thing that every reader would then have to remember to treat as absent.
+ *
+ * The finiteness check is not decoration. `> 0` used to reject a NaN by accident, since
+ * every comparison against one is false; `!= 0.0` accepts it, and a NaN in the journal
+ * poisons every maximum and every sum it reaches.
+ */
+private fun requireNonZeroOrNull(name: String, v: Double?): Double? {
+    if (v == null) return null
+    require(v.isFinite()) { "$name: expected a finite number or null, got $v" }
+    require(v != 0.0) { "$name: expected a non-zero number or null, got $v" }
+    return v
+}
+
 private fun requireKey(name: String, raw: String): String =
     normPhrase(raw) ?: throw IllegalArgumentException("$name: name is empty after normalization ($raw)")
 
@@ -179,6 +201,24 @@ data class StrengthSet(
     @SerialName("exercise") val exercise: String,
     @SerialName("reps") val reps: Int,
     @SerialName("weight_kg") val weightKg: Double? = null,
+    /**
+     * Weight carried ON TOP of your own body weight — and, when NEGATIVE, weight taken off it.
+     *
+     * ── The sign ───────────────────────────────────────────────────────────────
+     * A minus means the load was REDUCED: a band, a counterweight or an assisted-pull-up
+     * machine holding part of you up. "Pull-ups, -20 kg" is twenty kilograms of help, and it
+     * is an ordinary way to train a pull-up nobody can do yet, not a data error.
+     *
+     * ONE SIGNED FIELD RATHER THAN TWO, and that is the decision worth defending. Assistance
+     * and added weight are the same axis of the same exercise: a lifter works up through
+     * -20, -10, 0 and out the other side to +5, and a separate `assistance_kg` column would
+     * cut that one progression in half — two charts, two records, and a personal best that
+     * resets on the day the band comes off. Anything comparing added weights therefore works
+     * on negatives unchanged: -10 beats -15 because needing less help IS the improvement.
+     *
+     * Zero is not storable (see [requireNonZeroOrNull]): a clean body-weight set says so by
+     * leaving the field out.
+     */
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
     /**
@@ -210,7 +250,7 @@ data class StrengthSet(
     init {
         requirePos("reps", reps)
         requirePosOrNull("weight_kg", weightKg)
-        requirePosOrNull("added_kg", addedKg)
+        requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require(!(weightKg != null && ownWeight)) {
             "weight_kg and own_weight are incompatible: either an implement or your own body weight"
@@ -238,6 +278,11 @@ data class StrengthSet(
  *
  * [restAfterSec] is the pause BETWEEN sets; [workSec]/[restSec] are the protocol
  * WITHIN a set. Different quantities, independent of each other.
+ *
+ * [addedKg] IS SIGNED, and on a hangboard the negative half of the axis is the half most of
+ * the training happens on: hanging a one-arm lockoff off a band that takes fifteen kilograms
+ * of you is normal work, and it progresses towards zero. The convention and the reasoning are
+ * on [StrengthSet.addedKg], which defines it once for both forms.
  */
 @Serializable
 data class HoldSet(
@@ -266,7 +311,7 @@ data class HoldSet(
         requirePosOrNull("work_sec", workSec)
         requirePosOrNull("rest_sec", restSec)
         requirePosOrNull("edge_mm", edgeMm)
-        requirePosOrNull("added_kg", addedKg)
+        requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require((workSec == null) == (restSec == null)) {
             "a work:rest protocol is set as a pair — both work_sec and rest_sec are required"

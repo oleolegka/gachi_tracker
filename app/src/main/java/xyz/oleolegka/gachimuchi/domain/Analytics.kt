@@ -241,7 +241,12 @@ fun trendSeries(
             if (holds.any { it.addedKg != null }) {
                 FormSeries(
                     SeriesSpec("Added weight", ValueFormat.KILOGRAMS, Aggregation.BEST),
-                    byDay(mine) { ofDay -> ofDay.mapNotNull { (it.form as? HoldSet)?.addedKg }.maxOrNull() },
+                    // a clean hold sits on this axis at zero rather than falling off it, for the
+                    // reason [evaluateHoldRecord] spells out: with assistance in the history the
+                    // day the band came off is the best day, and it must not be a gap in the line
+                    byDay(mine) { ofDay ->
+                        ofDay.mapNotNull { it.form as? HoldSet }.map { it.addedKg ?: 0.0 }.maxOrNull()
+                    },
                 )
             } else {
                 FormSeries(

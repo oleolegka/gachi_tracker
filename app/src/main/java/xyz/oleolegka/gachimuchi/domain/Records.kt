@@ -44,6 +44,36 @@ internal fun fmtNum(x: Double): String {
 }
 
 /**
+ * How one added-weight number reads in a record phrase.
+ *
+ * A negative added weight is ASSISTANCE (see [StrengthSet.addedKg]), and "added weight
+ * -20 kg" hands the reader a sign to work out at the moment they are least inclined to. The
+ * sign stays in the record's VALUE, where anything comparing records needs it; only the
+ * sentence is turned around.
+ */
+internal fun addedWeightPhrase(kg: Double): String = when {
+    kg < 0 -> "assistance ${fmtNum(-kg)} kg"
+    // reachable only in a history that also carries assistance: an unassisted hold is stored
+    // as no added weight at all, and it enters the axis as a zero (see [evaluateHoldRecord])
+    kg == 0.0 -> "no assistance"
+    else -> "added weight ${fmtNum(kg)} kg"
+}
+
+/**
+ * "This much now, that much before" for the added-weight axis.
+ *
+ * Two numbers of the SAME sign are phrased once and compared bare, which is both shorter and
+ * how the app has always read; a pair that straddles zero is spelled out on both sides,
+ * because "added weight 2 kg (was 5)" would be a flat lie about a lifter who has just come
+ * off the band.
+ */
+internal fun addedWeightRecordText(now: Double, previous: Double): String = when {
+    now >= 0 && previous >= 0 -> "added weight ${fmtNum(now)} kg (was ${fmtNum(previous)})"
+    now < 0 && previous < 0 -> "assistance ${fmtNum(-now)} kg (was ${fmtNum(-previous)})"
+    else -> "${addedWeightPhrase(now)} (was ${addedWeightPhrase(previous)})"
+}
+
+/**
  * Estimated 1RM by Epley: `weight * (1 + reps/30)`. A practical signal of strength
  * progress without ever testing a true one-rep max (decisions.md §5).
  */
@@ -110,15 +140,25 @@ fun evaluateStrengthRecord(
 fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
     if (hold.warmup) return null
     val working = priorHolds.filter { !it.warmup }
-    val priorWeights = working.mapNotNull { it.addedKg }
     val priorSeconds = working.mapNotNull { it.holdSec }
 
-    val weight = hold.addedKg
+    // A hold with nothing added is a real point on the added-weight axis, at zero, and it has
+    // to be counted as one now that the axis has a NEGATIVE half: hanging clean beats hanging
+    // off a band, so a history of assisted hangs must not let the next assisted hang be
+    // announced as a record over a day the band was not needed.
+    //
+    // Gated on somebody having stated an added weight at all, because otherwise every plank
+    // in the journal would join an axis it has no business on and the seconds fallback below
+    // — the only axis an unweighted hold has — would never be reached.
+    val weighedAxis = hold.addedKg != null || working.any { it.addedKg != null }
+    val priorWeights = if (weighedAxis) working.map { it.addedKg ?: 0.0 } else emptyList()
+
+    val weight = if (weighedAxis) hold.addedKg ?: 0.0 else null
     if (weight != null && priorWeights.isNotEmpty() && weight > priorWeights.max()) {
         val prev = priorWeights.max()
         return RecordHit(
             RecordHit.Axis.HOLD_WEIGHT, weight, prev,
-            "added weight ${fmtNum(weight)} kg (was ${fmtNum(prev)})",
+            addedWeightRecordText(weight, prev),
         )
     }
     val seconds = hold.holdSec
@@ -172,12 +212,13 @@ fun holdRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecor
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return null
-    val withWeight = mine.filter { it.first.addedKg != null }
-    if (withWeight.isNotEmpty()) {
-        val (best, day) = withWeight.maxBy { it.first.addedKg!! }
+    if (mine.any { it.first.addedKg != null }) {
+        // every hold of the exercise competes, the clean ones at zero — see [evaluateHoldRecord]
+        // for why a null has to be a point on this axis and not an absence from it
+        val (best, day) = mine.maxBy { it.first.addedKg ?: 0.0 }
+        val value = best.addedKg ?: 0.0
         return ExerciseRecord(
-            exercise, RecordHit.Axis.HOLD_WEIGHT, best.addedKg!!, day,
-            "added weight ${fmtNum(best.addedKg)} kg",
+            exercise, RecordHit.Axis.HOLD_WEIGHT, value, day, addedWeightPhrase(value),
         )
     }
     val withSeconds = mine.filter { it.first.holdSec != null }
