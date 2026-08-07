@@ -424,6 +424,45 @@ class SlotEditorTest : ScreenTest() {
         compose.onNodeWithText("Create your first exercise", substring = true).assertDoesNotExist()
     }
 
+    /**
+     * A hidden exercise is not offered, which is the whole of what hiding does.
+     *
+     * Asserted on the picker rather than on the store, because hiding is a PRESENTATION choice
+     * and this is the presentation: the row is still in `state.exercises`, still carries every
+     * set it ever had, and still appears on the overview. If it were being filtered anywhere
+     * further down than this list, that would be a delete wearing a different word.
+     */
+    @Test
+    fun `an exercise that has been hidden is not offered by the picker`() {
+        screen {
+            SlotEditorDialog(
+                initial = null,
+                day = day,
+                suggestions = emptyList(),
+                today = day,
+                state = UiState(
+                    exercises = listOf(
+                        exerciseEntity(1, "Bench press"),
+                        exerciseEntity(2, "Squat", hidden = true),
+                    ),
+                    loading = false,
+                ),
+                onSave = { saved = it },
+                onDelete = { deleted++ },
+                onDismiss = { dismissed++ },
+            )
+        }
+
+        inBody("Exercises - none planned").performClick()
+        settle()
+        addExerciseButton().performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Bench press").assertExists()
+        compose.onNodeWithText("Squat").assertDoesNotExist()
+    }
+
     // --- editing an existing session -----------------------------------------------------------
 
     @Test

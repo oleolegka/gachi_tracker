@@ -154,13 +154,21 @@ private fun PickExisting(
     val colors = LocalGachiColors.current
     val order = remember(state.events) { pickerOrder(exerciseUsage(state.events)) }
     val usage = remember(state.events) { exerciseUsage(state.events) }
-    val items = remember(state.exercises, query, order) {
-        state.exercises
+    /*
+     * Hidden exercises are dropped HERE and only here, which is the whole of what hiding does:
+     * this is the list you pick from, and an exercise you stopped training is clutter in it and
+     * nowhere else. The row itself is untouched — its sets, records, charts and totals go on
+     * exactly as before, and the overview still lists it, which is where it is brought back
+     * from (see ActivityRepository.setHidden).
+     */
+    val visible = remember(state.exercises) { state.exercises.filter { !it.hidden } }
+    val items = remember(visible, query, order) {
+        visible
             .filter { matchesExerciseQuery(it.name, query) }
             .sortedWith { a, b -> order.compare(a.id, b.id) }
     }
 
-    val catalogEmpty = state.exercises.isEmpty()
+    val catalogEmpty = visible.isEmpty()
     val searching = query.isNotBlank()
 
     Text("Exercise", style = MaterialTheme.typography.titleMedium)

@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,6 +48,7 @@ import xyz.oleolegka.gachimuchi.domain.volumeSeries
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.BarChart
 import xyz.oleolegka.gachimuchi.ui.components.EmptyState
+import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.IdentityChip
 import xyz.oleolegka.gachimuchi.ui.components.LineChart
@@ -92,10 +96,12 @@ fun FormDetailScreen(
 ) {
     var currentId by remember(exerciseId) { mutableStateOf(exerciseId) }
     var period by remember(exerciseId) { mutableStateOf(Period.MONTH) }
+    var menuOpen by remember(exerciseId) { mutableStateOf(false) }
 
     val entity = state.exerciseById(currentId)
     val form = state.formOf(currentId)
     val colors = LocalGachiColors.current
+    val editor = rememberExerciseEditor()
 
     if (entity == null || form == null) {
         // the exercise vanished from under the screen (a wipe, a reseed): say so and go back
@@ -136,6 +142,37 @@ fun FormDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    /*
+                     * The catalog is editable HERE and nowhere else, because this is the screen
+                     * that shows an exercise as a thing in its own right — its name, its edge,
+                     * its protocol, its history — and therefore the screen somebody is looking
+                     * at when they notice one of those is wrong. The picker is for choosing,
+                     * and a menu of corrections in a list you are trying to get out of quickly
+                     * is a menu in the way.
+                     */
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Edit exercise") },
+                            onClick = {
+                                menuOpen = false
+                                editor.edit(entity)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (entity.hidden) "Show in the picker" else "Hide from the picker")
+                            },
+                            onClick = {
+                                menuOpen = false
+                                editor.toggleHidden(entity)
+                            },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

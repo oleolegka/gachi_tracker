@@ -124,8 +124,15 @@ class Journal {
 fun exerciseRef(id: Long, name: String, form: ExerciseForm = ExerciseForm.STRENGTH) =
     ExerciseRef(id, name, form)
 
-fun exerciseEntity(id: Long, name: String, form: ExerciseForm = ExerciseForm.STRENGTH) =
-    ExerciseEntity(id = id, name = name, form = form.code, createdAt = "2026-01-01T00:00:00")
+fun exerciseEntity(
+    id: Long,
+    name: String,
+    form: ExerciseForm = ExerciseForm.STRENGTH,
+    /** Kept out of the pickers — see [ExerciseEntity.hidden]. */
+    hidden: Boolean = false,
+) = ExerciseEntity(
+    id = id, name = name, form = form.code, createdAt = "2026-01-01T00:00:00", hidden = hidden,
+)
 
 fun slot(id: Long, name: String, atTime: String?, day: String) =
     Slot(id = id, name = name, atTime = atTime, repeatRule = REPEAT_NONE, anchorDate = day)
