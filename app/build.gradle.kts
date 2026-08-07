@@ -76,6 +76,16 @@ tasks.withType<Test>().configureEach {
         systemProperty("robolectric.offline", "true")
         systemProperty("robolectric.dependency.dir", dir)
     }
+
+    /*
+     * Gradle gives a test JVM 512 MB by default, which is plenty for the reducer tests and
+     * not enough for the screen tests: laying out text under Robolectric goes through
+     * ShadowLineBreaker, which registers every native object it fakes in a registry that is
+     * never swept, so a few dozen composed screens exhaust the heap and the tests start
+     * failing with OutOfMemoryError in whatever ran last — a failure that says nothing
+     * whatever about the code under test.
+     */
+    maxHeapSize = "2g"
 }
 
 dependencies {

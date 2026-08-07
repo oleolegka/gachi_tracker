@@ -26,6 +26,15 @@ import xyz.oleolegka.gachimuchi.ui.theme.GachimuchiTheme
  * from the one that ships — and the one defect this test suite is meant to keep out (a
  * control filled from an unset colour role) is invisible in exactly that setup.
  *
+ * ── The animation clock is held still, and that is a limitation ────────────────
+ * With the clock advancing by itself, a Material text field never lets the composition
+ * settle: `setContent` spins until the idling strategy gives up after a minute, and it does
+ * so for a bare `OutlinedTextField` on an otherwise empty screen, in or out of a dialog.
+ * Freezing the clock ([settle] winds it on where a test needs an animation to finish) makes
+ * every screen in this app testable. The price is that animated behaviour is not exercised
+ * at all — see the "what this does not catch" note in [DayCardListTest], of which this is
+ * now one more item.
+ *
  * The SDK is pinned to 34 for the reason every other Robolectric test here pins it: the
  * android-all jar for 34 is the one on the machine. The window is pinned to the size of an
  * ordinary phone rather than left at Robolectric's default (a 320x470 dp handset from
@@ -39,8 +48,18 @@ abstract class ScreenTest {
     @get:Rule
     val compose = createComposeRule()
 
-    /** Raises [content] as the whole screen, in the app theme. */
+    /** Raises [content] as the whole screen, in the app theme, with the clock held still. */
     protected fun screen(dark: Boolean = false, content: @Composable () -> Unit) {
+        compose.mainClock.autoAdvance = false
         compose.setContent { GachimuchiTheme(darkTheme = dark) { content() } }
+    }
+
+    /**
+     * Winds the frozen clock on, for the one thing that needs it: a surface that ANIMATES
+     * itself into place (a bottom sheet slides up from off screen) has no bounds worth
+     * asserting on until it has arrived.
+     */
+    protected fun settle(millis: Long = 1_000) {
+        compose.mainClock.advanceTimeBy(millis)
     }
 }

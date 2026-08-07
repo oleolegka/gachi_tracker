@@ -217,6 +217,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("Single entry").assertDoesNotExist()
 
         compose.onNodeWithText("Add").performClick()
+        settle()
         compose.onNodeWithText("Workout").assertIsDisplayed()
         compose.onNodeWithText("Single entry").assertIsDisplayed()
 
@@ -230,6 +231,7 @@ class DayCardListTest : ScreenTest() {
         day(date = yesterday)
 
         compose.onNodeWithText("Add").performClick()
+        settle()
         compose.onNodeWithText("Single entry").performClick()
 
         assertEquals("the entry belongs to the day on screen, not to today", yesterday, loggedSingle)

@@ -1,0 +1,175 @@
+package xyz.oleolegka.gachimuchi.ui.screens
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.ProgramGroup
+import xyz.oleolegka.gachimuchi.domain.TimerSettings
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.formatClock
+import xyz.oleolegka.gachimuchi.domain.totalSec
+import xyz.oleolegka.gachimuchi.domain.workStepCount
+import xyz.oleolegka.gachimuchi.ui.ScreenTest
+import xyz.oleolegka.gachimuchi.ui.components.TimerActions
+import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
+
+/**
+ * The timer tab, at rest: what it says when the timer is off, when there is nothing saved,
+ * and that the buttons are wired to the callbacks they claim.
+ *
+ * A live run is NOT exercised here. The countdown is driven by the process-wide controller
+ * and by real time, and it is already tested where it lives (`timer/TimerControllerTest.kt`,
+ * `timer/FloorControllerTest.kt`); a Compose test that advanced a fake clock through it
+ * would be re-testing the conductor through a peephole.
+ */
+class TimerScreenTest : ScreenTest() {
+
+    private var enabled = 0
+    private var disabled = 0
+    private var ran: WorkoutProgram? = null
+    private var edited: WorkoutProgram? = null
+    private var editRequested = 0
+    private var deleted: Long? = null
+
+    private val actions = TimerActions(
+        enable = { enabled++ },
+        pause = {},
+        resume = {},
+        skip = {},
+        previous = {},
+        nudge = {},
+        stop = {},
+    )
+
+    private val repeaters = WorkoutProgram(
+        id = 1,
+        name = "Hangboard repeaters 7:3",
+        groups = listOf(
+            ProgramGroup(
+                name = "Repeaters",
+                blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = 6)),
+                repeats = 4,
+                restBetweenRepeatsSec = 180,
+            )
+        ),
+        exerciseId = 1,
+    )
+
+    private fun timer(on: Boolean, programs: List<WorkoutProgram> = emptyList()) {
+        val state = TimerUiState(
+            enabled = on,
+            run = null,
+            settings = TimerSettings(),
+            speechAvailable = false,
+            restSec = 120,
+            restSource = "the default",
+        )
+        screen {
+            TimerScreen(
+                state = state,
+                actions = actions,
+                programs = programs,
+                exerciseNames = mapOf(1L to "Hangs 20 mm"),
+                onRunProgram = { ran = it },
+                onEditProgram = {
+                    editRequested++
+                    edited = it
+                },
+                onDeleteProgram = { deleted = it },
+                onImportPrograms = {},
+                onSettings = {},
+                onEnable = { enabled++ },
+                onDisable = { disabled++ },
+            )
+        }
+    }
+
+    @Test
+    fun `a timer that is off explains itself and offers the one button that matters`() {
+        timer(on = false)
+
+        compose.onNodeWithText("The timer is off").assertIsDisplayed()
+        compose.onNodeWithText("Turn on the timer").performClick()
+        assertEquals(1, enabled)
+    }
+
+    @Test
+    fun `an empty program list says what a program is instead of looking like a failed load`() {
+        timer(on = true)
+
+        compose.onNodeWithText("No programs yet").assertIsDisplayed()
+        compose.onNodeWithText("New program").assertIsDisplayed()
+        compose.onNodeWithText("Import from a file").assertIsDisplayed()
+        // there is nothing to export, and the button says so rather than doing nothing
+        compose.onNodeWithText("Export all").assertIsNotEnabled()
+    }
+
+    @Test
+    fun `the screen's own three sections are all present`() {
+        timer(on = true, programs = listOf(repeaters))
+
+        compose.onNodeWithText("Programs").assertIsDisplayed()
+        compose.onNodeWithText("The timer is off").assertDoesNotExist()
+        // the settings are the last thing on the list, deliberately: they are read once and
+        // then never again
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Timer settings"))
+        compose.onNodeWithText("Timer settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a saved program is drawn with what it does and what it will be logged as`() {
+        timer(on = true, programs = listOf(repeaters))
+
+        compose.onNodeWithText("Hangboard repeaters 7:3").assertIsDisplayed()
+        // the arithmetic belongs to domain/Program.kt and is tested there; what is checked
+        // here is that the card prints THOSE numbers, in that order, with the link to a
+        // catalog exercise beside them - the link is what decides whether finishing the
+        // program offers to write the sets down
+        assertEquals(24, repeaters.workStepCount())
+        val line = "${repeaters.workStepCount()} efforts   " +
+            "${formatClock(repeaters.totalSec())} total   logs as Hangs 20 mm"
+        compose.onNodeWithText(line).assertIsDisplayed()
+        compose.onNodeWithText("Run").assertIsEnabled()
+        compose.onNodeWithText("Export all").assertIsEnabled()
+    }
+
+    @Test
+    fun `the buttons on a program card each call their own action`() {
+        timer(on = true, programs = listOf(repeaters))
+
+        compose.onNodeWithText("Run").performClick()
+        assertEquals(repeaters, ran)
+
+        compose.onNodeWithText("Delete").performClick()
+        assertEquals(1L, deleted)
+
+        compose.onNodeWithText("Edit").performClick()
+        assertEquals(repeaters, edited)
+    }
+
+    @Test
+    fun `New program asks the editor for a program that does not exist yet`() {
+        timer(on = true, programs = listOf(repeaters))
+
+        compose.onNodeWithText("New program").performClick()
+
+        assertEquals(1, editRequested)
+        assertNull("null is what the editor is told to open blank", edited)
+    }
+
+    @Test
+    fun `a program cannot be run while the timer is switched off`() {
+        timer(on = false, programs = listOf(repeaters))
+
+        compose.onNodeWithText("Run").assertIsNotEnabled()
+    }
+}
