@@ -104,16 +104,19 @@ fun strengthSetOf(
     weightKg: Double? = null,
     ownWeight: Boolean = false,
     addedKg: Double? = null,
+    /** Ramp-up rather than working weight — see [StrengthSet.warmup]. */
+    warmup: Boolean = false,
 ): StrengthSet = if (ownWeight) {
     StrengthSet(
         exercise = exercise.name, reps = reps, ownWeight = true,
         addedKg = addedKg?.takeIf { it > 0 }, exerciseId = exercise.id,
-        exerciseUid = exercise.uid, opDate = opDate,
+        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup,
     )
 } else {
     StrengthSet(
         exercise = exercise.name, reps = reps, weightKg = weightKg?.takeIf { it > 0 },
         exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
+        warmup = warmup,
     )
 }
 
@@ -133,6 +136,8 @@ fun holdSetOf(
      * finished interval run can, because the program states it.
      */
     restAfterSec: Double? = null,
+    /** Ramp-up rather than a working hang — see [StrengthSet.warmup]. */
+    warmup: Boolean = false,
 ): HoldSet = HoldSet(
     activity = exercise.name,
     // zero is "not filled in", not a set of zero reps: the validator would reject it and
@@ -147,6 +152,7 @@ fun holdSetOf(
     edgeMm = exercise.edge,
     addedKg = addedKg?.takeIf { it > 0 },
     ownWeight = true,
+    warmup = warmup,
     exerciseId = exercise.id,
     exerciseUid = exercise.uid,
     restAfterSec = restAfterSec?.takeIf { it > 0 },
@@ -303,7 +309,9 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
 
     return when (val form = all[index].form) {
         is StrengthSet ->
-            evaluateStrengthRecord(priorOf { it as? StrengthSet }, form.weightKg, form.reps)
+            evaluateStrengthRecord(
+                priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup,
+            )
 
         is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
 

@@ -181,6 +181,23 @@ data class StrengthSet(
     @SerialName("weight_kg") val weightKg: Double? = null,
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /**
+     * Whether this was a WARM-UP set rather than a working one.
+     *
+     * ── What it changes, and what it deliberately does not ──────────────────────
+     * A warm-up is excluded from VOLUME and from RECORDS, and from nothing else. The empty
+     * bar is not competing with the working set for a personal best, and counting it into
+     * the tonnage inflates a week of training with weight that was never the point.
+     *
+     * It stays in the day's feed and it stays in the count of ACTIVE DAYS (see
+     * [xyz.oleolegka.gachimuchi.domain.activeDays]). Warming up IS training — a day spent
+     * ramping up and then failing the working weight is not a day off, and a streak that
+     * breaks over it would be lying about what happened.
+     *
+     * Defaulted to false, so every entry written before this field existed reads as a
+     * working set — which is what it was, since there was no way to say otherwise.
+     */
+    @SerialName("warmup") val warmup: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
@@ -232,6 +249,8 @@ data class HoldSet(
     @SerialName("edge_mm") val edgeMm: Double? = null,
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
+    @SerialName("warmup") val warmup: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,

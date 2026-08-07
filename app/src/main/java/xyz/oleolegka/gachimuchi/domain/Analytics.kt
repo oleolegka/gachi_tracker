@@ -172,6 +172,26 @@ private fun formsOf(
     }
 }
 
+/**
+ * The same entries with the WARM-UPS taken out — what volume and the progress axes are
+ * computed over.
+ *
+ * Only the two forms that can carry the flag are affected; everything else comes through
+ * whole. A day made of nothing but warm-ups therefore produces NO point rather than a zero,
+ * which is the honest shape: there was no working volume that day, and a zero bar would
+ * claim there was a session that achieved nothing.
+ *
+ * The day still counts as active and still appears in the feed — that separation is the
+ * whole point of the flag, and it is stated on [StrengthSet.warmup].
+ */
+private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.filter { ev ->
+    when (val form = ev.form) {
+        is StrengthSet -> !form.warmup
+        is HoldSet -> !form.warmup
+        else -> true
+    }
+}
+
 /** Groups by day, ascending, applying [reduce] to each day's entries; empty days are dropped. */
 private fun byDay(
     events: List<ActivityEvent>,
@@ -194,13 +214,18 @@ private fun byDay(
  *   that rewards running slower for longer;
  * - duration: the total time of the day (which is also the only thing there is to plot);
  * - body weight: the last weigh-in of the day.
+ *
+ * WARM-UPS ARE LEFT OUT, exactly as they are from the records. This is a progress axis and
+ * it is computed with the record's own formula precisely so that the line and the record
+ * badge beside it can never disagree (that promise is the reason Epley appears here at all);
+ * a warm-up that counted towards one and not the other would break it.
  */
 fun trendSeries(
     activities: List<ActivityEvent>,
     exercise: ExerciseLink,
     form: ExerciseForm,
 ): FormSeries? {
-    val mine = formsOf(activities, exercise, form)
+    val mine = working(formsOf(activities, exercise, form))
     return when (form) {
         ExerciseForm.STRENGTH -> FormSeries(
             SeriesSpec("Estimated 1RM", ValueFormat.KILOGRAMS, Aggregation.BEST),
@@ -270,13 +295,17 @@ fun trendSeries(
  * - check-ins: how many were made that day — this is the frequency, and it is the only
  *   statistic a tick has;
  * - duration and body weight: null (see the file header).
+ *
+ * WARM-UPS DO NOT COUNT. Tonnage is what the working sets moved; ramping up to them is not
+ * a smaller version of the same achievement, and letting the empty bar into the bar chart
+ * would make a cautious session look like a bigger one.
  */
 fun volumeSeries(
     activities: List<ActivityEvent>,
     exercise: ExerciseLink,
     form: ExerciseForm,
 ): FormSeries? {
-    val mine = formsOf(activities, exercise, form)
+    val mine = working(formsOf(activities, exercise, form))
     return when (form) {
         ExerciseForm.STRENGTH -> {
             val sets = mine.mapNotNull { it.form as? StrengthSet }
@@ -350,7 +379,7 @@ fun recordsOf(
 fun heaviestSet(activities: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
     val weighted = activities.mapNotNull { ev ->
         (ev.form as? StrengthSet)
-            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null }
+            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null && !it.warmup }
             ?.let { it to ev.opDate }
     }
     if (weighted.isEmpty()) return null

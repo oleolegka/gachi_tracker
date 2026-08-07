@@ -20,6 +20,11 @@ import kotlin.math.roundToInt
  *   axis ([HoldSet.holdSec]) is kept as a fallback for unweighted holds (a plank),
  *   where the weight never changes.
  *
+ * WARM-UPS TAKE NO PART IN ANY OF IT. A set marked [StrengthSet.warmup] is neither judged
+ * as a record nor allowed to be the thing a record is measured against, on both sides of
+ * every comparison here. The empty bar must not hold the personal best, and it must not
+ * become the baseline that silences the first real set either.
+ *
  * KNOWN SIMPLIFICATIONS (no whitewashing):
  * - strength records are computed ONLY for sets with an absolute weight. Body-weight
  *   and body-weight-plus-added sets take no part in the strength comparison — max reps
@@ -59,10 +64,21 @@ data class RecordHit(
  * sets of the same exercise (taken as of before the write). The 1RM axis wins — one
  * note per set. Returns null if no axis was broken or if there are no weighted sets
  * among the previous ones.
+ *
+ * [warmup] describes the NEW set and defaults to false. It is a separate parameter rather
+ * than a whole [StrengthSet] because the set being judged has never been passed as one here
+ * — the caller holds a weight and a rep count typed into a card, and may be judging a set
+ * that has not been written yet.
  */
-fun evaluateStrengthRecord(priorSets: List<StrengthSet>, weight: Double?, reps: Int?): RecordHit? {
+fun evaluateStrengthRecord(
+    priorSets: List<StrengthSet>,
+    weight: Double?,
+    reps: Int?,
+    warmup: Boolean = false,
+): RecordHit? {
     if (weight == null || reps == null) return null
-    val weighted = priorSets.filter { it.weightKg != null }
+    if (warmup) return null
+    val weighted = priorSets.filter { !it.warmup && it.weightKg != null }
     if (weighted.isEmpty()) return null // the first weighted set is a baseline, stay quiet
 
     val new1rm = est1rm(weight, reps)
@@ -92,8 +108,10 @@ fun evaluateStrengthRecord(priorSets: List<StrengthSet>, weight: Double?, reps: 
  * weights honest). Added weight wins; the seconds axis is for unweighted holds.
  */
 fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
-    val priorWeights = priorHolds.mapNotNull { it.addedKg }
-    val priorSeconds = priorHolds.mapNotNull { it.holdSec }
+    if (hold.warmup) return null
+    val working = priorHolds.filter { !it.warmup }
+    val priorWeights = working.mapNotNull { it.addedKg }
+    val priorSeconds = working.mapNotNull { it.holdSec }
 
     val weight = hold.addedKg
     if (weight != null && priorWeights.isNotEmpty() && weight > priorWeights.max()) {
@@ -131,7 +149,7 @@ data class ExerciseRecord(
 fun strengthRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
     val weighted = sets.mapNotNull { ev ->
         (ev.form as? StrengthSet)
-            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null }
+            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null && !it.warmup }
             ?.let { it to ev.opDate }
     }
     if (weighted.isEmpty()) return null
@@ -150,7 +168,7 @@ fun strengthRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseR
  */
 fun holdRecord(sets: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
     val mine = sets.mapNotNull { ev ->
-        (ev.form as? HoldSet)?.takeIf { it.exerciseLink()?.matches(exercise) == true }
+        (ev.form as? HoldSet)?.takeIf { it.exerciseLink()?.matches(exercise) == true && !it.warmup }
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return null
