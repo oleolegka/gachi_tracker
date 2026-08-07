@@ -236,6 +236,21 @@ class MainViewModel(
         viewModelScope.launch { then(repo.startWorkout(day.toString(), slotId)) }
     }
 
+    /**
+     * Puts an exercise into a workout at a chosen rest — and, called again for one already
+     * there, changes that rest.
+     *
+     * ONE METHOD FOR BOTH, because the journal has one event for both: adding an exercise
+     * twice does not duplicate it, the last rest wins, and the order it was added in is kept
+     * (see `buildWorkout`). The repository also writes the rest onto the catalog row, so the
+     * choice made here is what the NEXT workout will be offered — the two writes are two
+     * different facts and neither can be derived from the other; see
+     * [ActivityRepository.addExerciseToWorkout].
+     */
+    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
+        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
+    }
+
     // --- celebration -------------------------------------------------------------------
     //
     // The ViewModel only says WHAT happened; whether anything is shown, and which picture,
@@ -277,6 +292,11 @@ class MainViewModel(
      * Creates a catalog exercise and immediately points the entry card at it. For holds,
      * edge and protocol are part of the identity (§12-A) and are stored on the exercise
      * rather than asked for on every set.
+     *
+     * [then] receives the new row's id. It exists because creating an exercise mid-workout is
+     * never the last step — the workout then asks what rest it should get, and that question
+     * cannot be put until the row it is about exists. A caller that only needs the exercise to
+     * become the active one leaves it out and reads [activeExerciseId] as before.
      */
     fun createExercise(
         name: String,
@@ -284,9 +304,12 @@ class MainViewModel(
         edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
+        then: ((Long) -> Unit)? = null,
     ) {
         viewModelScope.launch {
-            _activeExerciseId.value = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            val id = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            _activeExerciseId.value = id
+            then?.invoke(id)
         }
     }
 

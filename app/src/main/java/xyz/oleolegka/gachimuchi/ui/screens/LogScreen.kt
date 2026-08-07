@@ -100,12 +100,16 @@ import java.time.LocalDate
  * payload), and an append-only journal offers no way to correct it afterwards. The caller
  * resolves the day through `loggingDay` and hands it here; see ui/GachiApp.kt.
  *
- * ── What is still a session, and the seam that leaves ───────────────────────────
- * The tape below is everything logged on [day] (domain/Session.kt), NOT the contents of the
- * workout being logged into. On a day with two workouts it therefore shows both. That is a
- * known intermediate state: this screen is due to be rebuilt around per-exercise cards with
- * their own rest countdowns (§13.2), and narrowing the tape is part of that change rather
- * than a patch to make ahead of it.
+ * ── What this screen is FOR now: an entry on its own ────────────────────────────
+ * Recording INSIDE a workout is [WorkoutLogScreen] — a card per exercise, each with its own
+ * rest counting under it, which is what §13.2 asked for and what the single "active exercise"
+ * below could never do. This screen keeps the other case, the one that has no workout at all:
+ * the stretching in front of the television, reached by "Add - single entry" on a day.
+ *
+ * The tape below is everything logged on [day] (domain/Session.kt), which for a single entry
+ * is the right scope — there is no workout to narrow it to. Sets written from here are
+ * DELIBERATELY not attached to whatever workout happens to be open; see the call site in
+ * ui/GachiApp.kt.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -408,6 +412,20 @@ private fun contextLine(exercise: ExerciseRef): String = buildString {
     }
 }
 
+/*
+ * ── The six entry forms below are shared, and that is why they are `internal` ────
+ * One form per activity shape (§3), each one a set of fields plus the primary button, each
+ * prefilled from the journal. WorkoutLogScreen raises the same six inside its quick-entry
+ * sheet, and it has to be the SAME six: which fields an exercise asks for, what counts as a
+ * repeat, and which values a set is built with are decisions that must not be able to differ
+ * between two screens both called "record a set". A second copy would drift on the first day
+ * one of them gained a field.
+ *
+ * They stay in this file rather than moving to a component of their own because this is
+ * where they are read in context, and moving them is a diff that touches every one of them
+ * while proving nothing.
+ */
+
 /**
  * The primary button. It is the biggest target on the screen and says what will happen:
  * "Repeat set" while the card still holds the previous values, "Add set" once something
@@ -428,7 +446,7 @@ private fun SubmitButton(repeat: Boolean, enabled: Boolean, label: String? = nul
 }
 
 @Composable
-private fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastStrengthSet(state.events, exercise.link) }
     val prefillWeight = if (last?.ownWeight == true) last.addedKg else last?.weightKg
 
@@ -475,7 +493,7 @@ private fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String,
  * only variables of a set are the added weight and the number of reps.
  */
 @Composable
-private fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
@@ -506,7 +524,7 @@ private fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onA
 }
 
 @Composable
-private fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastCardio(state.events, exercise.link) }
     var km by remember(exercise.id, last) {
         mutableStateOf(last?.distanceM?.let { formatNumber(it / 1000) } ?: "")
@@ -547,7 +565,7 @@ private fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, o
 }
 
 @Composable
-private fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastDuration(state.events, exercise.link) }
     var minutes by remember(exercise.id, last) {
         mutableStateOf(last?.durationSec?.let { formatNumber(it / 60.0) } ?: "")
@@ -566,7 +584,7 @@ private fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String,
 }
 
 @Composable
-private fun TickEntry(exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun TickEntry(exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val colors = LocalGachiColors.current
     Text(
         "No metrics for this one — the statistic is how often it happens.",
@@ -580,7 +598,7 @@ private fun TickEntry(exercise: ExerciseRef, opDate: String, onAddSet: (Activity
 
 /** Body weight is a plain series and carries no exercise_id — the catalog row is only the way in. */
 @Composable
-private fun BodyweightEntry(state: UiState, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun BodyweightEntry(state: UiState, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events) { lastBodyweight(state.events) }
     var kg by remember(last) { mutableStateOf(last?.weightKg?.let(::formatNumber) ?: "") }
     val value = parseNumber(kg)?.takeIf { it > 0 }

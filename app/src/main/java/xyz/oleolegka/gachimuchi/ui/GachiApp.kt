@@ -48,6 +48,8 @@ import xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen
 import xyz.oleolegka.gachimuchi.ui.screens.SettingsScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TimerScreen
 import xyz.oleolegka.gachimuchi.ui.screens.TodayScreen
+import xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogActions
+import xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.WorkoutScreen
 import java.time.LocalDate
 
@@ -102,6 +104,10 @@ fun GachiApp(viewModel: MainViewModel) {
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val runOutcome by viewModel.runOutcome.collectAsStateWithLifecycle()
     val logReceipt by viewModel.logReceipt.collectAsStateWithLifecycle()
+    // the parallel rests, for the bars under the cards inside a workout. The list changes
+    // when a rest starts or is cleared, not on every tick — the countdown is drawn from the
+    // clock, so nothing here recomposes four times a second (see rememberTickingNow)
+    val restFloors by viewModel.restFloors.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     /*
@@ -305,6 +311,7 @@ fun GachiApp(viewModel: MainViewModel) {
     val editorTarget = editing
     val detailId = detailExerciseId
     val loggingOn = loggingDate
+    val loggingWorkout = loggingWorkoutId
     val viewingWorkout = viewingWorkoutId
 
     when {
@@ -326,18 +333,52 @@ fun GachiApp(viewModel: MainViewModel) {
             onClose = { detailExerciseId = null },
         )
 
+        /*
+         * TWO WAYS TO RECORD, and which one appears is decided by whether there is a workout
+         * behind it.
+         *
+         * Inside a WORKOUT it is [WorkoutLogScreen]: a card per exercise, each with its own
+         * rest counting under it, which is the shape §13.2 settled on and the reason the whole
+         * model was rebuilt. On its OWN — the stretching in front of the television — it is
+         * still [LogScreen], because there is no workout there to draw the cards of and the
+         * old screen answers that case exactly.
+         */
+        loggingOn != null && loggingWorkout != null -> {
+            val workoutBeingLogged = loggingWorkout
+            /*
+             * Built once per workout rather than per recomposition: the screen holds a rest
+             * bar that redraws four times a second, and fresh lambdas on every frame would
+             * make every card in it recompose along with the bar.
+             */
+            val workoutActions = remember(workoutBeingLogged) {
+                WorkoutLogActions(
+                    addExercise = { exerciseId, restSec ->
+                        viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec)
+                    },
+                    createExercise = { name, form, edge, work, rest, then ->
+                        viewModel.createExercise(name, form, edge, work, rest, then)
+                    },
+                    addSet = { form -> viewModel.addSet(form) },
+                    undoSet = viewModel::undoSet,
+                    close = {
+                        loggingDate = null
+                        loggingWorkoutId = null
+                    },
+                )
+            }
+            WorkoutLogScreen(
+                state = state,
+                workoutId = workoutBeingLogged,
+                settings = timerSettings,
+                floors = restFloors,
+                actions = workoutActions,
+            )
+        }
+
         loggingOn != null -> {
             val day = remember(loggingOn) {
                 runCatching { LocalDate.parse(loggingOn) }.getOrDefault(today)
             }
-            /*
-             * INTERMEDIATE STATE, said out loud. This screen is the old one, wired to the
-             * new frame: it is told which day it writes under (which is what fixes the
-             * backdating bug) but it still shows the whole DAY's tape rather than the
-             * workout's, so on a day with two workouts it shows both. Rebuilding it around
-             * per-exercise cards with parallel rest bars is the next step (§13.2) and is not
-             * something to half-do here.
-             */
             LogScreen(
                 state = state,
                 day = day,
@@ -347,10 +388,12 @@ fun GachiApp(viewModel: MainViewModel) {
                 onEnableTimer = enableTimer,
                 onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
                 onSelectExercise = viewModel::selectExercise,
-                onCreateExercise = viewModel::createExercise,
+                onCreateExercise = { name, form, edge, work, rest ->
+                    viewModel.createExercise(name, form, edge, work, rest)
+                },
                 // an entry logged with no workout behind it must not be swallowed by the
                 // workout that happens to be open — see ActivityRepository.record
-                onAddSet = { form -> viewModel.addSet(form, attachToWorkout = loggingWorkoutId != null) },
+                onAddSet = { form -> viewModel.addSet(form, attachToWorkout = false) },
                 onUndoSet = viewModel::undoSet,
                 onClose = {
                     loggingDate = null
