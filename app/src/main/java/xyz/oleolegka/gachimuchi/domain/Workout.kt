@@ -71,8 +71,19 @@ data class Workout(
     /** Honest write time of the start event, which is not the same as [opDate]. */
     val ts: String,
     val opDate: String,
-    /** The planned session it was started from, when it was started from one. */
-    val slotId: Long?,
+    /**
+     * The planned session it was started from — see [SlotLink] — or null when it was started
+     * off-plan, which is the ordinary case.
+     */
+    val slot: SlotLink?,
+    /**
+     * What this workout was called when it was started, or null when nobody named it — which
+     * is the ordinary state of a workout started off-plan, and not a defect.
+     *
+     * A SNAPSHOT and not a lookup: see [WorkoutStarted]. Screens that have nothing else to
+     * head a card with fall back to the time of day rather than to the plan's current name.
+     */
+    val name: String?,
     /** Exercises IN THE ORDER THEY WERE ADDED, including ones with no sets yet. */
     val exercises: List<WorkoutExercise>,
     /**
@@ -84,6 +95,15 @@ data class Workout(
      */
     val entriesWithoutExercise: List<ActivityEvent>,
 ) {
+    /**
+     * The plan's local row number, for the screens that still navigate the plan by one.
+     *
+     * Null for a workout started off-plan, and also for one whose start event named its plan
+     * only by identity — a journal merged in from elsewhere. Neither has a slot on this phone
+     * to open.
+     */
+    val slotId: Long? get() = slot?.id
+
     val setCount: Int = exercises.sumOf { it.sets.size } + entriesWithoutExercise.size
 
     /** Nothing has been added and nothing recorded — the state right after "start". */
@@ -140,6 +160,16 @@ fun JournalEvent.workoutExerciseAddedOrNull(): WorkoutExerciseAdded? =
 private fun workoutStarts(events: List<JournalEvent>): List<Pair<JournalEvent, WorkoutStarted?>> =
     events.filter { it.type == TYPE_WORKOUT_STARTED }
         .map { it to runCatching { payloadJson.decodeFromString<WorkoutStarted>(it.payload) }.getOrNull() }
+
+/**
+ * What a start event says about the plan it was started from, or null when it names none.
+ *
+ * The one funnel, same as [ActivityForm.exerciseLink] for exercises: the two payload fields are
+ * never read apart from each other, so no reader gets to decide for itself whether the uid or
+ * the number wins.
+ */
+fun WorkoutStarted.slotLink(): SlotLink? =
+    if (slotUid == null && slotId == null) null else SlotLink(slotUid, slotId)
 
 /** The day a row was WRITTEN on, which is not the day the training it records belongs to. */
 private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
@@ -239,7 +269,10 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         uid = startRow.uid,
         ts = startRow.ts,
         opDate = started?.opDate ?: startRow.writeDay(),
-        slotId = started?.slotId,
+        slot = started?.slotLink(),
+        // a name of nothing but spaces is nobody having named it, decided here rather than
+        // in each screen that would otherwise draw a blank heading
+        name = started?.name?.takeIf { it.isNotBlank() },
         exercises = sets.map { (key, ofExercise) ->
             WorkoutExercise(links.getValue(key), rests[key], ofExercise)
         },

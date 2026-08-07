@@ -98,7 +98,9 @@ class WorkoutScreenTest : ScreenTest() {
     @Test
     fun `the header names the plan the workout came from and counts what is in it`() {
         val journal = Journal()
-        val workout = journal.startWorkout(iso, at = "18:05", slotId = 7L)
+        // the name is the snapshot taken from the plan at the moment of starting, which is
+        // what the header reads; the plan itself is only linked
+        val workout = journal.startWorkout(iso, at = "18:05", slotId = 7L, name = "Gym")
         journal.addExercise(workout, iso, bench, restSec = 150)
         journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
 

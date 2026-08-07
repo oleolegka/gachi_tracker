@@ -23,8 +23,18 @@ class DayCardsTest {
     private fun row(type: String, payload: String, ts: String, workoutId: Long? = null) =
         JournalEvent(nextId++, ts, 1, 1, type, payload, workoutId)
 
-    private fun started(opDate: String, at: String = "09:00", slotId: Long? = null) =
-        row(TYPE_WORKOUT_STARTED, payloadJson.encodeToString(WorkoutStarted(opDate, slotId)), "${opDate}T$at:00")
+    private fun started(
+        opDate: String,
+        at: String = "09:00",
+        slotId: Long? = null,
+        slotUid: String? = null,
+        /** The name snapshot the app takes at the moment "start" is pressed. */
+        name: String? = null,
+    ) = row(
+        TYPE_WORKOUT_STARTED,
+        payloadJson.encodeToString(WorkoutStarted(opDate, slotId, slotUid, name)),
+        "${opDate}T$at:00",
+    )
 
     /** A start event WRITTEN today for a day already gone — training typed up afterwards. */
     private fun startedLate(opDate: String, writtenOn: String, at: String = "21:00", slotId: Long? = null) =
@@ -45,8 +55,11 @@ class DayCardsTest {
     private fun weighIn(opDate: String, at: String = "07:30", kg: Double = 74.2) =
         bodyweightOf(opDate, kg).let { row(it.type, it.toPayload(), "${opDate}T$at:00") }
 
-    private fun slot(id: Long, name: String, atTime: String?, day: String) =
-        Slot(id = id, name = name, atTime = atTime, repeatRule = REPEAT_NONE, anchorDate = day)
+    private fun slot(id: Long, name: String, atTime: String?, day: String, uid: String? = null) =
+        Slot(
+            id = id, name = name, atTime = atTime, repeatRule = REPEAT_NONE, anchorDate = day,
+            uid = uid,
+        )
 
     private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
     private val squat = ExerciseRef(2, "Squat", ExerciseForm.STRENGTH)
@@ -119,14 +132,83 @@ class DayCardsTest {
     @Test
     fun `a workout started from the plan replaces its card rather than sitting beside it`() {
         val slots = listOf(slot(7, "Gym", "18:00", today.toString()))
-        val start = started(today.toString(), at = "18:05", slotId = 7L)
+        val start = started(today.toString(), at = "18:05", slotId = 7L, name = "Gym")
         val day = cardsOf(listOf(start, set(bench, today.toString(), start.id, at = "18:10")), slots)
 
         val card = day.cards.single()
         assertEquals(DayCardKind.RUNNING, card.kind)
-        // and it wears the plan's name, which is the point of starting from one
+        // and it wears the name it was started under, which is the point of starting from a plan
         assertEquals("Gym", card.title)
         assertEquals(7L, card.slotId)
+    }
+
+    @Test
+    fun `renaming the plan does not rename the workouts already started from it`() {
+        val start = started(today.toString(), at = "18:05", slotId = 7L, name = "Gym")
+        val events = listOf(start, set(bench, today.toString(), start.id, at = "18:10"))
+
+        // the plan is edited afterwards, which the app allows and the journal must not follow:
+        // what the session was called on the day is a fact about that day
+        val renamed = listOf(slot(7, "Powerlifting", "18:00", today.toString()))
+
+        assertEquals("Gym", cardsOf(events, renamed).cards.single().title)
+    }
+
+    @Test
+    fun `a workout nobody named is headed by its time rather than by any plan`() {
+        // no snapshot: a workout started off-plan, and a workout whose start event predates
+        // the snapshot and arrived from a journal this phone never migrated
+        val start = started(today.toString(), at = "18:05", slotId = 7L)
+        val events = listOf(start, set(bench, today.toString(), start.id, at = "18:10"))
+        val slots = listOf(slot(7, "Gym", "07:00", today.toString()))
+
+        val card = cardsOf(events, slots).cards.last()
+        assertEquals("18:05 - 18:10", card.title)
+        // and the time is not then said twice
+        assertEquals("", card.timeLabel)
+    }
+
+    /*
+     * The two below put the plan at 07:00 and the workout at 18:05 ON PURPOSE. The
+     * time-based match (domain/Schedule.kt) closes a slot from an entry recorded near it, and
+     * with plan and workout at the same hour it would close this one too — the plan card
+     * would then be absent whether the explicit link worked or not, and the test would pass
+     * for a reason that has nothing to do with what it is about.
+     */
+
+    @Test
+    fun `a workout naming its plan by identity alone still replaces that plan's card`() {
+        // what a journal written on another phone looks like: the plan link is a uid, and the
+        // row number it used to be said with means nothing here
+        val uid = "01930000-0000-7000-8000-0000000091a7"
+        val slots = listOf(slot(7, "Gym", "07:00", today.toString(), uid = uid))
+        val start = started(today.toString(), at = "18:05", slotUid = uid, name = "Gym")
+        val day = cardsOf(listOf(start, set(bench, today.toString(), start.id, at = "18:10")), slots)
+
+        val card = day.cards.single()
+        assertEquals(DayCardKind.RUNNING, card.kind)
+        assertEquals("Gym", card.title)
+    }
+
+    @Test
+    fun `a workout naming another phone's plan does not swallow the card of this one`() {
+        // the same row number, a different identity: falling back to the number here would
+        // hide a plan that nothing has answered
+        val slots = listOf(
+            slot(7, "Gym", "07:00", today.toString(), uid = "01930000-0000-7000-8000-0000000091a7")
+        )
+        val start = started(
+            today.toString(), at = "18:05",
+            slotId = 7L, slotUid = "01930000-0000-7000-8000-00000000a7b0",
+        )
+        val day = cardsOf(listOf(start, set(bench, today.toString(), start.id, at = "18:10")), slots)
+
+        assertEquals(
+            listOf(DayCardKind.PLANNED, DayCardKind.RUNNING),
+            day.cards.map { it.kind },
+        )
+        // and the workout wears no name it has no claim to
+        assertEquals("18:05 - 18:10", day.cards.last().title)
     }
 
     @Test

@@ -88,7 +88,6 @@ fun WorkoutScreen(
             .flatMap { it.sets }
             .associate { it.eventId to it.record }
     }
-    val planned = workout.slotId?.let { id -> state.slots.firstOrNull { it.id == id } }
     val date = remember(workout.opDate) { runCatching { LocalDate.parse(workout.opDate) }.getOrNull() }
 
     Scaffold(
@@ -97,7 +96,12 @@ fun WorkoutScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(planned?.name ?: "Workout", style = MaterialTheme.typography.titleMedium)
+                        // the snapshot taken when the workout was started, never the plan's
+                        // name as it reads today -- see WorkoutStarted
+                        Text(
+                            workout.name ?: "Workout",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
                         Text(
                             listOfNotNull(date?.let { fmtWeekdayDay(it) }, summaryOf(workout))
                                 .joinToString(" - "),

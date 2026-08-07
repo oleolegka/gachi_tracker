@@ -35,6 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.isUid
+import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
@@ -1428,13 +1429,36 @@ class MigrationTest {
             )
         }
 
-        // a workout, and one set recorded inside it. Version 7 could only say so with a
-        // number, which is the link the 8 -> 9 step has to translate.
+        val slotId = v7.catalog().insertSlot(
+            SlotEntityV7(
+                name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
+                anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
+            )
+        )
+        v7.catalog().insertComposition(
+            SlotExerciseEntityV7(slotId = slotId, exerciseId = exerciseId, position = 0, restSec = 180)
+        )
+        v7.catalog().insertComposition(
+            SlotExerciseEntityV7(slotId = slotId, exerciseId = exerciseId, position = 1, restSec = null)
+        )
+
+        /*
+         * A workout started from that plan, and one set recorded inside it. Version 7 could
+         * name neither the workout nor the plan by identity, which is what the 8 -> 9 and the
+         * 10 -> 11 steps have to translate.
+         *
+         * The payload is spelled out as JSON rather than built from [WorkoutStarted]. That is
+         * the whole difference between a fixture and a phone: the class writes every key it
+         * knows about, `slot_uid` among them, so a payload built from it would carry the key
+         * with a null in it — which is a shape version 7 never wrote. The migration has to
+         * cope with the key being ABSENT, and it can only be shown to if the fixture leaves
+         * it out.
+         */
         val startId = v7.catalog().insertEvent(
             EventEntityV7(
                 ts = "2026-07-05T18:00:00",
                 type = TYPE_WORKOUT_STARTED,
-                payload = payloadJson.encodeToString(WorkoutStarted(opDate = "2026-07-05")),
+                payload = """{"op_date":"2026-07-05","slot_id":$slotId}""",
             )
         )
         val inWorkout = strengthSetOf(
@@ -1450,18 +1474,6 @@ class MigrationTest {
             )
         )
 
-        val slotId = v7.catalog().insertSlot(
-            SlotEntityV7(
-                name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
-                anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
-            )
-        )
-        v7.catalog().insertComposition(
-            SlotExerciseEntityV7(slotId = slotId, exerciseId = exerciseId, position = 0, restSec = 180)
-        )
-        v7.catalog().insertComposition(
-            SlotExerciseEntityV7(slotId = slotId, exerciseId = exerciseId, position = 1, restSec = null)
-        )
         v7.catalog().insertProgram(
             ProgramEntityV3(
                 name = "Repeaters 7:3", prepareSec = 15, position = 0,
@@ -1629,6 +1641,48 @@ class MigrationTest {
     }
 
     @Test
+    fun `an entry written before the field existed is back-filled too, key and all`() = runTest {
+        val phone = writeVersion7()
+        /*
+         * THE SHAPE THE TEST ABOVE CANNOT PRODUCE, and the one every real phone is full of.
+         *
+         * That fixture builds its payloads from StrengthSet, which is TODAY's class: written
+         * with `encodeDefaults` it stores `"exercise_uid": null` — the key present, holding
+         * nothing. A build old enough to predate the field wrote no key at all. The two are
+         * different JSON, and the difference is what the 9 -> 10 backfill got wrong once
+         * already: a null is a JsonNull, an object, not an absence, and "the key is there"
+         * read it as a link.
+         *
+         * Both shapes resolve correctly now. Only one of them was ever exercised, and it was
+         * the one no phone has — so a later change that made the backfill depend on the key
+         * being present would break every upgrade and pass every test. Hence a payload spelled
+         * out by hand, without the key.
+         */
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_STRENGTH_SET,
+            """{"exercise":"Bench press","exercise_key":"bench press","reps":5,""" +
+                """"weight_kg":80.0,"own_weight":false,"exercise_id":${phone.exerciseId},""" +
+                """"op_date":"2026-07-04"}""",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+        val exerciseUid = repo.exercise(phone.exerciseId)!!.uid
+        val events = repo.allEvents()
+
+        val migrated = formFromEventOrNull(
+            events.single { it.id == strayId }.type,
+            events.single { it.id == strayId }.payload,
+        )!!
+        assertEquals(exerciseUid, migrated.exerciseUid)
+        assertEquals(phone.exerciseId, migrated.exerciseId)
+
+        // and it is filed with the rest of that exercise's history rather than under a key of
+        // its own, which is the only symptom a missed row would ever have shown
+        val link = ExerciseLink(exerciseUid, phone.exerciseId)
+        assertEquals(5, formsOfExercise<StrengthSet>(events, link, TYPE_STRENGTH_SET).size)
+    }
+
+    @Test
     fun `the backfill keeps one exercise under one key rather than splitting its history`() =
         runTest {
             val phone = writeVersion7()
@@ -1673,14 +1727,29 @@ class MigrationTest {
         }
 
     /** Appends one more event to the version 7 file already on disk, without upgrading it. */
-    private suspend fun writeExtraEventAtVersion7(form: xyz.oleolegka.gachimuchi.domain.ActivityForm) {
+    private suspend fun writeExtraEventAtVersion7(form: xyz.oleolegka.gachimuchi.domain.ActivityForm) =
+        writeExtraRowAtVersion7(form.type, form.toPayload())
+
+    /**
+     * The same, for a payload spelled out by hand.
+     *
+     * Needed wherever the shape of the payload is the thing under test: every form class
+     * writes all the keys it knows about, so a fixture built from one can only ever produce
+     * TODAY's shape. An old phone's rows are missing the keys that did not exist yet, and that
+     * difference is not cosmetic — a key holding null and a key that is absent read the same
+     * to a careless check and differently to a correct one.
+     */
+    private suspend fun writeExtraRowAtVersion7(
+        type: String,
+        payload: String,
+        ts: String = "2026-07-04T10:00:00",
+    ): Long {
         val v7 = Room.databaseBuilder(context, SchemaV7Database::class.java, dbName).build()
         opened = v7
-        v7.catalog().insertEvent(
-            EventEntityV7(ts = "2026-07-04T10:00:00", type = form.type, payload = form.toPayload())
-        )
+        val id = v7.catalog().insertEvent(EventEntityV7(ts = ts, type = type, payload = payload))
         v7.close()
         opened = null
+        return id
     }
 
     @Test
@@ -1696,5 +1765,128 @@ class MigrationTest {
 
         // the other three sets were written outside any workout and stay outside it
         assertEquals(1, setsOutsideWorkouts(repo.allEvents(), "2026-07-05").size)
+    }
+
+    // --- version 10 -> 11: a workout names its plan by identity ------------------------------
+
+    /** The [WorkoutStarted] payload of one event, as the domain reads it back. */
+    private fun startedPayload(events: List<JournalEvent>, id: Long): WorkoutStarted =
+        payloadJson.decodeFromString(events.single { it.id == id }.payload)
+
+    @Test
+    fun `a workout started from a plan comes out naming that plan by identity`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val slotUid = repo.allSlots().single().uid
+
+        val started = startedPayload(repo.allEvents(), phone.workoutStartId)
+        assertEquals(slotUid, started.slotUid)
+        // the number is kept beside it rather than replaced, so a build older than version 11
+        // can still read this journal
+        assertEquals(phone.slotId, started.slotId)
+    }
+
+    @Test
+    fun `the backfilled plan link is the one the day's cards are decided by`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)!!
+
+        /*
+         * THE POINT OF DOING THIS AT UPGRADE TIME. The readers compare plans through SlotLink,
+         * which prefers identities whenever both sides have one. A start event left holding
+         * only a number would be compared against a slot that now has a uid, and would keep
+         * being matched by the number — right on this phone and wrong the moment either side
+         * of the comparison has travelled.
+         */
+        val slot = repo.allSlots().single()
+        assertTrue("the migrated workout lost the plan it was started from", workout.slot!!.matches(slot.link))
+        assertEquals(slot.uid, workout.slot!!.uid)
+    }
+
+    @Test
+    fun `a workout started off-plan is left naming no plan at all`() = runTest {
+        writeVersion7()
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04"}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        val started = startedPayload(repo.allEvents(), strayId)
+        assertNull(started.slotUid)
+        assertNull(started.slotId)
+        assertNull(buildWorkout(repo.allEvents(), strayId)!!.slot)
+    }
+
+    // --- version 11 -> 12: a workout keeps the name it was started under ---------------------
+
+    @Test
+    fun `a workout started from a plan comes out carrying that plan's name`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+
+        assertEquals("Gym", startedPayload(repo.allEvents(), phone.workoutStartId).name)
+    }
+
+    @Test
+    fun `the backfilled name is what the card shows, and renaming the plan no longer moves it`() =
+        runTest {
+            val phone = writeVersion7()
+
+            val repo = ActivityRepository(openCurrent())
+            val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)!!
+            assertEquals("Gym", workout.name)
+
+            /*
+             * WHY THE BACKFILL IS NOT OPTIONAL. The screens stop asking the plan what a
+             * workout is called the moment this ships, so a start event left without a
+             * snapshot is a workout that loses its name on upgrade. And with the snapshot in
+             * place, editing the plan afterwards leaves the fact alone — which is the whole
+             * reason for the field.
+             */
+            val slot = repo.allSlots().single()
+            repo.saveSlot(slot.copy(name = "Powerlifting").toDraft(), id = slot.id)
+
+            assertEquals("Powerlifting", repo.allSlots().single().name)
+            assertEquals("Gym", buildWorkout(repo.allEvents(), phone.workoutStartId)!!.name)
+        }
+
+    @Test
+    fun `a workout that named no plan is left nameless rather than given one`() = runTest {
+        writeVersion7()
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04"}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        assertNull(startedPayload(repo.allEvents(), strayId).name)
+        assertNull(buildWorkout(repo.allEvents(), strayId)!!.name)
+    }
+
+    @Test
+    fun `a workout whose plan has been deleted keeps its number and gets no identity`() = runTest {
+        val phone = writeVersion7()
+        // a plan that is gone: there is no identity to give this workout, and minting one
+        // would be a claim about a plan this database has never held
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04","slot_id":${phone.slotId + 99}}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        val started = startedPayload(repo.allEvents(), strayId)
+        assertNull(started.slotUid)
+        assertEquals(phone.slotId + 99, started.slotId)
     }
 }

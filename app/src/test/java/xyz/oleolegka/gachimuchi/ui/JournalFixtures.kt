@@ -37,10 +37,21 @@ class Journal {
         return id
     }
 
-    /** Opens a workout on [day] and returns its id, which is the id of the start event. */
-    fun startWorkout(day: String, at: String = "09:00", slotId: Long? = null): Long = add(
+    /**
+     * Opens a workout on [day] and returns its id, which is the id of the start event.
+     *
+     * [name] is the snapshot the app takes when "start" is pressed — copied off the plan when
+     * the workout is started from one. The screens read it and never ask the plan, so a
+     * fixture that leaves it out is a workout nobody named, whatever [slotId] says.
+     */
+    fun startWorkout(
+        day: String,
+        at: String = "09:00",
+        slotId: Long? = null,
+        name: String? = null,
+    ): Long = add(
         TYPE_WORKOUT_STARTED,
-        payloadJson.encodeToString(WorkoutStarted(day, slotId)),
+        payloadJson.encodeToString(WorkoutStarted(day, slotId, name = name)),
         "${day}T$at:00",
     )
 

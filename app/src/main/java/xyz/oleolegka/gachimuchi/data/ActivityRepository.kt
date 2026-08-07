@@ -118,14 +118,35 @@ class ActivityRepository(private val db: AppDatabase) {
      * [WorkoutStarted].
      *
      * [slotId] records which planned session this was started from, when the user picked one.
+     * The plan's identity is written beside its number, and the readers believe the identity —
+     * see [WorkoutStarted]. A number naming a slot this database does not hold writes no uid,
+     * which is the honest answer rather than an invented one.
+     *
+     * [name] is what to call this workout, and it is written into the event as a SNAPSHOT. A
+     * caller that passes none and names a plan gets the plan's name as it reads RIGHT NOW —
+     * copied once, here, so that editing the plan next month leaves this workout alone. A
+     * workout with neither is nameless, which is a state the screens are built for.
      */
-    suspend fun startWorkout(opDate: String = today(), slotId: Long? = null): Long =
-        db.events().insert(
+    suspend fun startWorkout(
+        opDate: String = today(),
+        slotId: Long? = null,
+        name: String? = null,
+    ): Long {
+        val slot = slotId?.let { db.slots().byId(it) }
+        return db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_WORKOUT_STARTED,
-                payload = payloadJson.encodeToString(WorkoutStarted(opDate = opDate, slotId = slotId)),
+                payload = payloadJson.encodeToString(
+                    WorkoutStarted(
+                        opDate = opDate,
+                        slotId = slotId,
+                        slotUid = slot?.uid,
+                        name = (name ?: slot?.name)?.trim()?.takeIf { it.isNotEmpty() },
+                    ),
+                ),
             )
         )
+    }
 
     /**
      * Puts an exercise into a workout with a chosen rest, before any set of it exists.
@@ -351,7 +372,7 @@ fun EventEntity.toJournalEvent() = JournalEvent(
 
 fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
     id = id, name = name, atTime = atTime, repeatRule = repeatRule, anchorDate = anchorDate,
-    exercises = exercises,
+    exercises = exercises, uid = uid,
 )
 
 fun SlotExerciseEntity.toPlanned() = PlannedExercise(exerciseId = exerciseId, restSec = restSec)

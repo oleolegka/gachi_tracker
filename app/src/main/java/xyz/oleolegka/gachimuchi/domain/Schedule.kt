@@ -83,7 +83,36 @@ data class Slot(
     val repeatRule: String,
     val anchorDate: String,
     val exercises: List<PlannedExercise> = emptyList(),
-)
+    /**
+     * Identity of the plan row ([xyz.oleolegka.gachimuchi.data.db.SlotEntity.uid]), or null for
+     * a slot built by hand in a test rather than read out of the database.
+     *
+     * A workout started from this slot records it, so that "which plan was this" keeps its
+     * answer in a journal that has left the phone it was written on.
+     */
+    val uid: String? = null,
+) {
+    /** How a workout names the plan it was started from — see [SlotLink]. */
+    val link: SlotLink get() = SlotLink(uid, id)
+}
+
+/**
+ * Which planned session a workout was started from — the identity where the start event has
+ * one, and the local row number where it is old enough not to.
+ *
+ * Same shape and same rule as [ExerciseLink]: identities decide whenever both sides can speak
+ * them, and a number is consulted only when one of the two cannot. Two phones number their
+ * plans independently, so a number alone would let a merged journal claim a workout was
+ * started from somebody else's Tuesday.
+ *
+ * Null is not represented here: a workout started off-plan has no [SlotLink] at all.
+ */
+data class SlotLink(val uid: String?, val id: Long?) {
+
+    /** Whether two references name the same planned session. */
+    fun matches(other: SlotLink): Boolean =
+        if (uid != null && other.uid != null) uid == other.uid else id != null && id == other.id
+}
 
 /**
  * What is planned in one slot, for a caller that holds the plan and a slot id rather than
