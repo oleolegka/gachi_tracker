@@ -340,4 +340,38 @@ class AmendedReadersTest {
         assertTrue(workoutsOn(events, day).isEmpty())
         assertFalse(events.first().isControlEvent())
     }
+
+    // --- the op_date column (schema version 16) ---
+
+    /**
+     * The trap the column brings with it: the journal is append-only, so a correction that moves
+     * an entry to another day does NOT rewrite the column on the row it corrects. The column goes
+     * on saying the 6th while the entry belongs to the 1st, and only the amended payload knows.
+     */
+    @Test
+    fun `an entry moved by an amendment is found under its new day and not the column's`() {
+        val logged = ev(bench(80.0)).copy(opDate = day)
+        val moved = amend(logged, "op_date" to JsonPrimitive("2026-08-01"))
+        val events = listOf(logged, moved)
+
+        assertEquals(day, logged.opDate)
+        assertEquals(listOf("2026-08-01"), readActivities(events).map { it.opDate })
+        assertEquals(1, readActivities(events, dateFrom = "2026-08-01", dateTo = "2026-08-01").size)
+        assertTrue(
+            "the window the row's own column names must not find it any more",
+            readActivities(events, dateFrom = day, dateTo = day).isEmpty(),
+        )
+    }
+
+    /** A row written before the column existed is filtered exactly like one that has it. */
+    @Test
+    fun `a row with no column is read by its payload, as the whole journal used to be`() {
+        val withColumn = ev(bench(80.0)).copy(opDate = day)
+        val withoutColumn = ev(bench(70.0))
+
+        val events = listOf(withColumn, withoutColumn)
+        assertEquals(2, readActivities(events, dateFrom = day, dateTo = day).size)
+        assertTrue(readActivities(events, dateFrom = "2026-08-07").isEmpty())
+        assertTrue(readActivities(events, dateTo = "2026-08-05").isEmpty())
+    }
 }

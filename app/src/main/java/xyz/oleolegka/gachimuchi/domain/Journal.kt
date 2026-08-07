@@ -40,6 +40,23 @@ data class JournalEvent(
     val uid: String = newUid(),
     /** The workout this row was recorded during, by identity rather than by local number. */
     val workoutUid: String? = null,
+    /**
+     * The day this row states it is about, off the column rather than out of the payload — see
+     * [xyz.oleolegka.gachimuchi.data.db.EventEntity.opDate].
+     *
+     * Null for a row that is about no training day, and null for a row written before schema
+     * version 16 whose payload the migration could not read. Both mean "ask the payload", which
+     * is what [readActivities] does.
+     *
+     * NOT the last word on an amended entry: a correction may move an entry to another day, and
+     * the correction is a different row. Nothing here should be compared against a date range
+     * without first checking that nothing has amended this row.
+     */
+    val opDate: String? = null,
+    /** The instant this row was written — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.tsUtc]. */
+    val tsUtc: String? = null,
+    /** Minutes east of UTC when it was written — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.tzOffsetMin]. */
+    val tzOffsetMin: Int? = null,
 )
 
 /**
@@ -184,6 +201,23 @@ fun readActivities(
         if (row.type !in typeSet) continue
         val state = view.stateOf(row)
         if (state.deleted && !includeDeleted) continue
+        /*
+         * THE COLUMN DECIDES THE RANGE WHERE IT IS ALLOWED TO, which is the point of it being a
+         * column (see EventEntity.opDate): a row outside the window is rejected without its
+         * payload ever being parsed, and parsing every payload in the journal to find out which
+         * week a set was in is what this used to cost.
+         *
+         * Only where NOTHING HAS AMENDED THE ROW. An amendment may re-date an entry, the
+         * amendment is a separate row, and the append-only journal does not go back and rewrite
+         * the column on the original — so for a corrected entry the amended payload is the only
+         * thing that knows which day it belongs to, and it is read in full. Rows written before
+         * schema version 16 carry no column at all and take the same path, which is the one the
+         * whole journal used to take.
+         */
+        if (state.amendedAt == null && row.opDate != null) {
+            if (dateFrom != null && row.opDate < dateFrom) continue
+            if (dateTo != null && row.opDate > dateTo) continue
+        }
         val form = formFromEventOrNull(row.type, state.payload) ?: continue
         if (dateFrom != null && form.opDate < dateFrom) continue
         if (dateTo != null && form.opDate > dateTo) continue

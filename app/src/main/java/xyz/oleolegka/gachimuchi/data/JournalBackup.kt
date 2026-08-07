@@ -239,14 +239,29 @@ class JournalBackup(
         if (fresh.isNotEmpty()) {
             db.events().insertAll(
                 fresh.map { event ->
+                    val payload = elementToPayload(event.payload)
+                    /*
+                     * The file carries a local time and no zone — it is the exchange format and
+                     * it predates the columns — so a restored row is resolved in THE ZONE OF THE
+                     * DEVICE DOING THE RESTORE, exactly as the 15 -> 16 migration resolves the
+                     * rows already on the phone, and with the same caveat: a journal exported
+                     * abroad and restored at home gets the offset of home. That is a loss the
+                     * file cannot avoid until the format itself carries the offset; leaving the
+                     * columns empty instead would make every restored row unsortable against
+                     * every row this phone wrote.
+                     */
+                    val written = WriteTime.ofLocal(event.ts)
                     EventEntity(
                         ts = event.ts,
                         authorId = event.authorId,
                         type = event.type,
-                        payload = elementToPayload(event.payload),
+                        payload = payload,
                         workoutId = null,
                         uid = event.uid,
                         workoutUid = event.workoutUid,
+                        opDate = opDateOfPayload(payload),
+                        tsUtc = written?.utc,
+                        tzOffsetMin = written?.offsetMin,
                     )
                 }
             )

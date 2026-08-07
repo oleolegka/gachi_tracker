@@ -30,9 +30,11 @@ import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.formsOfExercise
 import xyz.oleolegka.gachimuchi.domain.formFromEventOrNull
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
@@ -49,6 +51,7 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
 import xyz.oleolegka.gachimuchi.domain.payloadJson
+import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
@@ -664,6 +667,34 @@ abstract class SchemaV7Database : RoomDatabase() {
  * describing version 12 and the compiler or these assertions say so.
  */
 
+/*
+ * SNAPSHOT OF THE JOURNAL FROM VERSION 9 TO VERSION 15 — the workout link said in uids, and
+ * nothing about when a row was written beyond a local clock with no zone.
+ *
+ * The version 12 and version 14 databases below used to declare the CURRENT `EventEntity` here,
+ * which the rule at the top of this file allowed because `events` had not changed since version
+ * 9. Version 16 changed it — three columns and an index — so the reuse became exactly the lie
+ * that rule exists to forbid, and this snapshot is what replaced it.
+ */
+@Entity(
+    tableName = "events",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class EventEntityV15(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: String,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    @ColumnInfo(name = "author_id") val authorId: Long = LOCAL_AUTHOR_ID,
+    val type: String,
+    val payload: String,
+    @ColumnInfo(name = "workout_id") val workoutId: Long? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
+)
+
 /** The catalog of versions 8 to 12: identity, preferences, and nothing about sides. */
 @Entity(
     tableName = "exercises",
@@ -689,7 +720,7 @@ data class ExerciseEntityV12(
 @Dao
 interface LegacyCatalogDaoV12 {
     @Insert
-    suspend fun insertEvent(event: EventEntity): Long
+    suspend fun insertEvent(event: EventEntityV15): Long
 
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV12): Long
@@ -700,7 +731,7 @@ interface LegacyCatalogDaoV12 {
 
 @Database(
     entities = [
-        EventEntity::class,
+        EventEntityV15::class,
         ExerciseEntityV12::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
@@ -750,7 +781,7 @@ data class ExerciseEntityV14(
 @Dao
 interface LegacyCatalogDaoV14 {
     @Insert
-    suspend fun insertEvent(event: EventEntity): Long
+    suspend fun insertEvent(event: EventEntityV15): Long
 
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV14): Long
@@ -758,7 +789,7 @@ interface LegacyCatalogDaoV14 {
 
 @Database(
     entities = [
-        EventEntity::class,
+        EventEntityV15::class,
         ExerciseEntityV14::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
@@ -771,6 +802,37 @@ interface LegacyCatalogDaoV14 {
 )
 abstract class SchemaV14Database : RoomDatabase() {
     abstract fun catalog(): LegacyCatalogDaoV14
+}
+
+/**
+ * Version 15: the catalog is already what it is today, and the journal still says WHEN in one
+ * local clock with no zone and hides WHICH DAY inside the payload.
+ *
+ * Only the journal needs a snapshot ([EventEntityV15]); every other table here is the current
+ * entity because the 15 -> 16 step leaves them alone, which is the rule at the top of this file
+ * doing its job rather than a shortcut.
+ */
+@Dao
+interface LegacyEventDaoV15 {
+    @Insert
+    suspend fun insert(event: EventEntityV15): Long
+}
+
+@Database(
+    entities = [
+        EventEntityV15::class,
+        xyz.oleolegka.gachimuchi.data.db.ExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 15,
+    exportSchema = false,
+)
+abstract class SchemaV15Database : RoomDatabase() {
+    abstract fun events(): LegacyEventDaoV15
 }
 
 /**
@@ -2033,7 +2095,7 @@ class MigrationTest {
             """"exercise_id":$exerciseId,"op_date":"2026-08-02",""" +
             """"activity_key":"one arm hang 20 mm"}"""
         val hangId = v12.catalog().insertEvent(
-            EventEntity(ts = "2026-08-02T10:00:00", type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET, payload = hang)
+            EventEntityV15(ts = "2026-08-02T10:00:00", type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET, payload = hang)
         )
 
         v12.close()
@@ -2178,20 +2240,20 @@ class MigrationTest {
         fun weighIn(kg: Double, day: String) = """{"weight_kg":$kg,"op_date":"$day"}"""
 
         val beforeTheScales = v12.catalog().insertEvent(
-            EventEntity(ts = "2026-06-01T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-06-01"))
+            EventEntityV15(ts = "2026-06-01T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-06-01"))
         )
         v12.catalog().insertEvent(
-            EventEntity(
+            EventEntityV15(
                 ts = "2026-07-01T08:00:00",
                 type = xyz.oleolegka.gachimuchi.domain.TYPE_BODYWEIGHT,
                 payload = weighIn(72.0, "2026-07-01"),
             )
         )
         val betweenWeighIns = v12.catalog().insertEvent(
-            EventEntity(ts = "2026-07-15T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-07-15"))
+            EventEntityV15(ts = "2026-07-15T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-07-15"))
         )
         v12.catalog().insertEvent(
-            EventEntity(
+            EventEntityV15(
                 ts = "2026-08-01T08:00:00",
                 type = xyz.oleolegka.gachimuchi.domain.TYPE_BODYWEIGHT,
                 payload = weighIn(69.0, "2026-08-01"),
@@ -2377,7 +2439,7 @@ class MigrationTest {
         val hang = """{"activity":"hangs","added_kg":10.0,"own_weight":true,""" +
             """"exercise_id":$twinId,"op_date":"2026-08-02","activity_key":"hangs"}"""
         val setOnTwinId = v14.catalog().insertEvent(
-            EventEntity(
+            EventEntityV15(
                 ts = "2026-08-02T10:00:00",
                 type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET,
                 payload = hang,
@@ -2515,5 +2577,156 @@ class MigrationTest {
 
         val again = openCurrent()
         assertEquals(3, again.exercises().all().size)
+    }
+
+    // --- version 15 -> 16: the day becomes a column and the time becomes a moment -----------
+
+    /** What a version 15 phone was left holding, so the assertions can name the rows. */
+    private data class PhoneV15(
+        val setId: Long,
+        val backdatedId: Long,
+        val cancelId: Long,
+        val brokenId: Long,
+    )
+
+    /**
+     * A version 15 journal with one of each kind of row the upgrade has to have an answer for:
+     * a set logged on the day it happened, a set typed up a fortnight late, a reversal that is
+     * about no training day at all, and a payload that will not parse.
+     */
+    private suspend fun writeVersion15(): PhoneV15 {
+        val v15 = Room.databaseBuilder(context, SchemaV15Database::class.java, dbName).build()
+        opened = v15
+
+        fun set(day: String) =
+            """{"exercise":"Bench press","reps":5,"weight_kg":80.0,""" +
+                """"op_date":"$day","exercise_key":"bench press"}"""
+
+        val setId = v15.events().insert(
+            EventEntityV15(ts = "2026-08-06T10:00:00", type = TYPE_STRENGTH_SET, payload = set("2026-08-06"))
+        )
+        // written on the 6th, about the 1st: the two facts the column has to keep apart
+        val backdatedId = v15.events().insert(
+            EventEntityV15(ts = "2026-08-06T21:30:00", type = TYPE_STRENGTH_SET, payload = set("2026-08-01"))
+        )
+        val cancelId = v15.events().insert(
+            EventEntityV15(
+                ts = "2026-08-06T22:00:00", type = TYPE_SET_CANCEL,
+                payload = """{"cancels":$setId}""",
+            )
+        )
+        val brokenId = v15.events().insert(
+            EventEntityV15(ts = "2026-08-06T23:00:00", type = TYPE_STRENGTH_SET, payload = "{not json")
+        )
+
+        v15.close()
+        opened = null
+        return PhoneV15(setId, backdatedId, cancelId, brokenId)
+    }
+
+    private suspend fun rowById(db: AppDatabase, id: Long) = db.events().byId(id)!!
+
+    @Test
+    fun `the day inside the payload becomes a column, and the day written on stays out of it`() =
+        runTest {
+            val phone = writeVersion15()
+            val db = openCurrent()
+
+            assertEquals("2026-08-06", rowById(db, phone.setId).opDate)
+            // the backfill takes the day the training belongs to, never the day it was typed up
+            assertEquals("2026-08-01", rowById(db, phone.backdatedId).opDate)
+            assertEquals("2026-08-06T21:30:00", rowById(db, phone.backdatedId).ts)
+        }
+
+    @Test
+    fun `a row that is about no training day gets no day, and a broken payload costs only itself`() =
+        runTest {
+            val phone = writeVersion15()
+            val db = openCurrent()
+
+            assertNull("a reversal belongs to no training day", rowById(db, phone.cancelId).opDate)
+            val broken = rowById(db, phone.brokenId)
+            assertNull("nothing may be invented for a payload nobody can read", broken.opDate)
+            assertEquals("the row itself must survive", "{not json", broken.payload)
+            // and its write time is still known: the timestamp is a column, not part of the mess
+            assertNotNull(broken.tsUtc)
+        }
+
+    /**
+     * The instant and the offset are filled in from the local clock and the device's zone, and
+     * the pair is REVERSIBLE: applying the offset to the instant gives back exactly the string
+     * that was stored, whatever zone this test happens to run in.
+     *
+     * That round trip is the assertion worth making. Comparing against a hand-written UTC string
+     * would only pass in the zone it was written for, and comparing against the app's own
+     * conversion would be the code agreeing with itself.
+     */
+    @Test
+    fun `the write time becomes an instant plus the offset it was written at`() = runTest {
+        val phone = writeVersion15()
+        val db = openCurrent()
+
+        val row = rowById(db, phone.setId)
+        val utc = row.tsUtc!!
+        val offset = row.tzOffsetMin!!
+
+        assertTrue("the instant must say it is one", utc.endsWith("Z"))
+        assertEquals("fixed width, or text ordering is a lie", 20, utc.length)
+
+        val backToLocal = java.time.LocalDateTime.parse(utc.dropLast(1))
+            .plusMinutes(offset.toLong())
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+        assertEquals(row.ts, backToLocal)
+    }
+
+    /** Every row comes through, and the reducers read the upgraded journal as they always did. */
+    @Test
+    fun `the journal survives, and reading it by date still finds what is in it`() = runTest {
+        writeVersion15()
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+
+        assertEquals(4, db.events().all().size)
+        val events = repo.allEvents()
+        // the cancelled set is gone from the reading, the unreadable row is skipped, and the
+        // backdated one is found under the day it belongs to rather than the day it was written
+        assertEquals(
+            listOf("2026-08-01"),
+            readActivities(events).map { it.opDate },
+        )
+        assertEquals(1, readActivities(events, dateFrom = "2026-08-01", dateTo = "2026-08-01").size)
+        assertTrue(readActivities(events, dateFrom = "2026-08-02").isEmpty())
+    }
+
+    /** A row this build writes carries all three, so nothing has to be inferred twice. */
+    @Test
+    fun `a set written after the upgrade carries its day and its instant`() = runTest {
+        writeVersion15()
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+
+        val id = repo.record(
+            strengthSetOf(
+                ExerciseRef(id = 1, name = "Bench press", form = ExerciseForm.STRENGTH),
+                opDate = "2026-08-07", reps = 5, weightKg = 80.0,
+            ),
+            attachToWorkout = false,
+        )
+
+        val row = rowById(db, id)
+        assertEquals("2026-08-07", row.opDate)
+        assertNotNull(row.tsUtc)
+        assertNotNull(row.tzOffsetMin)
+    }
+
+    @Test
+    fun `the time columns pass Room's schema check on the next open`() = runTest {
+        writeVersion15()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(4, again.events().all().size)
     }
 }
