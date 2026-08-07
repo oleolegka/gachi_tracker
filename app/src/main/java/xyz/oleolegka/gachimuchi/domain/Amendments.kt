@@ -187,17 +187,29 @@ fun journalView(events: List<JournalEvent>): JournalView {
 
     for (uid in deletionsOf.keys + amendmentsOf.keys) {
         val row = byUid[uid] ?: continue // names an event this journal does not hold: inert
-        if (isDead(uid)) {
-            states[uid] = EntryState(deleted = true, payload = row.payload, amendedAt = null)
+        val deleted = isDead(uid)
+        /*
+         * The corrections are folded EVEN FOR A DELETED ENTRY, rather than skipped as a saving.
+         * The two facts are independent: "is it there" and "what does it say". A reader asking
+         * for the history (readActivities with includeDeleted) wants the entry as it last read,
+         * not as it was first typed — and the alternative would make deleting an entry quietly
+         * roll back every correction ever made to it, which is a second thing happening on a
+         * button that promised one.
+         */
+        val live = amendmentsOf[uid].orEmpty().filter { (amendment, _) -> !isDead(amendment.uid) }
+        if (live.isEmpty()) {
+            if (deleted) states[uid] = EntryState(true, row.payload, amendedAt = null)
             continue
         }
-        val live = amendmentsOf[uid].orEmpty().filter { (amendment, _) -> !isDead(amendment.uid) }
-        if (live.isEmpty()) continue
         // ts first, then journal order, so two corrections written in the same second still
         // settle the same way on every reading
         val ordered = live.sortedWith(compareBy({ it.first.ts }, { it.first.id }))
-        val merged = mergePayload(row.payload, ordered.map { it.second }) ?: continue
-        states[uid] = EntryState(deleted = false, payload = merged, amendedAt = ordered.last().first.ts)
+        val merged = mergePayload(row.payload, ordered.map { it.second })
+        states[uid] = EntryState(
+            deleted = deleted,
+            payload = merged ?: row.payload,
+            amendedAt = if (merged == null) null else ordered.last().first.ts,
+        )
     }
     return JournalView(states)
 }

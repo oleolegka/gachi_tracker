@@ -301,10 +301,22 @@ fun openWorkout(events: List<JournalEvent>): Workout? =
  * the number only alongside it; handing back one of the two would put the choice of which
  * link to write at the call site.
  */
-fun openWorkoutRow(events: List<JournalEvent>): JournalEvent? =
-    workoutStarts(events).lastOrNull()?.first?.takeIf { !isFinished(events, it) }
+fun openWorkoutRow(events: List<JournalEvent>): JournalEvent? {
+    // folded ONCE and handed to both halves: "which workout was started last" and "was it
+    // closed" have to be answered off the same journal. A finish event is an event like any
+    // other, so deleting one re-opens the workout it closed — which is the only way back from
+    // a button pressed by mistake, and there is no separate "re-open" event for it.
+    val journal = liveEvents(events)
+    return workoutStarts(journal).lastOrNull()?.first?.takeIf { !isFinished(journal, it) }
+}
 
-/** Whether any row in [events] closes the workout started by [startRow]. */
+/**
+ * Whether any row in [events] closes the workout started by [startRow].
+ *
+ * Private, and it takes an ALREADY FOLDED journal. Handed the raw list it would count a finish
+ * event that has since been deleted, and the workout would stay shut with nothing on screen to
+ * say why — the exact class of bug domain/Amendments.kt exists to end.
+ */
 private fun isFinished(events: List<JournalEvent>, startRow: JournalEvent): Boolean =
     events.any { it.type == TYPE_WORKOUT_FINISHED && it.workoutRef()?.matches(startRow) == true }
 
