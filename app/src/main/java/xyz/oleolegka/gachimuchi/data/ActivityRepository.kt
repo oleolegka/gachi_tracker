@@ -118,14 +118,21 @@ class ActivityRepository(private val db: AppDatabase) {
      * [WorkoutStarted].
      *
      * [slotId] records which planned session this was started from, when the user picked one.
+     * The plan's identity is written beside its number, and the readers believe the identity —
+     * see [WorkoutStarted]. A number naming a slot this database does not hold writes no uid,
+     * which is the honest answer rather than an invented one.
      */
-    suspend fun startWorkout(opDate: String = today(), slotId: Long? = null): Long =
-        db.events().insert(
+    suspend fun startWorkout(opDate: String = today(), slotId: Long? = null): Long {
+        val slot = slotId?.let { db.slots().byId(it) }
+        return db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_WORKOUT_STARTED,
-                payload = payloadJson.encodeToString(WorkoutStarted(opDate = opDate, slotId = slotId)),
+                payload = payloadJson.encodeToString(
+                    WorkoutStarted(opDate = opDate, slotId = slotId, slotUid = slot?.uid),
+                ),
             )
         )
+    }
 
     /**
      * Puts an exercise into a workout with a chosen rest, before any set of it exists.
@@ -351,7 +358,7 @@ fun EventEntity.toJournalEvent() = JournalEvent(
 
 fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
     id = id, name = name, atTime = atTime, repeatRule = repeatRule, anchorDate = anchorDate,
-    exercises = exercises,
+    exercises = exercises, uid = uid,
 )
 
 fun SlotExerciseEntity.toPlanned() = PlannedExercise(exerciseId = exerciseId, restSec = restSec)

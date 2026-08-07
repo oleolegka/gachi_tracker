@@ -88,7 +88,7 @@ fun WorkoutScreen(
             .flatMap { it.sets }
             .associate { it.eventId to it.record }
     }
-    val planned = workout.slotId?.let { id -> state.slots.firstOrNull { it.id == id } }
+    val planned = workout.slot?.let { link -> state.slots.firstOrNull { link.matches(it.link) } }
     val date = remember(workout.opDate) { runCatching { LocalDate.parse(workout.opDate) }.getOrNull() }
 
     Scaffold(

@@ -377,22 +377,35 @@ data class SetCancel(
  * timers live elsewhere (timer/); this is the rule they are expected to honour, written down
  * where the date is defined rather than where it happens to be read.
  *
- * ── slot_id ─────────────────────────────────────────────────────────────────────
- * The planned session this workout was started from ([Slot.id]), when it was started from
- * one, and null when it was not. Beyond saving a name to type, it is the exact answer to
+ * ── the plan it was started from ────────────────────────────────────────────────
+ * The planned session this workout was started from, when it was started from one, and
+ * nothing at all when it was not. Beyond saving a name to type, it is the exact answer to
  * "was the plan kept" — domain/Schedule.kt currently pairs plan with fact HEURISTICALLY, by
  * clock proximity and greedily, which is right most of the time and unfixably wrong when two
  * sessions sit close together on one day. A link the user made themselves needs no guessing.
  *
+ * [slotUid] is the identity of the plan row ([xyz.oleolegka.gachimuchi.data.db.SlotEntity.uid])
+ * and [slotId] is the local row number it used to be said with. Both are written and the
+ * readers believe the uid, for the reason spelled out on [SetCancel]: two phones number their
+ * plans independently, so a workout arriving from another journal would otherwise claim
+ * whichever unrelated slot happened to hold that number here. Neither is read directly —
+ * [Workout.slot] is the one funnel that turns the pair into a [SlotLink].
+ *
+ * BOTH ARE NULLABLE. A payload written before schema version 11 has only the number, one that
+ * arrives from a journal with no numbers at all has only the uid, and a workout started
+ * off-plan has neither — which is not a defect but the ordinary case.
+ *
  * NOTE, no whitewashing: writing this field does not by itself change how the calendar
- * decides anything. domain/Schedule.kt still matches by time and does not look at it yet;
- * switching it over is a separate change with its own verification. Until then the field is
- * recorded and exposed ([Workout.slotId]) and nothing consumes it.
+ * decides anything. domain/Schedule.kt still matches by time and does not look at it;
+ * switching it over is a separate change with its own verification. What does read it is
+ * domain/DayCards.kt, which uses it to keep a plan and the workout started from it from
+ * appearing as two cards.
  */
 @Serializable
 data class WorkoutStarted(
     @SerialName("op_date") val opDate: String,
     @SerialName("slot_id") val slotId: Long? = null,
+    @SerialName("slot_uid") val slotUid: String? = null,
 ) {
     init {
         requireIsoDate(opDate)

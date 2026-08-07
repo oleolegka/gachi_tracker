@@ -112,7 +112,7 @@ data class DayCards(
  * ── When a plan gets a card and when it does not ────────────────────────────────
  * A slot is shown as startable unless something already answers it. Two things can:
  *
- *  - a workout on this day that was STARTED FROM IT (`slot_id`), which is the exact link
+ *  - a workout on this day that was STARTED FROM IT ([Workout.slot]), which is the exact link
  *    §13.7 introduced and needs no guessing;
  *  - the existing time-based match (domain/Schedule.kt), untouched, which is how a slot
  *    gets closed by sets logged without anyone pressing "start".
@@ -134,7 +134,7 @@ fun dayCards(
     val canRecord = !date.isAfter(today)
     val openUid = openWorkoutRow(events, today.toString())?.uid
     val workouts = workoutsOn(events, iso)
-    val startedFromSlot = workouts.mapNotNullTo(HashSet()) { it.slotId }
+    val startedFromSlot = workouts.mapNotNull { it.slot }
 
     /*
      * The records of the day, computed ONCE off the same reducer the logging feed uses, and
@@ -150,7 +150,7 @@ fun dayCards(
 
     for (status in slotStatuses(slots, events, date, now)) {
         if (status.state == SlotState.DONE) continue
-        if (status.slot.id in startedFromSlot) continue
+        if (startedFromSlot.any { it.matches(status.slot.link) }) continue
         rows += placedPlan(status, canRecord)
     }
 
@@ -231,7 +231,7 @@ private fun placedWorkout(
     // the name is resolved from the plan live rather than copied into the start event.
     // Stated plainly: renaming the slot renames the workouts started from it, back through
     // the history. Storing the name would fix that and would also be a payload change.
-    val planned = workout.slotId?.let { id -> slots.firstOrNull { it.id == id } }
+    val planned = workout.slot?.let { link -> slots.firstOrNull { link.matches(it.link) } }
     val range = timeRange(times)
     return Placed(
         minute = times.minOrNull()?.let { parseMinuteOfDay(it) },

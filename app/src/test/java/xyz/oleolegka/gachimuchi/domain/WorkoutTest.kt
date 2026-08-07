@@ -21,8 +21,16 @@ class WorkoutTest {
     private fun row(type: String, payload: String, ts: String, workoutId: Long? = null) =
         JournalEvent(nextId++, ts, 1, 1, type, payload, workoutId)
 
-    private fun started(opDate: String, ts: String = "${opDate}T09:00:00", slotId: Long? = null) =
-        row(TYPE_WORKOUT_STARTED, payloadJson.encodeToString(WorkoutStarted(opDate, slotId)), ts)
+    private fun started(
+        opDate: String,
+        ts: String = "${opDate}T09:00:00",
+        slotId: Long? = null,
+        slotUid: String? = null,
+    ) = row(
+        TYPE_WORKOUT_STARTED,
+        payloadJson.encodeToString(WorkoutStarted(opDate, slotId, slotUid)),
+        ts,
+    )
 
     private fun added(workoutId: Long, exerciseId: Long, restSec: Int, ts: String = "2026-08-07T09:01:00") =
         row(
@@ -109,13 +117,68 @@ class WorkoutTest {
         assertFalse(openWorkout(events, today)!!.isBackdated(today))
     }
 
+    // --- the plan a workout was started from ------------------------------------------
+
+    private val gymUid = "01930000-0000-7000-8000-0000000091a7"
+
+    private val gym = Slot(
+        id = 5, name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
+        anchorDate = "2026-08-01", uid = gymUid,
+    )
+
     @Test
     fun `the slot a workout was started from is carried through, and null when there was none`() {
         val fromPlan = started(today, ts = "${today}T08:00:00", slotId = 42L)
         val offPlan = started(today, ts = "${today}T19:00:00")
 
         assertEquals(42L, buildWorkout(listOf(fromPlan), fromPlan.id)!!.slotId)
+        assertNull(buildWorkout(listOf(offPlan), offPlan.id)!!.slot)
         assertNull(buildWorkout(listOf(offPlan), offPlan.id)!!.slotId)
+    }
+
+    @Test
+    fun `a workout finds its plan whether it names a number, an identity, or both`() {
+        // three shapes of the same link: written by this build, arrived from a journal with
+        // no numbers of its own, and written before schema version 11
+        for ((withNumber, withUid) in listOf(true to true, false to true, true to false)) {
+            val start = started(
+                today,
+                slotId = if (withNumber) gym.id else null,
+                slotUid = if (withUid) gymUid else null,
+            )
+            val workout = buildWorkout(listOf(start), start.id)!!
+
+            assertNotNull("started with number=$withNumber uid=$withUid", workout.slot)
+            assertTrue(workout.slot!!.matches(gym.link))
+        }
+    }
+
+    /**
+     * The plan-side half of the hazard [ExerciseLink] describes: two phones number their plans
+     * independently, so a workout naming somebody else's Tuesday by identity must not fall
+     * back to its number and claim this phone's.
+     */
+    @Test
+    fun `a plan identity is not overruled by a number that happens to match another plan`() {
+        val other = Slot(
+            id = gym.id, name = "Hangboard", atTime = "07:00", repeatRule = REPEAT_WEEKLY,
+            anchorDate = "2026-08-01", uid = "01930000-0000-7000-8000-00000000a7b0",
+        )
+        val start = started(today, slotId = gym.id, slotUid = gymUid)
+        val link = buildWorkout(listOf(start), start.id)!!.slot!!
+
+        assertTrue(link.matches(gym.link))
+        assertFalse(link.matches(other.link))
+    }
+
+    @Test
+    fun `a plan that has no identity of its own is still matched by number`() {
+        // a slot built by hand rather than read out of the database, which is what every
+        // fixture older than schema version 11 looks like
+        val handMade = gym.copy(uid = null)
+        val start = started(today, slotId = gym.id, slotUid = gymUid)
+
+        assertTrue(buildWorkout(listOf(start), start.id)!!.slot!!.matches(handMade.link))
     }
 
     @Test

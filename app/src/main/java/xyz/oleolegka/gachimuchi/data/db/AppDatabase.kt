@@ -35,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -614,6 +614,70 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 10 -> 11: a workout names the plan it was started from by identity as well
+         * as by number.
+         *
+         * NO SCHEMA CHANGE — the link lives in the `workout_started` payload, so this is a
+         * rewrite of stored JSON, the same shape of step as [MIGRATION_9_10] and for the same
+         * reason: the readers compare plans through [xyz.oleolegka.gachimuchi.domain.SlotLink],
+         * which prefers the identity whenever both sides have one. Leave the old start events
+         * alone and a plan started from before the upgrade would be compared by number against
+         * a slot that now speaks uids — right on this phone, and wrong the moment either side
+         * of that comparison has travelled.
+         *
+         * ── What is deliberately left alone ─────────────────────────────────────────
+         * A start event whose `slot_id` names a plan that has since been deleted gets no uid:
+         * there is no identity to give it, and minting one would be a claim about a plan this
+         * database has never held. It keeps its number and stays exactly as resolvable as it
+         * was — which is to say, not at all, since the slot is gone.
+         *
+         * A workout started off-plan has no `slot_id` and is untouched, along with every event
+         * of every other type and any payload that will not parse.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val uidOfSlot = HashMap<Long, String>()
+                db.query("SELECT `id`, `uid` FROM `slots`").use { c ->
+                    while (c.moveToNext()) uidOfSlot[c.getLong(0)] = c.getString(1)
+                }
+                if (uidOfSlot.isEmpty()) return
+
+                // the type string is spelled out rather than taken from the domain constant,
+                // on the same grounds as the column names in [MIGRATION_3_4]: a migration
+                // describes the database as it was, and must not change meaning if a constant
+                // in today's code is ever renamed
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `payload` FROM `events` WHERE `type` = 'workout_started'"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withSlotUid(c.getString(1), uidOfSlot)?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * One `workout_started` payload with `slot_uid` filled in from `slot_id`, or null when
+         * there is nothing to do — no plan named, a uid already there, a plan that is gone, or
+         * a payload that will not parse.
+         *
+         * "A uid already there" means a uid and not a KEY already there, for the reason spelled
+         * out on [withExerciseUid]: `encodeDefaults` writes `"slot_uid": null` for a build that
+         * knows the field and has nothing to put in it, and reading that as "done" would skip
+         * exactly the rows this exists for.
+         */
+        private fun withSlotUid(payload: String, uidOfSlot: Map<Long, String>): String? =
+            withResolvedUid(payload, "slot_id", "slot_uid", uidOfSlot)
+
+        /**
          * One payload with `exercise_uid` filled in from `exercise_id`, or null when there is
          * nothing to do — no exercise named, a uid already there, an unknown exercise, or a
          * payload that will not parse.
@@ -628,20 +692,36 @@ abstract class AppDatabase : RoomDatabase() {
          * for untouched, and silently: they parse, they resolve by number, and the split
          * history only shows up as records computed over half the sets.
          */
-        private fun withExerciseUid(payload: String, uidOfExercise: Map<Long, String>): String? {
+        private fun withExerciseUid(payload: String, uidOfExercise: Map<Long, String>): String? =
+            withResolvedUid(payload, "exercise_id", "exercise_uid", uidOfExercise)
+
+        /**
+         * One payload with [uidKey] filled in from the row number under [idKey], or null when
+         * there is nothing to do.
+         *
+         * Shared by the two payload backfills because they are the same operation on two pairs
+         * of keys, and the rule that is easy to get wrong — a KEY present with a null value is
+         * not a link — is one that should have exactly one implementation.
+         */
+        private fun withResolvedUid(
+            payload: String,
+            idKey: String,
+            uidKey: String,
+            uidOfRow: Map<Long, String>,
+        ): String? {
             val json = runCatching {
                 kotlinx.serialization.json.Json.parseToJsonElement(payload)
             }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
 
-            val alreadyLinked = (json["exercise_uid"] as? kotlinx.serialization.json.JsonPrimitive)
+            val alreadyLinked = (json[uidKey] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull
             if (alreadyLinked != null) return null
-            val exerciseId = (json["exercise_id"] as? kotlinx.serialization.json.JsonPrimitive)
+            val rowId = (json[idKey] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull?.toLongOrNull() ?: return null
-            val uid = uidOfExercise[exerciseId] ?: return null
+            val uid = uidOfRow[rowId] ?: return null
 
             return kotlinx.serialization.json.JsonObject(
-                json + ("exercise_uid" to kotlinx.serialization.json.JsonPrimitive(uid))
+                json + (uidKey to kotlinx.serialization.json.JsonPrimitive(uid))
             ).toString()
         }
 
@@ -710,7 +790,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
