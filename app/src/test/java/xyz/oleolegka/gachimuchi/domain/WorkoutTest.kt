@@ -26,9 +26,10 @@ class WorkoutTest {
         ts: String = "${opDate}T09:00:00",
         slotId: Long? = null,
         slotUid: String? = null,
+        name: String? = null,
     ) = row(
         TYPE_WORKOUT_STARTED,
-        payloadJson.encodeToString(WorkoutStarted(opDate, slotId, slotUid)),
+        payloadJson.encodeToString(WorkoutStarted(opDate, slotId, slotUid, name)),
         ts,
     )
 
@@ -169,6 +170,35 @@ class WorkoutTest {
 
         assertTrue(link.matches(gym.link))
         assertFalse(link.matches(other.link))
+    }
+
+    // --- the name a workout was started under -----------------------------------------
+
+    @Test
+    fun `the name is carried through from the start event, and null when nobody gave one`() {
+        val named = started(today, ts = "${today}T08:00:00", name = "Gym")
+        val nameless = started(today, ts = "${today}T19:00:00")
+
+        assertEquals("Gym", buildWorkout(listOf(named), named.id)!!.name)
+        assertNull(buildWorkout(listOf(nameless), nameless.id)!!.name)
+    }
+
+    @Test
+    fun `a name of nothing but spaces counts as no name at all`() {
+        // otherwise every screen has to remember to check, and one of them will not
+        val start = started(today, name = "   ")
+        assertNull(buildWorkout(listOf(start), start.id)!!.name)
+    }
+
+    @Test
+    fun `a workout started from a plan is named by its own snapshot and not by the plan`() {
+        // the snapshot and the plan disagree, which is what a plan renamed after the fact
+        // looks like. Nothing here consults [gym], and that is the point.
+        val start = started(today, slotId = gym.id, slotUid = gymUid, name = "Deadlift day")
+        val workout = buildWorkout(listOf(start), start.id)!!
+
+        assertEquals("Deadlift day", workout.name)
+        assertTrue(workout.slot!!.matches(gym.link))
     }
 
     @Test

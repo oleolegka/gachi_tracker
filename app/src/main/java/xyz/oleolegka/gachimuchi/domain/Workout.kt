@@ -76,6 +76,14 @@ data class Workout(
      * off-plan, which is the ordinary case.
      */
     val slot: SlotLink?,
+    /**
+     * What this workout was called when it was started, or null when nobody named it — which
+     * is the ordinary state of a workout started off-plan, and not a defect.
+     *
+     * A SNAPSHOT and not a lookup: see [WorkoutStarted]. Screens that have nothing else to
+     * head a card with fall back to the time of day rather than to the plan's current name.
+     */
+    val name: String?,
     /** Exercises IN THE ORDER THEY WERE ADDED, including ones with no sets yet. */
     val exercises: List<WorkoutExercise>,
     /**
@@ -262,6 +270,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         ts = startRow.ts,
         opDate = started?.opDate ?: startRow.writeDay(),
         slot = started?.slotLink(),
+        // a name of nothing but spaces is nobody having named it, decided here rather than
+        // in each screen that would otherwise draw a blank heading
+        name = started?.name?.takeIf { it.isNotBlank() },
         exercises = sets.map { (key, ofExercise) ->
             WorkoutExercise(links.getValue(key), rests[key], ofExercise)
         },

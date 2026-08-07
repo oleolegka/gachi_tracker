@@ -35,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -665,6 +665,83 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 11 -> 12: a workout carries the name it was started under, instead of
+         * borrowing the plan's name every time a card is drawn.
+         *
+         * NO SCHEMA CHANGE — another rewrite of the `workout_started` payload, and the same
+         * pass as [MIGRATION_10_11] over the same rows.
+         *
+         * ── Why this cannot be left to new workouts only ────────────────────────────
+         * The screens stop asking the plan what a workout is called the moment this ships. A
+         * start event without a snapshot is therefore a workout that loses its name and is
+         * shown by its time of day — every workout on the phone, all at once, on upgrade. So
+         * the snapshot is written for every start event that named a plan.
+         *
+         * ── The name written is TODAY'S name, and that is the honest best ───────────
+         * What the slot was called on the day the workout was started is not recorded
+         * anywhere; the app has been showing the slot's CURRENT name for that workout all
+         * along. Freezing that is not a claim to have recovered history — it changes nothing
+         * about what the user sees today and stops the name drifting from here on. The
+         * alternative, leaving old workouts nameless, would throw away a name that is right
+         * far more often than not.
+         *
+         * A start event whose plan has been deleted gets no name: there is nothing to copy,
+         * and it falls back to its time of day like a workout nobody named.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val nameOfSlot = HashMap<Long, String>()
+                db.query("SELECT `id`, `name` FROM `slots`").use { c ->
+                    while (c.moveToNext()) nameOfSlot[c.getLong(0)] = c.getString(1)
+                }
+                if (nameOfSlot.isEmpty()) return
+
+                // the type string is spelled out for the reason given in [MIGRATION_10_11]
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `payload` FROM `events` WHERE `type` = 'workout_started'"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withSlotName(c.getString(1), nameOfSlot)?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * One `workout_started` payload with `name` filled in from the plan it names, or null
+         * when there is nothing to do — no plan named, a name already there, a plan that is
+         * gone, or a payload that will not parse.
+         *
+         * A name already there is left alone whether it came from a plan or from the user, and
+         * a name that is present but BLANK counts as absent: a heading of three spaces is not
+         * something anybody meant to keep.
+         */
+        private fun withSlotName(payload: String, nameOfSlot: Map<Long, String>): String? {
+            val json = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(payload)
+            }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+
+            val alreadyNamed = (json["name"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull
+            if (alreadyNamed != null && alreadyNamed.isNotBlank()) return null
+            val slotId = (json["slot_id"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toLongOrNull() ?: return null
+            val name = nameOfSlot[slotId]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+
+            return kotlinx.serialization.json.JsonObject(
+                json + ("name" to kotlinx.serialization.json.JsonPrimitive(name))
+            ).toString()
+        }
+
+        /**
          * One `workout_started` payload with `slot_uid` filled in from `slot_id`, or null when
          * there is nothing to do — no plan named, a uid already there, a plan that is gone, or
          * a payload that will not parse.
@@ -791,6 +868,7 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+            MIGRATION_11_12,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

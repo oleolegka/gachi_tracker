@@ -400,12 +400,31 @@ data class SetCancel(
  * switching it over is a separate change with its own verification. What does read it is
  * domain/DayCards.kt, which uses it to keep a plan and the workout started from it from
  * appearing as two cards.
+ *
+ * ── the name is a SNAPSHOT, not a lookup ────────────────────────────────────────
+ * [name] is what this workout was called AT THE MOMENT IT WAS STARTED: copied off the plan
+ * when it was started from one, typed in when the user named it themselves, and absent when
+ * nobody named it (the card then shows the time of day, and a workout has never needed a name
+ * to exist — §13).
+ *
+ * It used to be read from the plan live, every time a card was drawn, which meant renaming a
+ * slot renamed every workout ever started from it, back through the whole history. That is
+ * the one thing this journal is not allowed to do: THE PLAN IS EDITABLE AND THE FACTS ARE
+ * NOT, and what a session was called on the day is a fact about that day. The link to the plan
+ * stays, and it is now only a link — it answers "which plan was this", never "what is this
+ * called".
+ *
+ * The cost, stated: a workout started before schema version 12 arrived here from another
+ * journal carries no snapshot, and this app will not invent one for it from the plan. It is
+ * shown by its time instead. The 11 -> 12 migration fills in the snapshot for the rows THIS
+ * phone wrote, which is every row it can honestly say anything about.
  */
 @Serializable
 data class WorkoutStarted(
     @SerialName("op_date") val opDate: String,
     @SerialName("slot_id") val slotId: Long? = null,
     @SerialName("slot_uid") val slotUid: String? = null,
+    @SerialName("name") val name: String? = null,
 ) {
     init {
         requireIsoDate(opDate)

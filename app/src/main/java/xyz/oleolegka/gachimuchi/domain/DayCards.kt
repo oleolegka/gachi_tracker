@@ -155,7 +155,7 @@ fun dayCards(
     }
 
     for (workout in workouts) {
-        rows += placedWorkout(workout, slots, recordOf, running = workout.uid == openUid)
+        rows += placedWorkout(workout, recordOf, running = workout.uid == openUid)
     }
 
     for (group in looseGroups(events, iso)) {
@@ -222,16 +222,15 @@ private fun planSubtitle(status: SlotStatus, canRecord: Boolean): String = when 
 
 private fun placedWorkout(
     workout: Workout,
-    slots: List<Slot>,
     recordOf: Map<Long, RecordHit?>,
     running: Boolean,
 ): Placed {
     val entries = workout.exercises.flatMap { it.sets } + workout.entriesWithoutExercise
     val times = clockTimes(entries.map { it.ts } + workout.ts, workout.opDate)
-    // the name is resolved from the plan live rather than copied into the start event.
-    // Stated plainly: renaming the slot renames the workouts started from it, back through
-    // the history. Storing the name would fix that and would also be a payload change.
-    val planned = workout.slot?.let { link -> slots.firstOrNull { link.matches(it.link) } }
+    // the name is the SNAPSHOT taken when the workout was started, never the plan's name as
+    // it reads today: the plan is editable and this is a fact about a day already lived. The
+    // plan is still linked, it is simply not asked what the workout is called.
+    val name = workout.name
     val range = timeRange(times)
     return Placed(
         minute = times.minOrNull()?.let { parseMinuteOfDay(it) },
@@ -242,9 +241,9 @@ private fun placedWorkout(
             key = "workout:${workout.id}",
             // a workout nobody named is shown BY ITS TIME (§13: a name must never be a
             // condition of starting one), and the label is dropped so it is not said twice
-            title = planned?.name ?: range.ifEmpty { "Workout" },
+            title = name ?: range.ifEmpty { "Workout" },
             subtitle = workoutSubtitle(workout, running),
-            timeLabel = if (planned != null) range else "",
+            timeLabel = if (name != null) range else "",
             action = if (running) DayCardAction.CONTINUE else DayCardAction.OPEN,
             recordLine = recordLine(entries.map { it.id }, recordOf),
             slotId = workout.slotId,

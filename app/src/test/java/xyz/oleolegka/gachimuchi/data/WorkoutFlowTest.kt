@@ -15,6 +15,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.buildSession
@@ -24,6 +25,7 @@ import xyz.oleolegka.gachimuchi.domain.loggingDay
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
+import xyz.oleolegka.gachimuchi.domain.toDraft
 import xyz.oleolegka.gachimuchi.domain.workoutsOn
 import java.time.LocalDate
 
@@ -205,6 +207,66 @@ class WorkoutFlowTest {
         assertFalse(ledByProtocol(stored.toRef()))
         // the protocol itself is untouched — it is still part of the exercise's identity
         assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
+    }
+
+    // --- the plan a workout was started from, and the name it was started under -----------
+
+    @Test
+    fun `starting from a plan records the plan's identity and its name as a snapshot`() = runTest {
+        val slotId = repo.createSlot("Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY, anchorDate = day)
+        val slot = repo.slot(slotId)!!
+
+        // the id first: the argument list is evaluated left to right, so reading the events
+        // before the workout is started would fold a journal that does not contain it yet
+        val workoutId = repo.startWorkout(slotId = slotId)
+        val workout = buildWorkout(repo.allEvents(), workoutId)!!
+
+        assertEquals("Gym", workout.name)
+        assertTrue("the workout lost the plan it was started from", workout.slot!!.matches(slot.link))
+        assertEquals(slot.uid, workout.slot!!.uid)
+        assertEquals(slotId, workout.slotId)
+    }
+
+    @Test
+    fun `renaming a plan afterwards leaves the workouts already started from it alone`() = runTest {
+        val slotId = repo.createSlot("Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY, anchorDate = day)
+        val workoutId = repo.startWorkout(slotId = slotId)
+
+        repo.saveSlot(repo.slot(slotId)!!.toDraft().copy(name = "Powerlifting"), id = slotId)
+
+        // the plan is editable and the facts are not: what the session was called on the day
+        // is a fact about that day
+        assertEquals("Powerlifting", repo.slot(slotId)!!.name)
+        assertEquals("Gym", buildWorkout(repo.allEvents(), workoutId)!!.name)
+    }
+
+    @Test
+    fun `a workout started off-plan names no plan and carries no name`() = runTest {
+        val workoutId = repo.startWorkout()
+        val workout = buildWorkout(repo.allEvents(), workoutId)!!
+
+        assertNull(workout.slot)
+        assertNull(workout.name)
+    }
+
+    @Test
+    fun `a name the caller passes wins over the plan's own`() = runTest {
+        val slotId = repo.createSlot("Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY, anchorDate = day)
+
+        val workoutId = repo.startWorkout(slotId = slotId, name = "Deadlift day")
+
+        assertEquals("Deadlift day", buildWorkout(repo.allEvents(), workoutId)!!.name)
+    }
+
+    @Test
+    fun `a plan number naming nothing in this database writes no identity and no name`() = runTest {
+        // the slot was deleted between the screen reading it and the button being pressed
+        val workoutId = repo.startWorkout(slotId = 404L)
+        val workout = buildWorkout(repo.allEvents(), workoutId)!!
+
+        assertNull(workout.name)
+        assertNull(workout.slot!!.uid)
+        assertEquals(404L, workout.slotId)
     }
 
     @Test

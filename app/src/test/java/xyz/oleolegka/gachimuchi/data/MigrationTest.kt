@@ -1781,6 +1781,55 @@ class MigrationTest {
         assertNull(buildWorkout(repo.allEvents(), strayId)!!.slot)
     }
 
+    // --- version 11 -> 12: a workout keeps the name it was started under ---------------------
+
+    @Test
+    fun `a workout started from a plan comes out carrying that plan's name`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+
+        assertEquals("Gym", startedPayload(repo.allEvents(), phone.workoutStartId).name)
+    }
+
+    @Test
+    fun `the backfilled name is what the card shows, and renaming the plan no longer moves it`() =
+        runTest {
+            val phone = writeVersion7()
+
+            val repo = ActivityRepository(openCurrent())
+            val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)!!
+            assertEquals("Gym", workout.name)
+
+            /*
+             * WHY THE BACKFILL IS NOT OPTIONAL. The screens stop asking the plan what a
+             * workout is called the moment this ships, so a start event left without a
+             * snapshot is a workout that loses its name on upgrade. And with the snapshot in
+             * place, editing the plan afterwards leaves the fact alone — which is the whole
+             * reason for the field.
+             */
+            val slot = repo.allSlots().single()
+            repo.saveSlot(slot.copy(name = "Powerlifting").toDraft(), id = slot.id)
+
+            assertEquals("Powerlifting", repo.allSlots().single().name)
+            assertEquals("Gym", buildWorkout(repo.allEvents(), phone.workoutStartId)!!.name)
+        }
+
+    @Test
+    fun `a workout that named no plan is left nameless rather than given one`() = runTest {
+        writeVersion7()
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04"}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        assertNull(startedPayload(repo.allEvents(), strayId).name)
+        assertNull(buildWorkout(repo.allEvents(), strayId)!!.name)
+    }
+
     @Test
     fun `a workout whose plan has been deleted keeps its number and gets no identity`() = runTest {
         val phone = writeVersion7()
