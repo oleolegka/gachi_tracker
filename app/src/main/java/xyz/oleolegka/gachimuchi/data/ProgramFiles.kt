@@ -66,6 +66,10 @@ object ProgramFiles {
         return "${stem.ifBlank { "programs" }}.json"
     }
 
+    /** A cap as a person reads it: "1000 kB" is a number to count the zeroes of, "32 MB" is not. */
+    private fun sizeOf(bytes: Int): String =
+        if (bytes >= 1_000_000) "${bytes / 1_000_000} MB" else "${bytes / 1000} kB"
+
     private fun sanitize(name: String): String = name.trim()
         .map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '-' }
         .joinToString("")
@@ -112,10 +116,7 @@ object ProgramFiles {
                 oversized = collected.size() > maxBytes
             }
             if (oversized) {
-                FileText.Failed(
-                    "That file is larger than ${maxBytes / 1000} kB, which no $what is. " +
-                        "It was not read."
-                )
+                FileText.Failed("That file is larger than ${sizeOf(maxBytes)}, which no $what is. It was not read.")
             } else {
                 FileText.Ok(collected.toString(Charsets.UTF_8.name()))
             }
