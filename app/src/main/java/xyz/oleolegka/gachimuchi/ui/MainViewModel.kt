@@ -49,6 +49,7 @@ import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
+import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
@@ -213,10 +214,20 @@ class MainViewModel(
              */
             val exerciseId = form.exerciseId
             if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
+                val exercise = repo.exercise(exerciseId)
+                /*
+                 * THE REST THAT WAS CHOSEN, and only failing that the one that was measured —
+                 * which is what [restHintSec] resolves and what [resolveRestSec] on its own
+                 * does not. The difference became visible the moment a workout could be asked
+                 * which rest an exercise gets: the card would say "rest 3:00" because that is
+                 * what was agreed to, and the bar underneath would count the median gap
+                 * between the last few sets instead. A timer disagreeing with the number
+                 * printed above it is worse than no timer, because it is believed.
+                 */
                 timer.floors.start(
                     exerciseId = exerciseId,
-                    exerciseName = repo.exercise(exerciseId)?.name ?: "Rest",
-                    orderedMs = resolveRestSec(settings, repo.allEvents(), exerciseId) * 1000L,
+                    exerciseName = exercise?.name ?: "Rest",
+                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.toRef()) * 1000L,
                 )
             }
         }
