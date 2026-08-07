@@ -25,6 +25,16 @@ import java.time.temporal.ChronoUnit
  * In those cases the corresponding series is NULL and the screen shows an empty state
  * that says why, instead of a made-up metric. That is the whole reason [FormSeries] is
  * nullable rather than "empty list".
+ *
+ * ── KILOGRAMS AND KILOGRAM-SECONDS NEVER SHARE A COLUMN ─────────────────────────
+ * A strength volume is kilograms lifted; a hold volume is [holdImpulseKgSec], kilogram-SECONDS.
+ * They are different quantities on different scales and there is no exchange rate between them.
+ * Nothing here adds one to the other, and no screen may either: a bar labelled "volume" holding
+ * both would be a number with no unit that grows fastest when the training changes shape. Every
+ * product surveyed either shows them apart or shows only one of them; none converts honestly.
+ *
+ * What compares a week of barbell work with a week of hangs is [workingSetTally] — the count of
+ * working sets, which is dimensionless and therefore the only total the two weeks can share.
  */
 
 /** One day of a daily series: the ISO day and the aggregated value. */
@@ -204,6 +214,71 @@ private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.f
 internal fun usableShare(share: Double?): Double? = share?.takeIf { it > 0.0 && it <= 1.0 }
 
 /**
+ * THE SECONDS ONE HOLD SET SPENT UNDER LOAD, or null when the set says nothing this app can
+ * put a number on.
+ *
+ * `number of hangs x the length of one hang`. THE PAUSES INSIDE THE SET DO NOT COUNT: a
+ * repeater protocol of 7:3 spends three of every ten seconds hanging off nothing, and counting
+ * them would make a set of long pauses look like work.
+ *
+ * Where the length of one hang comes from, in order:
+ * - [HoldSet.holdSec], the length this set was actually recorded at. It is the set's own
+ *   statement and it wins over anything the exercise says about itself;
+ * - [HoldSet.workSec], the work half of the protocol snapshot ([HoldSet] explains why the
+ *   snapshot is on the set). A set logged from a finished interval run carries no `hold_sec`
+ *   — the run states the protocol instead — and it is still a set that was hung.
+ *
+ * A set that names no count of hangs is read as ONE hang rather than as no set at all. That is
+ * the shape of a maximum-added-weight hang: one effort, and nothing to count.
+ */
+internal fun holdSecondsUnderTension(set: HoldSet): Double? {
+    val oneHang = set.holdSec ?: set.workSec ?: return null
+    return oneHang * (set.reps ?: 1)
+}
+
+/**
+ * THE IMPULSE OF ONE HOLD SET, in kilogram-seconds, or null when the set carries no body
+ * weight to load or no time to load it for.
+ *
+ * `(body weight + added weight) x time under tension`. This is what tonnage is for a lift:
+ * force times the amount of it. A hang has no reps to multiply by and no bar to weigh, and
+ * counting sets — what this app did before — says a five-second hang and a fifty-second hang
+ * are the same training.
+ *
+ * ── This is our own construction, and not an industry standard ──────────────────
+ * NOTHING VALIDATES IMPULSE AS A TRAINING METRIC. It is not a thing other trackers compute:
+ * a survey of what else exists found no settled volume metric for isometric work anywhere,
+ * and the closest prior art is `Load*Sec` in one product (PitchSix) and impulse used as a
+ * TEST parameter in the research literature — as a way of describing a protocol, never as a
+ * dose that has been shown to predict adaptation. What it has going for it is that it is the
+ * physically correct analogue of tonnage and that every input is already recorded. What it
+ * does not have is evidence that a bigger number is better training. Read it as "how much
+ * work was done", never as "how good the week was".
+ *
+ * ── The load is the whole body, and where that overstates ───────────────────────
+ * A hang loads all of you, so [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.bodyweightShare]
+ * is deliberately NOT consulted here — a one-arm hang still has the whole person on the end of
+ * it. The overstatement is at the other end of the form: a plank is also a [ExerciseForm.HOLD]
+ * and holds nothing like its whole body weight up, so its impulse reads high. The number is
+ * comparable with ITSELF over time, which is what a chart of one exercise is for, and it is
+ * not comparable between two different holds.
+ *
+ * Assistance is subtracted, since [HoldSet.addedKg] is signed, and the result is floored at
+ * zero for the reason [strengthLoadKg] gives: a band taking more off you than you weigh is a
+ * hang that loaded nothing, not one that loaded a negative amount which could then subtract
+ * from a week's total.
+ *
+ * Null when nobody had stepped on the scales by then — [StrengthSet.bodyweightKg] explains
+ * why that is unknown rather than zero, and such a set contributes nothing rather than
+ * dragging the day down to nothing.
+ */
+internal fun holdImpulseKgSec(set: HoldSet): Double? {
+    val seconds = holdSecondsUnderTension(set) ?: return null
+    val body = set.bodyweightKg ?: return null
+    return (body + (set.addedKg ?: 0.0)).coerceAtLeast(0.0) * seconds
+}
+
+/**
  * The kilograms one strength set actually moved, or null when the set states no weight this
  * app can put a number on.
  *
@@ -330,8 +405,13 @@ fun trendSeries(
  *   chart of a different metric that is honestly labelled. A MIXED history does use tonnage,
  *   and the sets with no computable load contribute nothing to the bar — an understatement
  *   this code does not correct, now narrowed to sets logged before anybody weighed themselves;
- * - holds: number of SETS of the day (hangs are counted, not weighed — the weight is the
- *   trend axis);
+ * - holds: the IMPULSE of the day in kilogram-seconds, `(body weight + added) x time under
+ *   tension` summed over the sets ([holdImpulseKgSec], which also states plainly that this is
+ *   our own construction rather than a metric anybody has validated). Counting sets — which is
+ *   what this was — made a five-second hang and a fifty-second hang the same training, and
+ *   time under load is the entire content of an isometric set. An exercise whose history
+ *   yields no impulse at all still falls back to the SET COUNT, the same shape of fallback the
+ *   strength branch uses for reps and for the same reason;
  * - cardio: total distance of the day, falling back to total time when nothing was
  *   measured in metres;
  * - check-ins: how many were made that day — this is the frequency, and it is the only
@@ -373,10 +453,23 @@ fun volumeSeries(
             )
         }
 
-        ExerciseForm.HOLD -> FormSeries(
-            SeriesSpec("Sets", ValueFormat.COUNT, Aggregation.SUM),
-            byDay(mine) { ofDay -> ofDay.size.toDouble() },
-        )
+        ExerciseForm.HOLD -> {
+            val holds = mine.mapNotNull { it.form as? HoldSet }
+            if (holds.any { holdImpulseKgSec(it) != null }) FormSeries(
+                // the unit is in the LABEL because [ValueFormat] has no kilogram-second member:
+                // adding one means adding a branch to four exhaustive `when`s in ui/Format.kt,
+                // which is the screen layer this change is deliberately not touching. A count
+                // prints the bare number, so nothing renders it as kilograms in the meantime —
+                // and that is the one rendering that must never happen (see below)
+                SeriesSpec("Impulse, kg·s", ValueFormat.COUNT, Aggregation.SUM),
+                byDay(mine) { ofDay ->
+                    ofDay.sumOf { ev -> (ev.form as? HoldSet)?.let { holdImpulseKgSec(it) } ?: 0.0 }
+                },
+            ) else FormSeries(
+                SeriesSpec("Sets", ValueFormat.COUNT, Aggregation.SUM),
+                byDay(mine) { ofDay -> ofDay.size.toDouble() },
+            )
+        }
 
         ExerciseForm.CARDIO -> {
             val hasDistance = mine.any { (it.form as? Cardio)?.distanceM != null }
@@ -610,6 +703,94 @@ fun activityHeatmap(
         weeks = total / 7,
         maxCount = days.maxOfOrNull { it.count } ?: 0,
         levels = levels,
+    )
+}
+
+// --- working sets ------------------------------------------------------------------------
+
+/**
+ * The two forms that are made of SETS. A run, a stretch and a weigh-in are training and are
+ * not sets, so they have nothing to contribute to a count of sets.
+ *
+ * The same pair [startsRest] names, and for the same underlying reason — a set is the unit
+ * that is performed, rested after, and counted.
+ */
+private val SET_TYPES: List<String> = listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET)
+
+/**
+ * Whether an entry is a WORKING set: a set-based form that is not a warm-up.
+ *
+ * Warm-ups are left out on exactly the grounds [working] gives for volume and the records:
+ * ramping up to the working weight is not a smaller version of the achievement, and counting
+ * it would let a cautious session outscore a hard one.
+ */
+fun isWorkingSet(form: ActivityForm): Boolean = when (form) {
+    is StrengthSet -> !form.warmup
+    is HoldSet -> !form.warmup
+    else -> false
+}
+
+/** One exercise's share of a [WorkingSetTally]. */
+data class ExerciseSetCount(val exercise: ActivityRef, val sets: Int)
+
+/**
+ * How many working sets a window holds, in total and per exercise.
+ *
+ * ── The only total two different kinds of training can share ────────────────────
+ * A week of barbell work has a tonnage in kilograms; a week of hangs has an impulse in
+ * kilogram-seconds ([holdImpulseKgSec]). Those two numbers cannot be added, cannot be
+ * compared, and cannot be drawn on one axis without inventing an exchange rate that does not
+ * exist. A SET IS DIMENSIONLESS, so this is the one honest answer to "did I do more this week
+ * than last" across a change of training.
+ *
+ * It is also the cheapest thing in this file: no body weight, no catalog, no share, no
+ * protocol. Every set ever logged can be counted, including the ones that carry no numbers
+ * anybody has filled in.
+ *
+ * What it deliberately does NOT say is how hard those sets were — three heavy singles and
+ * three sets of twenty are the same three here. That is the price of being comparable at all,
+ * and it is why this stands beside the volume charts rather than replacing them.
+ *
+ * [byExercise] is ordered by count, most first, and by name within a tie, so a screen can take
+ * the head of the list. The name is the one the MOST RECENT entry used: entries carry the name
+ * written at the time, and the grouping is by identity ([ExerciseLink.key]) rather than by that
+ * name, so a renamed exercise stays one line and is called what it is called now.
+ */
+data class WorkingSetTally(val total: Int, val byExercise: List<ExerciseSetCount>)
+
+/**
+ * The working sets of the inclusive [dateFrom]..[dateTo] window over op_date; both default to
+ * "no bound", which reads the whole journal.
+ *
+ * Deleted entries are out and amended ones carry their corrections, because this reads through
+ * [readActivities] like everything else — a set that was taken back must not go on being
+ * counted.
+ */
+fun workingSetTally(
+    events: List<JournalEvent>,
+    dateFrom: String? = null,
+    dateTo: String? = null,
+): WorkingSetTally {
+    val counts = LinkedHashMap<String, ExerciseSetCount>()
+    var total = 0
+    for (ev in readActivities(events, SET_TYPES, dateFrom, dateTo)) {
+        if (!isWorkingSet(ev.form)) continue
+        total++
+        val exercise = ev.form.exerciseLink()
+        // an entry written before the catalog existed names no exercise; it is still a set that
+        // was performed, and it is filed under the words it was written with rather than dropped
+        val key = exercise?.key ?: "name:${ev.key ?: ev.type}"
+        val before = counts[key]?.sets ?: 0
+        counts[key] = ExerciseSetCount(
+            ActivityRef(key, exercise?.id, ev.form.activityName()),
+            before + 1,
+        )
+    }
+    return WorkingSetTally(
+        total = total,
+        byExercise = counts.values.sortedWith(
+            compareByDescending<ExerciseSetCount> { it.sets }.thenBy { it.exercise.name }
+        ),
     )
 }
 

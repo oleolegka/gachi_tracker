@@ -52,6 +52,7 @@ const val LOCAL_AUTHOR_ID = 1L
     indices = [
         Index(value = ["space_id", "id"]),
         Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "op_date"]),
     ],
 )
 data class EventEntity(
@@ -98,6 +99,65 @@ data class EventEntity(
      * There is still deliberately no foreign key, for the reason [workoutId] gives.
      */
     @androidx.room.ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
+    /**
+     * The day the entry in this row belongs to (ISO "YYYY-MM-DD"), or null for a row that is
+     * about no training day at all (schema version 16).
+     *
+     * ── The same value the payload carries, and why it is out here as well ──────
+     * `op_date` has lived inside the JSON since the beginning (domain/Forms.kt explains why it
+     * is a different fact from [ts]) and it stays there, because the payload is the EXCHANGE
+     * format shared with the bot and must remain complete on its own. What it could not be
+     * inside the JSON is INDEXED: "the sets of this week" meant reading every payload in the
+     * journal and parsing it to find out whether it was wanted.
+     *
+     * NULL IS A REAL ANSWER, not a gap. A reversal, a correction and a "workout finished" are
+     * about an event, not about a day of training, and giving them the day they were written on
+     * would put them in date ranges they have no business in.
+     *
+     * ── It is what this ROW says, which an amendment can outlive ────────────────
+     * A [xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED] event may move an entry to another
+     * day ("I logged this on Tuesday but did it on Monday"), and the journal is append-only, so
+     * this column on the original row is NOT rewritten — it goes on saying what that row said
+     * when it was written, and the amendment carries the corrected day in its own copy of this
+     * column. The reducers therefore take the amended day as the truth and use the column only
+     * where nothing has been amended; see [xyz.oleolegka.gachimuchi.domain.readActivities].
+     */
+    @androidx.room.ColumnInfo(name = "op_date") val opDate: String? = null,
+    /**
+     * The INSTANT this row was written, in UTC, second precision ("2026-08-06T07:00:00Z"), or
+     * null for a row whose local time could not be read (schema version 16).
+     *
+     * ── What was wrong with [ts] alone ─────────────────────────────────────────
+     * `ts` is a local wall clock with no zone and no offset: "2026-08-06T10:00:00" is a Moscow
+     * morning and a Bangkok afternoon and the row does not say which. That was survivable while
+     * every row was written in one place, and it stops being survivable the moment a journal
+     * travels — two sessions logged either side of a flight sort by the clock on the wall rather
+     * than by which happened first, and the gap between them is off by the difference.
+     *
+     * `ts` IS KEPT, unchanged, and is still what the screens show. It is the reading the user
+     * actually had in front of them, and a set logged at seven in the evening in Bangkok should
+     * go on saying seven in the evening. This column is the same moment said absolutely, so that
+     * ordering and arithmetic have something to be right about.
+     *
+     * Null only for a row whose `ts` will not parse — which no row this app wrote can be, and
+     * which a merged or hand-edited journal can.
+     */
+    @androidx.room.ColumnInfo(name = "ts_utc") val tsUtc: String? = null,
+    /**
+     * How far [ts] is from [tsUtc], in minutes east of UTC (Moscow is 180), or null alongside a
+     * null [tsUtc] (schema version 16).
+     *
+     * Not redundant with the other two, which is the usual objection. It is what makes the local
+     * reading reconstructible from the instant without guessing a zone, and it is the only thing
+     * in the row that answers "where was I when I logged this" — a question a training journal
+     * that has been carried abroad can actually be asked.
+     *
+     * Minutes rather than hours because zones exist that are not on the hour, and an offset
+     * rather than a zone id because the offset is the fact that was true at that moment: a zone
+     * id is a rule that gets amended by governments, and re-reading an old row through today's
+     * rules would silently move it.
+     */
+    @androidx.room.ColumnInfo(name = "tz_offset_min") val tzOffsetMin: Int? = null,
 )
 
 /**

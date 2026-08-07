@@ -7,6 +7,8 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.serialization.json.contentOrNull
+import xyz.oleolegka.gachimuchi.data.WriteTime
+import xyz.oleolegka.gachimuchi.data.opDateOfPayload
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.freeExerciseName
 import xyz.oleolegka.gachimuchi.domain.newUid
@@ -37,7 +39,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1007,6 +1009,82 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 15 -> 16: the day an entry belongs to becomes a column with an index, and the
+         * moment a row was written stops being ambiguous.
+         *
+         * ── Three columns, all nullable, so this is an ALTER and not a rebuild ─────
+         * Every rebuild in this file exists because some column had to be NOT NULL. None of
+         * these does. `op_date` is genuinely absent on the reversing and correcting events (see
+         * [EventEntity.opDate]); `ts_utc` and `tz_offset_min` are absent for a row whose `ts`
+         * will not parse, which is not something this app can write but is something a merged
+         * journal can hold. Making them NOT NULL would have meant inventing a value for exactly
+         * the rows nothing is known about, and paying for it with a table rebuild of the one
+         * table it would be worst to get wrong.
+         *
+         * The index is created afterwards, with the same name and shape Room generates from
+         * [EventEntity], so an upgraded phone and a fresh install agree — data/SchemaParityTest
+         * is what checks that they do.
+         *
+         * ── THE ZONE OF OLD ROWS IS AN ASSUMPTION, AND THIS IS IT ──────────────────
+         * The stored `ts` is a local wall clock with no zone and no offset. There is NO OTHER
+         * SOURCE — not in the row, not in the payload, not anywhere in the database — so every
+         * existing row is read in THE DEVICE'S ZONE AS IT IS AT UPGRADE TIME. For a journal
+         * written and upgraded in one place that is exactly right. For rows written abroad it is
+         * wrong by however far the user travelled, silently, and nothing later can detect it.
+         *
+         * That is accepted rather than worked around, because the alternatives are worse:
+         * leaving the old rows empty makes every reader carry a null branch forever for rows
+         * that do have a defensible instant, and refusing to guess at all would mean the columns
+         * describe only the future, which is a schema that answers "when did this happen" for
+         * half the journal.
+         *
+         * ── The day comes out of the payload, and the key is spelled out ──────────
+         * `op_date` is copied from the JSON each row already carries. The key is written here as
+         * a literal rather than taken from a constant for the reason [MIGRATION_10_11] gives
+         * about type strings: this describes data as it was written, and must not change meaning
+         * if something in today's code is renamed. A payload that will not parse, or whose day
+         * is not an ISO day, gets no column value and goes on being read out of the payload
+         * exactly as it was before — a damaged row costs itself and never the upgrade.
+         */
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `op_date` TEXT")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `ts_utc` TEXT")
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `tz_offset_min` INTEGER")
+
+                val rows = ArrayList<Triple<Long, String, String>>()
+                db.query("SELECT `id`, `ts`, `payload` FROM `events`").use { c ->
+                    while (c.moveToNext()) {
+                        rows += Triple(c.getLong(0), c.getString(1), c.getString(2))
+                    }
+                }
+                val zone = java.time.ZoneId.systemDefault()
+                // two statements rather than one with nulls in it: a row may have a day and no
+                // readable time, or the other way round, and writing each only where there is
+                // something to write keeps a null out of the bind arguments entirely
+                for ((id, ts, payload) in rows) {
+                    opDateOfPayload(payload)?.let { day ->
+                        db.execSQL(
+                            "UPDATE `events` SET `op_date` = ? WHERE `id` = ?",
+                            arrayOf<Any>(day, id),
+                        )
+                    }
+                    WriteTime.ofLocal(ts, zone)?.let { written ->
+                        db.execSQL(
+                            "UPDATE `events` SET `ts_utc` = ?, `tz_offset_min` = ? WHERE `id` = ?",
+                            arrayOf<Any>(written.utc, written.offsetMin, id),
+                        )
+                    }
+                }
+
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_events_space_id_op_date` " +
+                        "ON `events` (`space_id`, `op_date`)"
+                )
+            }
+        }
+
+        /**
          * Gives every catalog row the key its own columns say it should have, renaming the
          * second row of a colliding pair so that the unique index can be created at all.
          *
@@ -1244,7 +1322,7 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

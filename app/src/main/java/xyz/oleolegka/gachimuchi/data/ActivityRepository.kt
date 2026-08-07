@@ -60,6 +60,40 @@ class ActivityRepository(private val db: AppDatabase) {
     /** Log time (ts) — second precision, same as on the server (`db._now`). */
     private fun now(): String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
 
+    /**
+     * A journal row, stamped with everything the schema wants to know about WHEN it was written
+     * and WHICH DAY it is about.
+     *
+     * ONE FACTORY FOR EVERY APPEND, on the same grounds [record] gives for attaching the
+     * workout here rather than at the call sites: there are seven places in this class that
+     * write to the journal, and a row that arrived with its time columns half filled in would be
+     * a row nothing could sort — found years later, on the one device holding the history.
+     *
+     * The day is read back out of the payload rather than passed in, so the column cannot
+     * disagree with the JSON beside it. One consequence worth naming: an AMENDMENT names no day
+     * of its own (its payload is a target and a patch), so it gets a null `op_date` even when the
+     * patch inside it moves an entry to another day — see [EventEntity.opDate], which is where
+     * the readers are told not to trust the column across a correction.
+     */
+    private fun event(
+        type: String,
+        payload: String,
+        workoutId: Long? = null,
+        workoutUid: String? = null,
+    ): EventEntity {
+        val written = WriteTime.now()
+        return EventEntity(
+            ts = written.local,
+            type = type,
+            payload = payload,
+            workoutId = workoutId,
+            workoutUid = workoutUid,
+            opDate = opDateOfPayload(payload),
+            tsUtc = written.utc,
+            tzOffsetMin = written.offsetMin,
+        )
+    }
+
     val events: Flow<List<JournalEvent>> =
         db.events().observeAll().map { rows -> rows.map { it.toJournalEvent() } }
 
@@ -134,8 +168,8 @@ class ActivityRepository(private val db: AppDatabase) {
         // volume at all. See [withBodyweightSnapshot].
         val stamped = form.withBodyweightSnapshot { day -> bodyweightAt(events, day) }
         return db.events().insert(
-            EventEntity(
-                ts = now(), type = stamped.type, payload = stamped.toPayload(),
+            event(
+                type = stamped.type, payload = stamped.toPayload(),
                 // both links, and the uid is the one the reducers believe: see EventEntity
                 workoutId = workout?.id, workoutUid = workout?.uid,
             )
@@ -162,8 +196,8 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun finishWorkout(workoutId: Long): Long {
         val uid = db.events().byId(workoutId)?.uid
         return db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_WORKOUT_FINISHED,
+            event(
+                type = TYPE_WORKOUT_FINISHED,
                 payload = payloadJson.encodeToString(WorkoutFinished(workoutId, uid)),
                 // the link in the column as well as the payload, so one query finds every row
                 // of a workout whatever its type — same as the "exercise added" event
@@ -204,8 +238,8 @@ class ActivityRepository(private val db: AppDatabase) {
         openWorkoutRow(allEvents())?.let { finishWorkout(it.id) }
         val slot = slotId?.let { db.slots().byId(it) }
         return db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_WORKOUT_STARTED,
+            event(
+                type = TYPE_WORKOUT_STARTED,
                 payload = payloadJson.encodeToString(
                     WorkoutStarted(
                         opDate = opDate,
@@ -235,8 +269,8 @@ class ActivityRepository(private val db: AppDatabase) {
         val workoutUid = db.events().byId(workoutId)?.uid
         val exerciseUid = db.exercises().byId(exerciseId)?.uid
         val id = db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_WORKOUT_EXERCISE_ADDED,
+            event(
+                type = TYPE_WORKOUT_EXERCISE_ADDED,
                 payload = payloadJson.encodeToString(
                     WorkoutExerciseAdded(
                         workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
@@ -322,8 +356,8 @@ class ActivityRepository(private val db: AppDatabase) {
      */
     suspend fun cancelSet(eventId: Long): Long =
         db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_SET_CANCEL,
+            event(
+                type = TYPE_SET_CANCEL,
                 // both links: the uid is what the reducers read, the number is what a build
                 // older than schema version 9 would look for
                 payload = payloadJson.encodeToString(
@@ -351,8 +385,8 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun deleteEntry(eventId: Long): Long? {
         val uid = db.events().byId(eventId)?.uid ?: return null
         return db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_ENTRY_DELETED,
+            event(
+                type = TYPE_ENTRY_DELETED,
                 payload = payloadJson.encodeToString(EntryDeleted(targetUid = uid)),
             )
         )
@@ -388,8 +422,8 @@ class ActivityRepository(private val db: AppDatabase) {
         // fails here instead of making it disappear later
         checkAmendedPayload(target.type, target.payload, fields)
         return db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_ENTRY_AMENDED,
+            event(
+                type = TYPE_ENTRY_AMENDED,
                 payload = payloadJson.encodeToString(
                     EntryAmended(targetUid = target.uid, fields = fields)
                 ),
@@ -679,6 +713,7 @@ fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,
     workoutId = workoutId, uid = uid, workoutUid = workoutUid,
+    opDate = opDate, tsUtc = tsUtc, tzOffsetMin = tzOffsetMin,
 )
 
 fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
