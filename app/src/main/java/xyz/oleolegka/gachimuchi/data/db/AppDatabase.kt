@@ -35,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 12,
+    version = 14,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -716,6 +716,211 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 12 -> 13: the catalog can say that an exercise is trained ONE LIMB AT A TIME.
+         *
+         * One column, and it takes a whole table rebuild to add it. `one_sided` is NOT NULL
+         * (see [ExerciseEntity.oneSided] for why there is no third state worth a nullable
+         * column), and SQLite refuses to add a NOT NULL column to a populated table without a
+         * DEFAULT — a default that would then stay on the column forever, leaving an upgraded
+         * phone with `one_sided INTEGER NOT NULL DEFAULT 0` where a fresh install has
+         * `one_sided INTEGER NOT NULL`. Room's identity hash does not include default clauses,
+         * so both shapes would pass every check the app makes on open; data/SchemaParityTest
+         * is what catches it, and this rebuild is the answer, exactly as in [MIGRATION_2_3].
+         *
+         * ── What every existing row comes through as, and why that is true ──────────
+         * False: nothing in the catalog was one-sided before there was a way to say so. This
+         * is not a placeholder standing in for an unknown — the fact genuinely did not exist,
+         * and the user marking a fingerboard exercise one-sided next week is new information
+         * rather than a correction.
+         *
+         * What that marking then exposes is the sets already in the journal, which named no
+         * hand because nothing asked them to. They do not become "both hands" and they are not
+         * rewritten: the reducers report them as a record whose side is unknown
+         * ([xyz.oleolegka.gachimuchi.domain.ExerciseRecord.sideMissing]). Guessing here would
+         * mean writing a hand into history that nobody recorded.
+         *
+         * ── The two hazards of a rebuild, and why neither bites ─────────────────────
+         * `exercises` is nobody's foreign-key parent — the plan and the programs deliberately
+         * point at it WITHOUT one (see [SlotExerciseEntity] and [ProgramEntity]), so dropping
+         * it deletes nothing by cascade. The AUTOINCREMENT counter is carried across by hand
+         * for the reason [MIGRATION_6_7] spells out: a rebuilt table restarts its counter at
+         * the highest surviving id, and a reissued exercise id would silently adopt the
+         * journal entries of an exercise the user deleted.
+         *
+         * The unique index on `uid` is recreated with the rest. It is not decoration: it is
+         * the thing that would fail the upgrade loudly if the copy ever lost an identity.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v13` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'exercises'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`edge_mm` REAL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`one_sided` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`edge_mm`, `protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`) " +
+                        "SELECT `id`, `space_id`, `name`, `form`, `created_at`, `edge_mm`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, 0 FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_uid` ON `exercises` (`uid`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v13`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v13`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v13`")
+            }
+        }
+
+        /**
+         * Version 13 -> 14: what share of body weight an exercise lifts, and what every
+         * body-weight set already in the journal was lifted at.
+         *
+         * ── Two halves, and only one of them is a column ────────────────────────────
+         * `bodyweight_share` is nullable with no default, so a plain ALTER TABLE will do and
+         * every exercise comes through as "nobody has said" — which is true, and which keeps
+         * the charts of a catalog nobody has filled in exactly as they were.
+         *
+         * The other half is a payload backfill, and it is the reason this migration is not
+         * three lines. Every own-weight set is stamped with the body weight the scales last
+         * showed ON OR BEFORE that set's own day.
+         *
+         * ── Why the backfill is not optional ────────────────────────────────────────
+         * The snapshot is what makes a body-weight set worth anything on the tonnage chart.
+         * Leave the old rows empty and the first time somebody fills in a share for pull-ups
+         * their chart switches from counting reps to counting kilograms — and every day
+         * before the upgrade draws as ZERO, because those sets carry no weight to multiply.
+         * A history that reads as years of nothing followed by a sudden wall is worse than
+         * the flat rep count it replaced. So the old sets are given the number they were
+         * actually performed at, once, here.
+         *
+         * ── This is a lookup, not an invention ──────────────────────────────────────
+         * The weight comes from the user's own weigh-ins, matched BY DAY: the last one
+         * recorded on or before the set's `op_date`. A set logged before the scales were ever
+         * used gets nothing and stays worth nothing — there is no honest number to give it,
+         * and picking the earliest later weigh-in would be claiming to know what somebody
+         * weighed before they had ever weighed themselves.
+         *
+         * Matching by day rather than by write order is what makes back-dated training come
+         * out right: a session typed up a fortnight late must be stamped with what the scales
+         * said THEN, not with this morning's reading.
+         *
+         * Hold sets are stamped along with strength sets even though nothing computes a hold
+         * volume today. The snapshot is a fact about the set — what you weighed when you hung
+         * off that edge — and a field present on half the journal is the split-history problem
+         * [MIGRATION_9_10] exists to prevent, arriving later and harder to fix.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `bodyweight_share` REAL")
+
+                // the type strings are spelled out for the reason given in [MIGRATION_10_11]:
+                // a migration describes the database as it was and must not change meaning if
+                // a constant in today's code is renamed
+                val weighIns = ArrayList<Pair<String, Double>>()
+                db.query(
+                    "SELECT `payload` FROM `events` WHERE `type` = 'bodyweight' ORDER BY `id`"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val json = runCatching {
+                            kotlinx.serialization.json.Json.parseToJsonElement(c.getString(0))
+                        }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: continue
+                        val day = (json["op_date"] as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.contentOrNull ?: continue
+                        val kg = (json["weight_kg"] as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.contentOrNull?.toDoubleOrNull() ?: continue
+                        if (kg > 0) weighIns += day to kg
+                    }
+                }
+                if (weighIns.isEmpty()) return
+                // stable, so several weigh-ins on one day resolve to the last one written
+                val byDay = weighIns.sortedBy { it.first }
+
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `payload` FROM `events` " +
+                        "WHERE `type` IN ('strength_set', 'hold_set')"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withBodyweightSnapshot(c.getString(1), byDay)?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * One set payload with `bodyweight_kg` filled in from the weigh-ins, or null when there
+         * is nothing to do — not an own-weight set, a snapshot already there, no weigh-in on or
+         * before its day, or a payload that will not parse.
+         *
+         * "A snapshot already there" means a NUMBER already there and not a KEY already there,
+         * for the reason spelled out on [withExerciseUid]: `encodeDefaults` writes
+         * `"bodyweight_kg": null` for a build that knows the field and has nothing to put in
+         * it, and reading that as "done" would skip exactly the rows this exists for.
+         */
+        private fun withBodyweightSnapshot(
+            payload: String,
+            byDay: List<Pair<String, Double>>,
+        ): String? {
+            val json = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(payload)
+            }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+
+            val ownWeight = (json["own_weight"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toBooleanStrictOrNull() ?: false
+            if (!ownWeight) return null
+
+            val already = (json["bodyweight_kg"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toDoubleOrNull()
+            if (already != null) return null
+
+            val day = (json["op_date"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull ?: return null
+            val kg = byDay.lastOrNull { it.first <= day }?.second ?: return null
+
+            return kotlinx.serialization.json.JsonObject(
+                json + ("bodyweight_kg" to kotlinx.serialization.json.JsonPrimitive(kg))
+            ).toString()
+        }
+
+        /**
          * One `workout_started` payload with `name` filled in from the plan it names, or null
          * when there is nothing to do — no plan named, a name already there, a plan that is
          * gone, or a payload that will not parse.
@@ -868,7 +1073,7 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

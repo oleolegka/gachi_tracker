@@ -23,7 +23,10 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.Workout
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
+import xyz.oleolegka.gachimuchi.domain.bodyweightAt
 import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
+import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.payloadJson
@@ -90,10 +93,16 @@ class ActivityRepository(private val db: AppDatabase) {
      * the column survives only because the server schema has it (see Entities.kt).
      */
     suspend fun record(form: ActivityForm, attachToWorkout: Boolean = true): Long {
-        val workout = if (attachToWorkout) openWorkoutRow(allEvents(), today()) else null
+        // one read, shared by both consumers, and skipped entirely when neither wants it
+        val events = if (attachToWorkout || form.wantsBodyweightSnapshot) allEvents() else emptyList()
+        val workout = if (attachToWorkout) openWorkoutRow(events, today()) else null
+        // the body-weight snapshot is stamped HERE for the same reason the workout link is:
+        // one method sees every write, and a screen that forgot would log a set with no
+        // volume at all. See [withBodyweightSnapshot].
+        val stamped = form.withBodyweightSnapshot { day -> bodyweightAt(events, day) }
         return db.events().insert(
             EventEntity(
-                ts = now(), type = form.type, payload = form.toPayload(),
+                ts = now(), type = stamped.type, payload = stamped.toPayload(),
                 // both links, and the uid is the one the reducers believe: see EventEntity
                 workoutId = workout?.id, workoutUid = workout?.uid,
             )
@@ -188,6 +197,14 @@ class ActivityRepository(private val db: AppDatabase) {
     /** "Run this by its protocol" / "just count the rest" / null to go back to inferring it. */
     suspend fun setLedByProtocol(exerciseId: Long, ledByProtocol: Boolean?) =
         db.exercises().setLedByProtocol(exerciseId, ledByProtocol)
+
+    /** "This one is done one hand at a time" — see [ExerciseDao.setOneSided]. */
+    suspend fun setOneSided(exerciseId: Long, oneSided: Boolean) =
+        db.exercises().setOneSided(exerciseId, oneSided)
+
+    /** What share of body weight this exercise lifts — see [ExerciseDao.setBodyweightShare]. */
+    suspend fun setBodyweightShare(exerciseId: Long, share: Double?) =
+        db.exercises().setBodyweightShare(exerciseId, share)
 
     /**
      * Cancels a set: the journal is append-only, so a REVERSING event is written while
@@ -363,6 +380,7 @@ fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
     restSec = protocolRestSec,
     defaultRestSec = defaultRestSec,
     ledByProtocolFlag = ledByProtocol,
+    oneSided = oneSided,
 )
 
 fun EventEntity.toJournalEvent() = JournalEvent(

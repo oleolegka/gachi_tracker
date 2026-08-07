@@ -68,6 +68,24 @@ interface ExerciseDao {
     /** Same, for "run this by its protocol". Null puts the row back to inferring it. */
     @Query("UPDATE exercises SET led_by_protocol = :led WHERE space_id = :spaceId AND id = :id")
     suspend fun setLedByProtocol(id: Long, led: Boolean?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Same, for "this one is trained one limb at a time".
+     *
+     * Turning it ON re-reads the whole history of the exercise: sets logged before it named
+     * no side, and they become a defect the records report rather than hide (see
+     * [xyz.oleolegka.gachimuchi.domain.holdRecord]). Nothing is rewritten to make that go
+     * away — the old sets genuinely do not say which hand did them.
+     */
+    @Query("UPDATE exercises SET one_sided = :oneSided WHERE space_id = :spaceId AND id = :id")
+    suspend fun setOneSided(id: Long, oneSided: Boolean, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Same, for what share of body weight the exercise lifts. Null puts it back to "nobody
+     * has said", which is not the same as zero — see [ExerciseEntity.bodyweightShare].
+     */
+    @Query("UPDATE exercises SET bodyweight_share = :share WHERE space_id = :spaceId AND id = :id")
+    suspend fun setBodyweightShare(id: Long, share: Double?, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 /**

@@ -102,7 +102,7 @@ class RunToJournalTest {
         holdSetsFromRun(exercise, "2026-08-01", sets, addedKg = 6.0).forEach { repo.record(it) }
         holdSetsFromRun(exercise, day, sets, addedKg = 9.0).forEach { repo.record(it) }
 
-        val record = holdRecord(readActivities(repo.allEvents()), ExerciseLink.ofId(exercise.id))!!
+        val record = holdRecord(readActivities(repo.allEvents()), ExerciseLink.ofId(exercise.id)).single()
         assertEquals(9.0, record.value, 1e-9)
         assertEquals(day, record.opDate)
     }

@@ -108,6 +108,38 @@ enum class ExerciseForm(val code: Int, val eventType: String, val title: String)
 }
 
 /**
+ * Which side of the body a set was done with, for work trained ONE LIMB AT A TIME.
+ *
+ * ── Why this is worth a field of its own ────────────────────────────────────────
+ * A climber on a fingerboard hangs one arm at a time, and the ASYMMETRY is the thing the
+ * work is for: the weaker hand is what the session is about, and the number that matters is
+ * how far apart the two are. Folding both hands into one history answers the wrong question
+ * — it reports the better hand and hides the gap that the training exists to close.
+ *
+ * So a record is per (exercise, side): the left hand has its own best added weight and the
+ * right hand has its own, and neither can take the other's.
+ *
+ * ── The side is on the SET, the one-sidedness is on the EXERCISE ────────────────
+ * Which hand this particular hang was done with is a fact about the hang. Whether the
+ * exercise is done one hand at a time is a fact about the exercise, and it has to be knowable
+ * BEFORE a set exists — see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
+ *
+ * The codes are the strings stored in the payload; nothing else may be stored there. A value
+ * that is neither is a corrupt row and is refused by [HoldSet], which costs that row (the
+ * readers skip what will not parse — see [formFromEventOrNull]). That is deliberate: quietly
+ * accepting an unknown side would file it with the sets that named no side at all, which is
+ * the one answer that is certainly wrong.
+ */
+enum class HoldSide(val code: String) {
+    LEFT("left"),
+    RIGHT("right");
+
+    companion object {
+        fun fromCode(code: String?): HoldSide? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/**
  * Normalizes an activity name into a dictionary key — a port of `bot/parser.norm_phrase`.
  *
  * The Cyrillic YO -> YE folding is kept for parity with the bot (the same phrase must
@@ -134,6 +166,28 @@ private fun requirePos(name: String, v: Int): Int {
 private fun requirePosOrNull(name: String, v: Double?): Double? {
     if (v == null) return null
     require(v > 0) { "$name: expected a positive number or null, got $v" }
+    return v
+}
+
+/**
+ * A load the user actually stated: any non-zero finite number, sign included.
+ *
+ * This is the validator for ADDED WEIGHT and for nothing else. A negative value is
+ * legitimate there and means the opposite of what the field's name suggests — see
+ * [StrengthSet.addedKg] for the sign convention and why the field is not split in two.
+ *
+ * ZERO IS STILL REFUSED, exactly as [requirePosOrNull] refused it. "I added nothing" is
+ * said by leaving the field out, and a stored zero would be a second way of saying the same
+ * thing that every reader would then have to remember to treat as absent.
+ *
+ * The finiteness check is not decoration. `> 0` used to reject a NaN by accident, since
+ * every comparison against one is false; `!= 0.0` accepts it, and a NaN in the journal
+ * poisons every maximum and every sum it reaches.
+ */
+private fun requireNonZeroOrNull(name: String, v: Double?): Double? {
+    if (v == null) return null
+    require(v.isFinite()) { "$name: expected a finite number or null, got $v" }
+    require(v != 0.0) { "$name: expected a non-zero number or null, got $v" }
     return v
 }
 
@@ -179,8 +233,62 @@ data class StrengthSet(
     @SerialName("exercise") val exercise: String,
     @SerialName("reps") val reps: Int,
     @SerialName("weight_kg") val weightKg: Double? = null,
+    /**
+     * Weight carried ON TOP of your own body weight — and, when NEGATIVE, weight taken off it.
+     *
+     * ── The sign ───────────────────────────────────────────────────────────────
+     * A minus means the load was REDUCED: a band, a counterweight or an assisted-pull-up
+     * machine holding part of you up. "Pull-ups, -20 kg" is twenty kilograms of help, and it
+     * is an ordinary way to train a pull-up nobody can do yet, not a data error.
+     *
+     * ONE SIGNED FIELD RATHER THAN TWO, and that is the decision worth defending. Assistance
+     * and added weight are the same axis of the same exercise: a lifter works up through
+     * -20, -10, 0 and out the other side to +5, and a separate `assistance_kg` column would
+     * cut that one progression in half — two charts, two records, and a personal best that
+     * resets on the day the band comes off. Anything comparing added weights therefore works
+     * on negatives unchanged: -10 beats -15 because needing less help IS the improvement.
+     *
+     * Zero is not storable (see [requireNonZeroOrNull]): a clean body-weight set says so by
+     * leaving the field out.
+     */
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /**
+     * WHAT YOU WEIGHED when this set was recorded, in kilograms, or null when nothing was
+     * known — a snapshot taken from the last weigh-in on or before [opDate].
+     *
+     * ── Why the set carries the number instead of pointing at the scales ────────
+     * Without it a body-weight set has no volume at all: a week of pull-ups shows up on the
+     * tonnage chart as a week of doing nothing. With it, and with a share stated on the
+     * exercise, the set is worth `share x body weight + added weight` per rep.
+     *
+     * A SNAPSHOT AND NOT A LOOKUP, which is the whole point. Reading the current weight at
+     * chart-draw time would let every new weigh-in rewrite the past: lose three kilograms and
+     * last year's pull-ups get cheaper overnight, on a chart whose whole job is to say
+     * whether last year was harder than this one. What you lifted on a day is what you
+     * weighed on that day, and that is a fact, so it is stored like one.
+     *
+     * Null stays legal and means the honest thing: nobody had stepped on the scales by then.
+     * Such a set contributes nothing to tonnage, exactly as it did before this field existed.
+     */
+    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    /**
+     * Whether this was a WARM-UP set rather than a working one.
+     *
+     * ── What it changes, and what it deliberately does not ──────────────────────
+     * A warm-up is excluded from VOLUME and from RECORDS, and from nothing else. The empty
+     * bar is not competing with the working set for a personal best, and counting it into
+     * the tonnage inflates a week of training with weight that was never the point.
+     *
+     * It stays in the day's feed and it stays in the count of ACTIVE DAYS (see
+     * [xyz.oleolegka.gachimuchi.domain.activeDays]). Warming up IS training — a day spent
+     * ramping up and then failing the working weight is not a day off, and a streak that
+     * breaks over it would be lying about what happened.
+     *
+     * Defaulted to false, so every entry written before this field existed reads as a
+     * working set — which is what it was, since there was no way to say otherwise.
+     */
+    @SerialName("warmup") val warmup: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
@@ -193,7 +301,8 @@ data class StrengthSet(
     init {
         requirePos("reps", reps)
         requirePosOrNull("weight_kg", weightKg)
-        requirePosOrNull("added_kg", addedKg)
+        requirePosOrNull("bodyweight_kg", bodyweightKg)
+        requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require(!(weightKg != null && ownWeight)) {
             "weight_kg and own_weight are incompatible: either an implement or your own body weight"
@@ -221,6 +330,11 @@ data class StrengthSet(
  *
  * [restAfterSec] is the pause BETWEEN sets; [workSec]/[restSec] are the protocol
  * WITHIN a set. Different quantities, independent of each other.
+ *
+ * [addedKg] IS SIGNED, and on a hangboard the negative half of the axis is the half most of
+ * the training happens on: hanging a one-arm lockoff off a band that takes fifteen kilograms
+ * of you is normal work, and it progresses towards zero. The convention and the reasoning are
+ * on [StrengthSet.addedKg], which defines it once for both forms.
  */
 @Serializable
 data class HoldSet(
@@ -232,6 +346,24 @@ data class HoldSet(
     @SerialName("edge_mm") val edgeMm: Double? = null,
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /** What you weighed when this hang was recorded — see [StrengthSet.bodyweightKg]. */
+    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
+    @SerialName("warmup") val warmup: Boolean = false,
+    /**
+     * Which hand (or foot) this set was done with — one of [HoldSide]'s codes, or null for a
+     * set done with both.
+     *
+     * Null is the ordinary answer for two-handed work and the ordinary answer for every set
+     * written before this field existed. On an exercise marked one-sided it is neither: it is
+     * a set that failed to say which hand it was, and the reducers report that rather than
+     * guessing (see [xyz.oleolegka.gachimuchi.domain.holdRecord]).
+     *
+     * A String rather than the enum because the payload is the stored format and it stays
+     * readable by anything that does not know this app's Kotlin; [sideOf] is how the domain
+     * asks the question.
+     */
+    @SerialName("side") val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
@@ -241,13 +373,20 @@ data class HoldSet(
     override val type: String get() = TYPE_HOLD_SET
     override val key: String get() = activityKey
 
+    /** The side as the domain compares it; null both for "both hands" and for "not said". */
+    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
+
     init {
+        require(side == null || HoldSide.fromCode(side) != null) {
+            "side: expected one of ${HoldSide.entries.joinToString { it.code }} or null, got $side"
+        }
         reps?.let { requirePos("reps", it) }
         requirePosOrNull("hold_sec", holdSec)
         requirePosOrNull("work_sec", workSec)
         requirePosOrNull("rest_sec", restSec)
         requirePosOrNull("edge_mm", edgeMm)
-        requirePosOrNull("added_kg", addedKg)
+        requirePosOrNull("bodyweight_kg", bodyweightKg)
+        requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require((workSec == null) == (restSec == null)) {
             "a work:rest protocol is set as a pair — both work_sec and rest_sec are required"

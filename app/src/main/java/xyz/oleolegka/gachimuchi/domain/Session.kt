@@ -50,6 +50,14 @@ data class ExerciseRef(
      */
     val defaultRestSec: Int? = null,
     val ledByProtocolFlag: Boolean? = null,
+    /**
+     * Trained ONE LIMB AT A TIME (schema version 13) — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
+     *
+     * On the entry card this is what makes the side worth asking for; the side itself is
+     * recorded on the set ([HoldSet.side]) and not here.
+     */
+    val oneSided: Boolean = false,
 ) {
     /**
      * A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists),
@@ -104,16 +112,21 @@ fun strengthSetOf(
     weightKg: Double? = null,
     ownWeight: Boolean = false,
     addedKg: Double? = null,
+    /** Ramp-up rather than working weight — see [StrengthSet.warmup]. */
+    warmup: Boolean = false,
 ): StrengthSet = if (ownWeight) {
     StrengthSet(
         exercise = exercise.name, reps = reps, ownWeight = true,
-        addedKg = addedKg?.takeIf { it > 0 }, exerciseId = exercise.id,
-        exerciseUid = exercise.uid, opDate = opDate,
+        // zero is "nothing was added", which the payload says by leaving the field out; the
+        // sign is KEPT, because a negative one is assistance and not a mistyped positive
+        addedKg = addedKg?.takeIf { it != 0.0 }, exerciseId = exercise.id,
+        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup,
     )
 } else {
     StrengthSet(
         exercise = exercise.name, reps = reps, weightKg = weightKg?.takeIf { it > 0 },
         exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
+        warmup = warmup,
     )
 }
 
@@ -133,6 +146,18 @@ fun holdSetOf(
      * finished interval run can, because the program states it.
      */
     restAfterSec: Double? = null,
+    /** Ramp-up rather than a working hang — see [StrengthSet.warmup]. */
+    warmup: Boolean = false,
+    /**
+     * Which hand this was, for an exercise trained one at a time ([ExerciseRef.oneSided]).
+     *
+     * NOT validated against that flag, deliberately. This builder runs inside the Add
+     * button's own click handler, and a `require` here would come out as a crash on the one
+     * button the app is built around — the same reasoning the edge and the protocol are
+     * sanitised for rather than rejected. A one-sided exercise logged without a side is a
+     * defect the READERS report, out loud, where nobody is mid-set (see [holdRecord]).
+     */
+    side: HoldSide? = null,
 ): HoldSet = HoldSet(
     activity = exercise.name,
     // zero is "not filled in", not a set of zero reps: the validator would reject it and
@@ -145,8 +170,12 @@ fun holdSetOf(
     // a zero on the catalog row would be rejected by the validator and take the screen
     // down at the moment the Add button is pressed
     edgeMm = exercise.edge,
-    addedKg = addedKg?.takeIf { it > 0 },
+    // the sign survives: a hang off a band is recorded as a negative added weight, and
+    // stripping it would silently turn "helped by 15 kg" into an unweighted hang
+    addedKg = addedKg?.takeIf { it != 0.0 },
     ownWeight = true,
+    warmup = warmup,
+    side = side?.code,
     exerciseId = exercise.id,
     exerciseUid = exercise.uid,
     restAfterSec = restAfterSec?.takeIf { it > 0 },
@@ -196,6 +225,60 @@ fun lastDuration(events: List<JournalEvent>, exercise: ExerciseLink): Duration? 
 
 /** The last weigh-in. Body weight has no exercise_id, so the whole series is used. */
 fun lastBodyweight(events: List<JournalEvent>): Bodyweight? = bodyweightSeries(events).lastOrNull()
+
+/**
+ * What the scales last said ON OR BEFORE [opDate], or null if they had said nothing yet.
+ *
+ * BY DAY AND NOT BY WRITE ORDER, which is the difference that matters for the one case this
+ * exists for: typing up training from a fortnight ago. [lastBodyweight] answers "the most
+ * recent weigh-in", and stamping that onto a backdated set would record today's weight as
+ * the weight of a day two weeks gone. The sort is stable, so several weigh-ins on one day
+ * resolve to the last one written that day.
+ */
+fun bodyweightAt(events: List<JournalEvent>, opDate: String): Double? =
+    bodyweightSeries(events)
+        .filter { it.opDate <= opDate }
+        .sortedBy { it.opDate }
+        .lastOrNull()
+        ?.weightKg
+
+/**
+ * The same form with its body-weight snapshot filled in, or unchanged when there is nothing
+ * to fill in — see [StrengthSet.bodyweightKg].
+ *
+ * ── Why this happens at the moment of recording and not on the entry card ───────
+ * The same reasoning [xyz.oleolegka.gachimuchi.data.ActivityRepository.record] gives for
+ * attaching the workout there: every screen that logs anything goes through one method, and a
+ * screen that forgot to stamp the weight would write a set that silently has no volume. It is
+ * also the only moment at which "the last weigh-in" is a defined quantity.
+ *
+ * A form that ALREADY carries a snapshot is left alone — a caller that knows better (an
+ * import, a set reconstructed from a finished interval run) is not overruled.
+ */
+/**
+ * Whether [withBodyweightSnapshot] would have anything to do.
+ *
+ * Exists so that a caller can skip FETCHING the journal for a write that will not use it —
+ * recording a set already folds the whole journal once to find the open workout, and a second
+ * read for a barbell set, which can never carry a snapshot, is work done for nothing on the
+ * one path the user is standing in a gym waiting for.
+ */
+val ActivityForm.wantsBodyweightSnapshot: Boolean
+    get() = when (this) {
+        is StrengthSet -> ownWeight && bodyweightKg == null
+        is HoldSet -> ownWeight && bodyweightKg == null
+        else -> false
+    }
+
+fun ActivityForm.withBodyweightSnapshot(weightAt: (String) -> Double?): ActivityForm = when {
+    this is StrengthSet && ownWeight && bodyweightKg == null ->
+        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
+
+    this is HoldSet && ownWeight && bodyweightKg == null ->
+        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
+
+    else -> this
+}
 
 // --- the session feed ----------------------------------------------------------------
 
@@ -303,7 +386,9 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
 
     return when (val form = all[index].form) {
         is StrengthSet ->
-            evaluateStrengthRecord(priorOf { it as? StrengthSet }, form.weightKg, form.reps)
+            evaluateStrengthRecord(
+                priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup,
+            )
 
         is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
 
