@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.ui
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
@@ -99,6 +100,10 @@ class Journal {
     /**
      * A hang. [addedKg] null is the plate-free case, which is the one the weight question on
      * the way into a protocol-led set is required NOT to appear for (§13.5).
+     *
+     * [side] is what a one-sided exercise records instead of nothing, and [warmup] keeps a
+     * ramp-up out of the volume and the records. Both go through `holdSetOf` rather than into
+     * a hand-made payload, so a fixture cannot say something the app itself could not.
      */
     fun holdSet(
         exercise: ExerciseRef,
@@ -107,8 +112,13 @@ class Journal {
         addedKg: Double? = null,
         at: String = "09:10",
         workoutId: Long? = null,
+        side: HoldSide? = null,
+        warmup: Boolean = false,
     ): Long {
-        val form = holdSetOf(exercise, day, addedKg = addedKg, reps = reps)
+        val form = holdSetOf(
+            exercise = exercise, opDate = day, addedKg = addedKg, reps = reps,
+            warmup = warmup, side = side,
+        )
         return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
     }
 

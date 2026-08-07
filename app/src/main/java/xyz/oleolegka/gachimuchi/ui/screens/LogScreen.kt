@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.Session
 import xyz.oleolegka.gachimuchi.domain.SessionGroup
 import xyz.oleolegka.gachimuchi.domain.SessionSet
@@ -526,19 +527,40 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
 
 /**
  * Holds. Edge and protocol are NOT asked for: §12-A puts them on the exercise, so the
- * only variables of a set are the added weight and the number of reps.
+ * variables of a set are the added weight, the number of reps and — on an exercise trained
+ * one limb at a time — which hand it was.
+ *
+ * ── The side is asked for, and it cannot be skipped ─────────────────────────────
+ * A record on a one-sided exercise is per (exercise, side): the weaker hand has its own
+ * history and the gap between the two is what the training exists to close. A set that names
+ * no side on such an exercise is therefore NOT "both hands" — it is a set that failed to say,
+ * and the readers report it as a defect rather than guessing
+ * ([xyz.oleolegka.gachimuchi.domain.holdRecord] files it under "side not recorded"). So the
+ * primary button stays disabled until one is chosen, with a line underneath saying why: a
+ * dead button that explains nothing is the worst thing on a screen used mid-set.
+ *
+ * NOT PREFILLED FROM THE LAST SET, unlike every other field on this card. One-sided work
+ * alternates, so last time's answer is the wrong one about as often as it is right — and the
+ * failure is silent: two lefts in the journal, a right hand's history missing a set, and a
+ * record on the wrong hand. The weight and the reps prefill because being wrong about them is
+ * visible in the field before the button is pressed; the hand is not.
  */
 @Composable
 internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+    val colors = LocalGachiColors.current
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
+    var side by remember(exercise.id, last) { mutableStateOf<HoldSide?>(null) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
     val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
-        warmup == last.warmup
+        warmup == last.warmup && side == last.sideOf
+    // only a one-sided exercise owes an answer; on any other one a null side is what "both
+    // hands" has always meant and always will
+    val sideMissing = exercise.oneSided && side == null
 
     StepperField(
         label = "Added weight, kg",
@@ -553,18 +575,47 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         steps = listOf(1.0),
         decimal = false,
     )
+    if (exercise.oneSided) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HoldSide.entries.forEach { option ->
+                FilterChip(
+                    selected = side == option,
+                    // tapping the chosen one again clears it rather than doing nothing, so a
+                    // mis-tap is undone the same way it was made
+                    onClick = { side = if (side == option) null else option },
+                    label = { Text(option.label) },
+                    modifier = Modifier.heightIn(min = 40.dp),
+                )
+            }
+        }
+        if (sideMissing) {
+            Text(
+                "Say which side. This one is trained a limb at a time, and each side keeps " +
+                    "its own record - a set that names neither belongs to neither.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkSecondary,
+            )
+        }
+    }
     WarmupChip(warmup) { warmup = !warmup }
     SubmitButton(
         repeat = untouched,
-        enabled = (weightValue != null && weightValue > 0) || (repsValue != null && repsValue > 0),
+        enabled = !sideMissing &&
+            ((weightValue != null && weightValue > 0) || (repsValue != null && repsValue > 0)),
     ) {
         onAddSet(
             holdSetOf(
                 exercise = exercise, opDate = opDate, addedKg = weightValue, reps = repsValue,
-                warmup = warmup,
+                warmup = warmup, side = side,
             )
         )
     }
+}
+
+/** How a side is named on a chip; the enum's own code is the stored value, not a label. */
+private val HoldSide.label: String get() = when (this) {
+    HoldSide.LEFT -> "Left"
+    HoldSide.RIGHT -> "Right"
 }
 
 @Composable
