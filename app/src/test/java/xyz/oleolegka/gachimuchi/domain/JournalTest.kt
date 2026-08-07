@@ -40,9 +40,9 @@ class JournalTest {
             payloadJson.encodeToString(SetCancel(first.id)),
         )
         val events = listOf(first, cancel)
-        assertEquals(setOf(first.uid), cancelledEventUids(events))
+        assertEquals(setOf(first.uid), deletedEventUids(events))
         assertEquals(0, readActivities(events).size)
-        assertEquals(1, readActivities(events, includeCancelled = true).size)
+        assertEquals(1, readActivities(events, includeDeleted = true).size)
         assertEquals(2, events.size) // the journal itself is untouched
     }
 
@@ -73,7 +73,7 @@ class JournalTest {
             assertEquals(
                 "reversal written with number=$withNumber uid=$withUid",
                 setOf(set.uid),
-                cancelledEventUids(events),
+                deletedEventUids(events),
             )
             assertEquals(0, readActivities(events).size)
         }
@@ -94,7 +94,7 @@ class JournalTest {
             payloadJson.encodeToString(SetCancel(cancels = mine.id, cancelsUid = theirs.uid)),
         )
 
-        assertEquals(setOf(theirs.uid), cancelledEventUids(listOf(mine, theirs, confused)))
+        assertEquals(setOf(theirs.uid), deletedEventUids(listOf(mine, theirs, confused)))
     }
 
     @Test
@@ -111,7 +111,7 @@ class JournalTest {
             payloadJson.encodeToString(SetCancel(cancels = 4242)),
         )
 
-        assertEquals(emptySet<String>(), cancelledEventUids(listOf(set, empty, stray)))
+        assertEquals(emptySet<String>(), deletedEventUids(listOf(set, empty, stray)))
         assertEquals(1, readActivities(listOf(set, empty, stray)).size)
     }
 
@@ -197,7 +197,7 @@ class JournalTest {
         )
 
         // the readable reversal still counts; the unreadable one is simply not evidence
-        assertEquals(setOf(first.uid), cancelledEventUids(listOf(first, broken, real)))
+        assertEquals(setOf(first.uid), deletedEventUids(listOf(first, broken, real)))
         assertEquals(0, readActivities(listOf(first, broken, real)).size)
     }
 }

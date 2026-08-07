@@ -3,13 +3,17 @@ package xyz.oleolegka.gachimuchi.data
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.JsonObject
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
+import xyz.oleolegka.gachimuchi.domain.AMENDMENT_PROTECTED_KEYS
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
+import xyz.oleolegka.gachimuchi.domain.EntryAmended
+import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
@@ -18,11 +22,15 @@ import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.formFromEvent
+import xyz.oleolegka.gachimuchi.domain.toJsonObject
 import xyz.oleolegka.gachimuchi.domain.Workout
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
 import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
@@ -304,6 +312,12 @@ class ActivityRepository(private val db: AppDatabase) {
     /**
      * Cancels a set: the journal is append-only, so a REVERSING event is written while
      * the set itself stays in the history (the reducers exclude it).
+     *
+     * KEPT AS IT WAS, still writing the old event type, even though [deleteEntry] says the same
+     * thing about any event and is what new callers should use. Two reasons: every journal in
+     * existence is full of `set_cancel` and the readers have to understand it regardless, and a
+     * method that quietly started writing a different event type would make the rows this app
+     * wrote before and after the change distinguishable for no benefit to anyone.
      */
     suspend fun cancelSet(eventId: Long): Long =
         db.events().insert(
@@ -316,6 +330,102 @@ class ActivityRepository(private val db: AppDatabase) {
                 ),
             )
         )
+
+    // --- correcting and removing what was written (domain/Amendments.kt folds it) ---
+
+    /**
+     * Removes ANY event from every reading of the journal — a set, a workout started by
+     * mistake, an exercise added to the wrong one, or an earlier deletion.
+     *
+     * Nothing is deleted from the table: this appends an event naming the one to stop reading,
+     * and [journalView] is what turns the pair into an answer. Deleting a deletion is therefore
+     * how something comes back, and it needs no special method — this one, pointed at the
+     * deletion's own row.
+     *
+     * Returns the id of the event written, or null when [eventId] names no row here. Null
+     * rather than a throw because the only way to reach this with a stale id is a screen that
+     * was drawn before somebody removed the row, and a tap arriving one recomposition late
+     * should do nothing rather than crash.
+     */
+    suspend fun deleteEntry(eventId: Long): Long? {
+        val uid = db.events().byId(eventId)?.uid ?: return null
+        return db.events().insert(
+            EventEntity(
+                ts = now(), type = TYPE_ENTRY_DELETED,
+                payload = payloadJson.encodeToString(EntryDeleted(targetUid = uid)),
+            )
+        )
+    }
+
+    /**
+     * Corrects the values of an event already written: [fields] is a fragment of its payload
+     * carrying only what changed.
+     *
+     * ── What it refuses, and why refusing is the point ──────────────────────────
+     * Two checks, and both throw rather than writing something the readers would have to make
+     * the best of:
+     *
+     *  - a field in [AMENDMENT_PROTECTED_KEYS] — moving a set to another exercise is a deletion
+     *    and a new entry, never a correction (see [TYPE_ENTRY_AMENDED]);
+     *  - a patch that leaves the payload UNREADABLE. The merged result is parsed here, before
+     *    anything is written, exactly as the readers will parse it. Without this a correction
+     *    of "6" to "0" reps would be accepted, and the entry would then vanish from every
+     *    screen — a deletion the user never asked for, arriving disguised as an edit. Service
+     *    events ([TYPE_WORKOUT_STARTED], [TYPE_WORKOUT_EXERCISE_ADDED]) are checked the same
+     *    way against their own payload classes.
+     *
+     * Returns the id of the amendment, or null when [eventId] names no row (see [deleteEntry]).
+     */
+    suspend fun amendEntry(eventId: Long, fields: JsonObject): Long? {
+        val target = db.events().byId(eventId) ?: return null
+        val refused = fields.keys.filter { it in AMENDMENT_PROTECTED_KEYS }
+        require(refused.isEmpty()) {
+            "an amendment may not change which exercise or workout an entry belongs to: $refused"
+        }
+        require(fields.isNotEmpty()) { "an amendment with no fields corrects nothing" }
+        // parsed exactly as a reader would, so a patch that would make the entry unreadable
+        // fails here instead of making it disappear later
+        checkAmendedPayload(target.type, target.payload, fields)
+        return db.events().insert(
+            EventEntity(
+                ts = now(), type = TYPE_ENTRY_AMENDED,
+                payload = payloadJson.encodeToString(
+                    EntryAmended(targetUid = target.uid, fields = fields)
+                ),
+            )
+        )
+    }
+
+    /**
+     * Corrects an activity entry from the whole form the editor is holding.
+     *
+     * The convenience the screens will actually use: an edit dialog has a filled-in form, not a
+     * diff. The protected keys are STRIPPED rather than refused here — the form necessarily
+     * carries the exercise it belongs to, and making every caller remove it by hand would be a
+     * rule enforced by remembering it. What that means in one sentence: the values and the date
+     * of [updated] are applied, and the exercise it names is ignored.
+     */
+    suspend fun amendEntry(eventId: Long, updated: ActivityForm): Long? {
+        val fields = JsonObject(updated.toJsonObject().filterKeys { it !in AMENDMENT_PROTECTED_KEYS })
+        return amendEntry(eventId, fields)
+    }
+
+    /**
+     * Throws unless the target's payload survives the patch. Sets are checked through
+     * [formFromEvent], which is the reader; the two service events have no entry there and are
+     * checked against the classes their own readers use.
+     */
+    private fun checkAmendedPayload(type: String, payload: String, fields: JsonObject) {
+        val base = payloadJson.parseToJsonElement(payload) as? JsonObject
+            ?: throw IllegalArgumentException("event $type has no readable payload to amend")
+        val merged = JsonObject(LinkedHashMap(base).apply { putAll(fields) })
+        val text = payloadJson.encodeToString(JsonObject.serializer(), merged)
+        when (type) {
+            TYPE_WORKOUT_STARTED -> payloadJson.decodeFromString<WorkoutStarted>(text)
+            TYPE_WORKOUT_EXERCISE_ADDED -> payloadJson.decodeFromString<WorkoutExerciseAdded>(text)
+            else -> formFromEvent(type, text)
+        }
+    }
 
     // --- exercise catalog (§11) ---
 

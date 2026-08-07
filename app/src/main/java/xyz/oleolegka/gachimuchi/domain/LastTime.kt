@@ -46,12 +46,15 @@ fun lastTimeOf(
     onOrBefore: String? = null,
     excludingWorkoutId: Long? = null,
 ): LastTime? {
+    // through the funnel, like every other reader: a workout that has been deleted is not a
+    // workout whose sets should still be held back from "last time"
+    val journal = liveEvents(events)
     // resolved to the START ROW rather than compared as a number, because that is the only
     // form WorkoutRef.matches accepts — a row carrying a uid must not be judged by its number
     val start = excludingWorkoutId?.let { id ->
-        events.firstOrNull { it.id == id && it.type == TYPE_WORKOUT_STARTED }
+        journal.firstOrNull { it.id == id && it.type == TYPE_WORKOUT_STARTED }
     }
-    val done = readActivities(events, dateTo = onOrBefore)
+    val done = readActivities(journal, dateTo = onOrBefore)
         .filter { entry -> entry.form.exerciseLink()?.matches(exercise) == true }
         .filter { entry -> start == null || entry.workout?.matches(start) != true }
 

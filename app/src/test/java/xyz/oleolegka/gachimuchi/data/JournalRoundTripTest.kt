@@ -351,7 +351,7 @@ class JournalRoundTripTest {
         assertEquals(readActivities(before).size - 6, readActivities(after).size)
         assertEquals(19 - 6, buildSession(after, day).setCount)
         // and they are still in the history, for anyone who asks for them
-        assertEquals(readActivities(before).size, readActivities(after, includeCancelled = true).size)
+        assertEquals(readActivities(before).size, readActivities(after, includeDeleted = true).size)
     }
 
     @Test
