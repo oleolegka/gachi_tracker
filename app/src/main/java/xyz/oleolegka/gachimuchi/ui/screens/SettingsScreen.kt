@@ -33,8 +33,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.data.DeviceStore
 import xyz.oleolegka.gachimuchi.data.GalleryStore
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.CelebrationPicture
@@ -63,6 +65,7 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 fun SettingsScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val gallery = remember(context) { GalleryStore.get(context) }
+    val deviceId = remember(context) { DeviceStore(context).deviceId }
     val pictures by gallery.pictures.collectAsStateWithLifecycle()
     val mode by gallery.mode.collectAsStateWithLifecycle()
     val colors = LocalGachiColors.current
@@ -159,6 +162,37 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 gallery = gallery,
                 onDelete = { gallery.remove(picture.id) },
                 onToggleRecord = { gallery.setForRecords(picture.id, !picture.forRecords) },
+            )
+        }
+
+        item {
+            Text(
+                "This device",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            /*
+             * Shown rather than kept hidden because it is the thing an exported journal will
+             * be stamped with, and the only way to tell two of this app's files apart once
+             * there are two phones. There is nothing to do with it here on purpose: it is not
+             * editable (an id that can be changed is not an id) and it is not a setting.
+             */
+            Text(
+                deviceId,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        item {
+            Text(
+                "Names this installation, and nothing outside it. It is not tied to the phone " +
+                    "and does not survive the app being removed.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
             )
         }
     }

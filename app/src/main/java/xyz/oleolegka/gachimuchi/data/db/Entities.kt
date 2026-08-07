@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.data.db
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import xyz.oleolegka.gachimuchi.domain.newUid
 
 /**
  * Local storage schema — a mirror of the server one (`bot/db.py`), so that future sync
@@ -17,6 +18,17 @@ import androidx.room.PrimaryKey
  * The catalog [ExerciseEntity], the slots [SlotEntity] and the composition of a slot
  * [SlotExerciseEntity] are NOT part of the journal: they are editable reference data and the
  * plan (§12-B explicitly allows editing the plan).
+ *
+ * ── Every stored row carries a `uid`, and the numeric `id` is local plumbing ─────
+ * `id` is an autoincrement: a count of how many rows THIS phone has written. It is fine as
+ * a row address inside one database and useless as an identity anywhere else, because a
+ * second device hands out the same numbers to entirely different training. `uid` (schema
+ * version 8, a UUIDv7 — see [newUid]) is the identity that travels: it is what a merge of
+ * two journals matches on, and what an exported file refers to.
+ *
+ * The rule that follows: anything one row says about another row is said in uids. The
+ * numeric columns that predate version 8 are kept alongside for as long as there are
+ * readers on them, and they are the thing to remove, never the thing to add to.
  *
  * `space_id` (the profile) is present everywhere, exactly as on the server:
  * multi-tenancy is preserved in the schema even though the app has exactly one profile
@@ -36,7 +48,10 @@ const val LOCAL_AUTHOR_ID = 1L
 
 @Entity(
     tableName = "events",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
 )
 data class EventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -67,6 +82,8 @@ data class EventEntity(
      * sides and has nothing to stay compatible with.
      */
     @androidx.room.ColumnInfo(name = "workout_id") val workoutId: Long? = null,
+    /** Stable identity of this event across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
 
 /**
@@ -82,7 +99,10 @@ data class EventEntity(
  */
 @Entity(
     tableName = "exercises",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
 )
 data class ExerciseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -124,6 +144,8 @@ data class ExerciseEntity(
      * everywhere else rather than freezing today's guess into every existing row.
      */
     @androidx.room.ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    /** Stable identity of this exercise across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
 
 /**
@@ -143,7 +165,10 @@ data class ExerciseEntity(
  */
 @Entity(
     tableName = "programs",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
 )
 data class ProgramEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -169,6 +194,8 @@ data class ProgramEntity(
      * in domain/Program.kt for why that trade was made.
      */
     val category: String = "",
+    /** Stable identity of this program across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
 
 /**
@@ -227,7 +254,10 @@ data class ProgramBlockEntity(
 /** A master slot of the planning calendar (§12-B). Occurrences are computed, not stored. */
 @Entity(
     tableName = "slots",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
 )
 data class SlotEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -238,6 +268,8 @@ data class SlotEntity(
     @androidx.room.ColumnInfo(name = "repeat_rule") val repeatRule: String,
     @androidx.room.ColumnInfo(name = "anchor_date") val anchorDate: String,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
+    /** Stable identity of this slot across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
 
 /**
@@ -263,7 +295,10 @@ data class SlotEntity(
  */
 @Entity(
     tableName = "slot_exercises",
-    indices = [Index(value = ["slot_id"])],
+    indices = [
+        Index(value = ["slot_id"]),
+        Index(value = ["uid"], unique = true),
+    ],
     foreignKeys = [
         androidx.room.ForeignKey(
             entity = SlotEntity::class,
@@ -280,4 +315,6 @@ data class SlotExerciseEntity(
     val position: Int,
     /** Rest between sets of this exercise IN THIS SESSION, or null for "the usual one". */
     @androidx.room.ColumnInfo(name = "rest_sec") val restSec: Int? = null,
+    /** Stable identity of this planned line across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
