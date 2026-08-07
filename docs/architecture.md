@@ -129,15 +129,41 @@ What the timer owes at a given instant — a boundary signal, a countdown tick, 
 is a pure function of the step list, the run state and the monotonic clock, so the timing of
 the signals is tested on the JVM rather than only heard on a phone.
 
-The rule that function exists to enforce: a tick is only made STRICTLY INSIDE a step. On a
-step three seconds long the "three" tick would otherwise fall on the moment the step begins,
-and since the tone generator plays one tone at a time and the vibrator one waveform at a
-time, the tick would cut the boundary signal off. On 7:3 repeaters that silenced the change
-of step at every rest.
+The rule that function exists to enforce: a tick may not land on a boundary signal. The tone
+generator plays one tone at a time and the vibrator one waveform at a time, so a tick inside
+a boundary does not mix with it, it replaces it — and on 7:3 repeaters that silenced the
+change of step at every three-second rest.
+
+Two things are measured, and they are separate rules because they fail separately:
+
+- **A tick keeps clear of the moment the boundary signal was really made**, not of the moment
+  the step nominally began. Those are the same thing only when the boundary was noticed on
+  time. A boundary can be noticed late — the alarm is delivered a second after the moment, or
+  the coroutine oversleeps — and the run is then settled onto a step that is already part-way
+  through, which used to make a tick due immediately, milliseconds after the beep.
+- **A tick more than a quarter of a second late is dropped rather than made late.** The loop
+  sleeps to the exact moment a tick is due and a sleep can overrun; firing it wherever the
+  loop happened to wake put "two" 900 ms late and "one" a tenth of a second after it, which
+  is a countdown that stutters rather than one that counts.
 
 For the same reason the signal is fired before the state is persisted and the notification
 redrawn, not after: those involve a synchronous disk write, and a beep queued behind one
 arrives after the step it announces.
+
+## One boundary makes one signal, and two threads reach it
+
+The countdown coroutine runs on a background dispatcher; the alarm and the notification
+buttons arrive on the main thread. The alarm is armed at the end of the current step and
+fires whether or not the process is alive, so **every** boundary of a live run is handled
+twice, once from each side, within milliseconds of itself. The backstop is never demoted
+while the first line is working.
+
+What keeps that from being heard is a record of which step has already been signalled — a
+read followed by a write, which two threads cannot do to one field and get one answer. So
+the timer holds a single lock over all of it, the same way the rest floors already do. The
+three methods a floor calls back into stay outside that lock, because the timer takes the
+floors' monitor while holding it and locking both ways round is a deadlock rather than a
+race.
 
 ## A finished run offers to log itself, and never logs by itself
 
@@ -409,3 +435,18 @@ the search, or create the exercise.
   copy is not implemented: a workout started from a plan arrives empty and is filled in as
   it goes. Which rest wins when the slot names one and the catalog remembers another is
   still open.
+- **A rest floor can beep over the end-of-program chime, on one path only.** When the app is
+  rebuilt from disk and the run it finds turns out to have already finished, the floors are
+  taken up afterwards with no conductor — so the silent-summary hand-off that a normally
+  ending run performs is skipped, and a rest that matured within the last few seconds sounds
+  on top of the finish signal. It needs the process to have died mid-set, and the fix is
+  entangled with the order in which floors are settled onto the current boot's clock, so it
+  is written down rather than patched.
+- **A three-second rest counts "two, one" and not "three".** Deliberate: the "three" would
+  land on the moment the rest begins and silence the boundary beep. It does mean a 7:3 set
+  is heard as three ticks on the hang and two on the rest, which reads as a missing tick if
+  you are listening for symmetry.
+- **A live boundary is processed twice**, once by the countdown coroutine and once by the
+  backstop alarm. Only the first makes a signal, but the second still settles the state,
+  writes it to disk and redraws the notification — duplicated work at every step of a 7:3
+  protocol. Correct, and not free.
