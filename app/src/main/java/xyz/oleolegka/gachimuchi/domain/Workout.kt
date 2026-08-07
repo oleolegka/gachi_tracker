@@ -157,7 +157,7 @@ fun JournalEvent.workoutExerciseAddedOrNull(): WorkoutExerciseAdded? =
  * workout, and those sets are the training. It degrades to "dated by its write time, started
  * from no slot", which is what an older or hand-edited row would have meant anyway.
  */
-private fun workoutStarts(events: List<JournalEvent>): List<Pair<JournalEvent, WorkoutStarted?>> =
+internal fun workoutStarts(events: List<JournalEvent>): List<Pair<JournalEvent, WorkoutStarted?>> =
     events.filter { it.type == TYPE_WORKOUT_STARTED }
         .map { it to runCatching { payloadJson.decodeFromString<WorkoutStarted>(it.payload) }.getOrNull() }
 

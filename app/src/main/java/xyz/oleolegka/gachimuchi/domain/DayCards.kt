@@ -114,14 +114,19 @@ data class DayCards(
  *
  *  - a workout on this day that was STARTED FROM IT ([Workout.slot]), which is the exact link
  *    §13.7 introduced and needs no guessing;
- *  - the existing time-based match (domain/Schedule.kt), untouched, which is how a slot
- *    gets closed by sets logged without anyone pressing "start".
+ *  - the plan/fact verdict (domain/Schedule.kt), which closes the slot outright once anything
+ *    was recorded — by that same link where there is one, and by clock proximity for entries
+ *    logged without anyone pressing "start".
  *
- * The second one is why a plan does not end up shown twice next to the workout that
- * fulfilled it. It is a heuristic and stays one: a workout started off-plan near the
- * planned time will absorb the slot, and a workout started far from it will leave the slot
- * on the list with a Start button beside the workout that arguably already did it. That is
- * the same heuristic the calendar's colours have always used, so at least the two agree.
+ * The two overlap almost entirely now that the verdict reads the link as well, and the first
+ * one is kept for the case the second cannot cover: a workout started from a plan with NOTHING
+ * logged into it yet. The calendar sees entries, so it has nothing to close the slot with and
+ * rightly leaves it outstanding — but the day screen would then show the plan next to the very
+ * workout that is answering it.
+ *
+ * What is left of the guess: a workout started OFF-PLAN near a planned time will still absorb
+ * that slot, and a set of push-ups still counts against a planned gym session. That is the
+ * same heuristic the calendar's colours use, so the two agree.
  */
 fun dayCards(
     events: List<JournalEvent>,

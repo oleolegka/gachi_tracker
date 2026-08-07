@@ -165,11 +165,16 @@ on stop counting as missed.
 Nothing in the journal is touched by any of it. What you actually did is a separate,
 append-only record, and the plan is only ever compared against it.
 
-## Plan versus fact is judged per slot, by the clock
+## Plan versus fact is judged per slot: by the link when there is one, by the clock otherwise
 
-A journal entry carries no link to a planned session — nothing ever asks "which of today's
-two sessions was that?" — so the calendar infers the link from the time it was written. The
-rule is fixed rather than clever, because a verdict has to be predictable:
+A workout started from a planned session records which one, and such a slot is closed by
+that workout and by nothing else — no window, no proximity, no competition with the day's
+other slots. That is a statement the user made by pressing start on the plan's own card, and
+it is asked before anything else.
+
+Everything logged WITHOUT pressing start names no session, and for that the calendar still
+infers the link from the time the entry was written. The rule is fixed rather than clever,
+because a verdict has to be predictable:
 
 - an entry closes a slot if it was written between 30 minutes before its time and 3 hours
   after it; of all possible pairs the closest is taken first, then the next;
@@ -189,9 +194,24 @@ The cost of being honest about it: logging a session hours away from the time it
 planned for now leaves the slot missed and the entry unplanned, where the old day-level
 rule counted the whole day as done. That is the same information the old rule was hiding.
 
-A workout STARTED FROM a slot carries its id, and that link beats the heuristic: the plan
-stops offering to be started because something says outright that it was. The heuristic
-stays for everything logged without pressing start, which is still allowed.
+Three places where the link and the old guess give different answers, all of them decided in
+favour of the link:
+
+- a workout started from a slot and recorded hours away from its time now closes it, where
+  the guess left the slot missed and the sets unplanned. The "window has not opened" rule
+  does not apply to it either — sets logged at noon close an eight-in-the-evening session
+  that they were started from;
+- two workouts started from the same slot close it once, the first in the day's order. One
+  slot is one session; the second workout is unplanned training on a day that had a plan;
+- a workout naming a slot that is not on the day (deleted, its rule edited, or a journal
+  merged in from another phone) closes nothing, and it is NOT handed back to the guess —
+  otherwise "this was Tuesday's gym" could end up closing Tuesday's hangboard. The cost is
+  the one deleting a slot already warns about: removing a plan un-plans the days it sat on,
+  so a day that read as done goes back to reading as merely trained.
+
+A workout that was started from a slot and then had nothing logged into it closes nothing
+either — there is no entry to close it with. The day screen still hides such a plan behind
+the workout card by its own rule, so it is not offered to be started twice.
 
 ## Celebration pictures are yours and are copied in
 
@@ -324,9 +344,10 @@ the search, or create the exercise.
 
 ## Known limits
 
-- **A slot is matched to an entry by the clock, never by what was trained.** Nothing links
-  a workout to the session it belonged to, so a gym slot is closed by whatever was logged
-  near its time — a set of push-ups counts against it just as well.
+- **A slot with nothing started from it is matched to an entry by the clock, never by what
+  was trained.** A workout started from the plan's own card says which session it was and is
+  believed; anything logged without pressing start still closes whichever slot it was
+  written near, so a set of push-ups counts against a gym slot just as well.
 - **Strength volume is tonnage** (weight times reps). Sets done at body weight contribute
   zero, so a mixed history understates the bars.
 - **The activity heatmap counts distinct exercises per day**, not events. Counting events
