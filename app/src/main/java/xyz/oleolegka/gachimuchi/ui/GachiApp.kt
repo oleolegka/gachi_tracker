@@ -153,7 +153,6 @@ fun GachiApp(viewModel: MainViewModel) {
     )
     val timerActions = TimerActions(
         enable = viewModel::enableTimer,
-        startRest = { viewModel.startRest(activeExerciseId) },
         pause = viewModel::pauseTimer,
         resume = viewModel::resumeTimer,
         skip = viewModel::skipStep,

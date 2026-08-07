@@ -35,6 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.RecordHit
+import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
@@ -52,7 +53,6 @@ import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
-import xyz.oleolegka.gachimuchi.domain.restProgram
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsByExerciseId
@@ -176,13 +176,21 @@ class MainViewModel(
     /**
      * Appends a set to the journal. One event = one set; nothing is ever updated.
      *
-     * This is also where the rest timer starts, because recording a set is the moment the
-     * rest begins — asking the user to then press a second button would mean the countdown
-     * always starts a few seconds late, and those seconds are the whole point of measuring
-     * it. Only set-based forms trigger it (see [startsRest]); a weigh-in does not.
+     * This is also where the rest starts, because recording a set is the moment the rest
+     * begins — asking the user to then press a second button would mean the countdown always
+     * starts a few seconds late, and those seconds are the whole point of measuring it. Only
+     * set-based forms trigger it (see [startsRest]); a weigh-in does not.
      *
-     * The duration is resolved AFTER the write, so the gap that has just been measured
-     * (the pause before this very set) is part of what the offer is based on.
+     * ── It starts a FLOOR, not a run ────────────────────────────────────────────
+     * It used to start a one-step program on the conductor, which meant recording a set of
+     * abs cancelled the rest that was counting on the bench — one countdown existed and the
+     * newest owner took it. A superset is the ordinary case for this app and that behaviour
+     * made it unusable. Now each exercise gets its own floor (domain/Floors.kt), they run
+     * side by side, and starting one for an exercise that already has one replaces only that
+     * one.
+     *
+     * The duration is resolved AFTER the write, so the gap that has just been measured (the
+     * pause before this very set) is part of what the offer is based on.
      */
     fun addSet(form: ActivityForm, attachToWorkout: Boolean = true) {
         viewModelScope.launch {
@@ -204,8 +212,20 @@ class MainViewModel(
              * own, not this class's idea of today, so the rule holds however stale that is.
              */
             val live = form.opDate == LocalDate.now().toString()
-            if (live && timer.enabled.value && settings.autoStartRest && startsRest(form)) {
-                startRest(form.exerciseId)
+            /*
+             * A floor belongs to an exercise: it is drawn under that exercise's card and it
+             * says that exercise's name out loud. A set recorded against nothing has nowhere
+             * to put one, so it gets none rather than a nameless bar. In practice the two
+             * forms that reach here always carry an exercise; the branch is here so that a
+             * form which one day does not cannot produce a floor called "null".
+             */
+            val exerciseId = form.exerciseId
+            if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
+                timer.floors.start(
+                    exerciseId = exerciseId,
+                    exerciseName = repo.exercise(exerciseId)?.name ?: "Rest",
+                    orderedMs = resolveRestSec(settings, repo.allEvents(), exerciseId) * 1000L,
+                )
             }
         }
     }
@@ -411,14 +431,22 @@ class MainViewModel(
     fun restSourceFor(exerciseId: Long?): String =
         restSourceLabel(timerSettings.value, state.value.events, exerciseId)
 
-    /** Starts a single pause. Its length comes from the settings and from the journal. */
-    fun startRest(exerciseId: Long?) {
-        viewModelScope.launch {
-            val events = repo.allEvents()
-            val seconds = resolveRestSec(timerSettings.value, events, exerciseId)
-            timer.start(restProgram(seconds), exerciseId, RunOrigin.REST)
-        }
-    }
+    // --- the rests between sets, which run in parallel ---------------------------------
+    //
+    // Forwarded, not owned, for the same reason the run is: a rest has to keep counting when
+    // no ViewModel exists, and it survives the process being killed. domain/Floors.kt has the
+    // rules; timer/FloorController.kt runs them.
+
+    /** Every rest the app is keeping, for the bars under the exercise cards. */
+    val restFloors: StateFlow<List<RestFloor>> = timer.floors.floors
+
+    /** The line about rests that matured while a protocol had them muted, or null. */
+    val floorSummary: StateFlow<String?> = timer.floors.summary
+
+    fun dismissFloorSummary() = timer.floors.clearSummary()
+
+    /** Takes one rest bar off, by hand. */
+    fun dismissFloor(exerciseId: Long) = timer.floors.dismiss(exerciseId)
 
     /**
      * The one-tap program for a hangboard exercise: its work:rest protocol is already on

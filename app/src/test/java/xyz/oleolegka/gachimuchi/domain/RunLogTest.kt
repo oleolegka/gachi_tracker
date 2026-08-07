@@ -140,21 +140,30 @@ class RunLogTest {
         assertEquals(listOf(6, 6, 2), outcome.sets.map { it.reps })
     }
 
+    /**
+     * The old `RunOrigin.REST` case, kept as the record of what replaced it.
+     *
+     * A one-step program that ran to the end DOES now offer to be logged, and that is not a
+     * regression: the reason it used to be excluded was that the app started such a program
+     * for every rest between sets, so the offer would have been about a pause rather than
+     * about training. Nothing starts one any more — a rest is a floor (domain/Floors.kt) and
+     * never becomes a run — so a one-step run reaching this file is a workout of one effort,
+     * which is exactly what the offer is for.
+     */
     @Test
-    fun `a rest between sets is never offered, even though it carries an exercise`() {
+    fun `a one-step run that completed its effort is offered like any other`() {
         val rest = restProgram(150)
         val restSteps = rest.flatten()
         val snapshot = RunSnapshot(
             programId = 0, programName = rest.name, steps = restSteps,
             state = RunState(stepIndex = 0, running = false, finished = true),
-            bootRef = 0, exerciseId = hangs.id, origin = RunOrigin.REST,
+            bootRef = 0, exerciseId = hangs.id, origin = RunOrigin.EXERCISE,
         )
 
         val outcome = runOutcome(snapshot, now = 0)
 
-        // it does expand into one work step, which is exactly why the origin has to be stored
         assertEquals(1, outcome.sets.size)
-        assertFalse(outcome.offersLogging)
+        assertTrue(outcome.offersLogging)
     }
 
     @Test
@@ -292,17 +301,26 @@ class RunLogTest {
         assertEquals("2026-08-05", outcome.opDate)
     }
 
+    /**
+     * A one-step run the reboot caught mid-step salvages nothing, and it is worth keeping a
+     * test on that now that the origin no longer excludes anything: what stops this being
+     * raised is that NOTHING WAS COMPLETED — the only step is the one the run was standing
+     * on — and not a flag saying it was a rest.
+     */
     @Test
-    fun `a rest between sets is not salvaged across a reboot either`() {
+    fun `a one-step run interrupted inside its only step is not salvaged`() {
         val rest = restProgram(150)
         val restSteps = rest.flatten()
         val snapshot = RunSnapshot(
             programId = 0, programName = rest.name, steps = restSteps,
             state = RunState(stepIndex = 0, running = true, stepEndAtMs = 150_000),
-            bootRef = eveningWallMs, exerciseId = hangs.id, origin = RunOrigin.REST,
+            bootRef = eveningWallMs, exerciseId = hangs.id, origin = RunOrigin.EXERCISE,
         )
 
-        assertFalse(salvagedOutcome(snapshot, zone = utc).offersLogging)
+        val salvaged = salvagedOutcome(snapshot, zone = utc)
+
+        assertTrue(salvaged.sets.isEmpty())
+        assertFalse(salvaged.offersLogging)
     }
 
     @Test

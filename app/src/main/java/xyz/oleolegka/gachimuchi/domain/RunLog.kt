@@ -22,11 +22,16 @@ import java.time.ZoneId
  * the ordinary repository. A timer that silently logged sets you did not do would poison
  * the only record of what was actually trained, and the personal records computed from it.
  *
- * ── Every run except a rest, and why that changed ───────────────────────────────
- * [RunOrigin] is what tells a rest apart from a workout, and it has to be recorded when the
- * run starts rather than guessed afterwards: a rest between sets is also "a program with an
- * exercise_id" (see [restProgram]), and its single step is also a WORK step. Guessing from
- * the shape would offer to log a rest as a set of one.
+ * ── Every run, now that a rest is not one ───────────────────────────────────────
+ * [RunOrigin] used to carry a third value, REST, for the case that had to be kept out of the
+ * offer: a rest between sets was itself a run — a one-step program with an exercise_id and a
+ * single WORK step — so nothing about its shape distinguished it, and without the recorded
+ * origin the app would have offered to log a two-minute pause as a set of one.
+ *
+ * That value is gone because the thing it described is gone. A rest between sets is a FLOOR
+ * now (domain/Floors.kt): several run at once, none of them is a run, and none of them ever
+ * reaches this file. What is left in [RunOrigin] is the distinction that still does work —
+ * whether the run knows which exercise it trained.
  *
  * The offer used to be narrower still — only [RunOrigin.EXERCISE], a program generated on
  * the spot from a catalog row. That silently excluded the ordinary case: a protocol saved
@@ -53,16 +58,20 @@ import java.time.ZoneId
  * shown before anything is written.
  */
 
-/** Where a run came from. Decides whether finishing it is worth offering to log. */
+/**
+ * Where a run came from, and therefore whether it knows which exercise it trained.
+ *
+ * A third value, REST, was removed along with the single-rest run it described — see the
+ * note at the top of this file. An old snapshot on disk that still names it fails to parse
+ * and is dropped by the store, which is the same handling any format change gets and costs
+ * at most one interrupted countdown on the update that introduces it.
+ */
 enum class RunOrigin {
     /** A saved program, run from the timer screen. Belongs to no exercise. */
     PROGRAM,
 
     /** Generated from a catalog exercise ([programFromExercise]): the case that can be logged. */
     EXERCISE,
-
-    /** A single pause between sets ([restProgram]). Nothing to log — the set is already written. */
-    REST,
 }
 
 /**
@@ -171,12 +180,16 @@ data class RunOutcome(
     @SerialName("op_date") val opDate: String = "",
 ) {
     /**
-     * Whether this run is worth interrupting the user about. A rest is silent (the set it
-     * follows is already written), and so is a run that completed no effort at all. Anything
-     * else is a workout that happened, whether or not it knows which exercise it was.
+     * Whether this run is worth interrupting the user about. A run that completed no effort
+     * at all is silent; anything else is a workout that happened, whether or not it knows
+     * which exercise it was.
+     *
+     * This used to also exclude [RunOrigin.REST], which was the whole reason the origin was
+     * recorded. Rests are floors now and never become a run, so the count of completed
+     * efforts is the only test left.
      */
     val offersLogging: Boolean
-        get() = origin != RunOrigin.REST && sets.isNotEmpty()
+        get() = sets.isNotEmpty()
 
     /** Whether the offer is about something that just happened, or about a run found later. */
     fun isFresh(nowWallMs: Long): Boolean =

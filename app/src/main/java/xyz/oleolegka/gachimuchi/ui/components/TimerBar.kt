@@ -39,9 +39,18 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  *
  * The row has three shapes, and only one of them is ever on screen:
  *  - the timer has not been switched on, so it offers to switch on;
- *  - nothing is running, so it offers the rest and, for a hangboard exercise, the whole
- *    protocol as a program;
+ *  - nothing is running, so it states what a rest for this exercise will be and, for a
+ *    hangboard exercise, offers the whole protocol as a program;
  *  - something is running, so it counts down and carries the controls.
+ *
+ * ── The rest is not started from here any more ──────────────────────────────────
+ * There used to be a "Start rest" button in the idle row. It started a one-step run on the
+ * conductor, which is a single countdown, so a rest for the abs cancelled the rest on the
+ * bench — and it asked the user to press a button for something the app already knows has
+ * happened. Rests are now floors: one per exercise, started by recording the set, drawn as a
+ * bar under that exercise's card. What survives here is the SENTENCE — how long the next
+ * rest will be and where that number came from — because that is the part the user was
+ * reading before pressing the button.
  */
 @Composable
 fun TimerBar(
@@ -72,7 +81,6 @@ fun TimerBar(
                 state.run == null -> IdleRow(
                     state = state,
                     exercise = exercise,
-                    onStartRest = actions.startRest,
                     onStartProgram = onStartExerciseProgram,
                 )
 
@@ -82,12 +90,11 @@ fun TimerBar(
     }
 }
 
-/** Nothing is counting: what a tap would start, and what it would be based on. */
+/** No protocol is running: how long the next rest will be, and what a tap would start. */
 @Composable
 private fun IdleRow(
     state: TimerUiState,
     exercise: ExerciseRef?,
-    onStartRest: () -> Unit,
     onStartProgram: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
@@ -118,7 +125,6 @@ private fun IdleRow(
                 Text("Start ${exercise.protocol!!.first.toInt()}:${exercise.protocol!!.second.toInt()}")
             }
         }
-        TextButton(onClick = onStartRest) { Text("Start rest") }
     }
 }
 

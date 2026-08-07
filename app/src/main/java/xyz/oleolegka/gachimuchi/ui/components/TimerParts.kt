@@ -58,10 +58,16 @@ data class TimerUiState(
     val restSource: String,
 )
 
-/** The commands a screen can issue. Grouped so a screen takes one parameter, not ten. */
+/**
+ * The commands a screen can issue. Grouped so a screen takes one parameter, not ten.
+ *
+ * There is no "start a rest" here any more. A rest is no longer a run on the conductor that
+ * a button starts and that the next rest cancels: it is a floor, one per exercise, started
+ * by the act of recording a set (domain/Floors.kt, timer/FloorController.kt). The button
+ * that used to start one had nothing left to do that logging the set does not do sooner.
+ */
 data class TimerActions(
     val enable: () -> Unit,
-    val startRest: () -> Unit,
     val pause: () -> Unit,
     val resume: () -> Unit,
     val skip: () -> Unit,

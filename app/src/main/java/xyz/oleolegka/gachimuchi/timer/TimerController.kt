@@ -25,6 +25,7 @@ import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.RunPhase
 import xyz.oleolegka.gachimuchi.domain.RunSnapshot
+import xyz.oleolegka.gachimuchi.domain.SIGNAL_LATENESS_MS
 import xyz.oleolegka.gachimuchi.domain.StepKind
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.WorkoutStep
@@ -77,6 +78,15 @@ import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
  * [SystemClock.elapsedRealtime] only — monotonic, unaffected by time zones or the user
  * changing the clock, and it keeps running while the device is asleep. Nothing counts
  * ticks; see domain/Runner.kt.
+ *
+ * ── This is the CONDUCTOR, and it is not the only countdown any more ────────────
+ * Exactly one run exists at a time and it owns the screen, the speaker and the wake lock,
+ * because its instructions are orders that are ruined by being late. The rests BETWEEN sets
+ * are a different kind of thing — several at once, one per exercise, each merely saying "not
+ * before" — and they live in [floors], which this class owns and drives. domain/Floors.kt
+ * states the asymmetry in full. The three points where the two meet are all in this file:
+ * a run starting mutes the floors, a run ending releases them, and the two must never arm
+ * the same alarm.
  */
 class TimerController internal constructor(context: Context) {
     /*
@@ -93,6 +103,24 @@ class TimerController internal constructor(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val speaker = Speaker(app)
+
+    /**
+     * The parallel rests. Owned here rather than standing beside this class, because the one
+     * race a floor cannot close by itself is a conductor starting while a floor is deciding
+     * whether to sound — see the ownership note at the top of FloorController.
+     *
+     * Declared after [signals] and [speaker] so the property initialisers run in an order
+     * that has both of them built by the time this one asks for them.
+     */
+    val floors = FloorController(
+        context = app,
+        signals = signals,
+        settings = store.settings,
+        // said out loud only when announcements are on, and APPENDED rather than flushed, so
+        // it queues behind "Done" instead of erasing it. See Speaker.speak.
+        announce = { text -> if (store.settings.value.speak) speaker.speak(text, replacing = false) },
+    )
+
     val settings get() = store.settings
     val enabled get() = store.enabled
 
@@ -132,13 +160,28 @@ class TimerController internal constructor(context: Context) {
 
     init {
         restore()
+        /*
+         * The floors are taken up only now, and with an answer to "is a conductor running?"
+         * that is only knowable once [restore] has finished. Doing it inside FloorController's
+         * own constructor would mean settling and arming against a process that is about to
+         * rebuild a run from disk — and a floor that matured while the phone was off would
+         * beep over the protocol being restored around it.
+         */
+        floors.takeUp(conductorRunning = _run.value != null)
     }
 
     // --- what the screens call ---------------------------------------------------------
 
     fun setEnabled(value: Boolean) {
         store.setEnabled(value)
-        if (value) prepareSpeech() else stop()
+        if (value) {
+            prepareSpeech()
+        } else {
+            stop()
+            // and the rests go with it: a timer switched off that keeps buzzing about a bench
+            // twenty minutes later is the switch not meaning what it says
+            floors.clearAll()
+        }
     }
 
     /**
@@ -169,6 +212,14 @@ class TimerController internal constructor(context: Context) {
     ) {
         val steps = program.flatten()
         if (steps.isEmpty()) return
+        /*
+         * FIRST, before any state exists. A floor checks whether a conductor is running at
+         * the instant it is about to sound, and it has no way to see one that starts a
+         * hundred milliseconds later — so the mute has to be in place before this method
+         * builds anything. Doing it after the snapshot, or leaving FloorController to notice
+         * the run appearing, both leave that window open.
+         */
+        floors.conductorStarted()
         val now = SystemClock.elapsedRealtime()
         signalledStep = -1
         lastTickSecond = -1
@@ -231,6 +282,8 @@ class TimerController internal constructor(context: Context) {
         releaseSignalsAfterTheirTail()
         TimerNotifications.cancelAll(app)
         app.stopService(Intent(app, TimerService::class.java))
+        // last, so the floors are released against a state where no conductor exists any more
+        floors.conductorStopped()
     }
 
     /** Re-reads the clock and redraws, without changing anything. */
@@ -362,6 +415,13 @@ class TimerController internal constructor(context: Context) {
             loop = null
             _run.value = null
             app.stopService(Intent(app, TimerService::class.java))
+            /*
+             * After [fireFinish], deliberately. That is where "Done" is spoken, and it is
+             * spoken with a flush; the floor summary asks to be appended, so putting the
+             * release afterwards is what fixes the order instead of leaving it to whichever
+             * of the two reaches the engine first.
+             */
+            floors.conductorStopped()
             return
         }
 
@@ -421,6 +481,10 @@ class TimerController internal constructor(context: Context) {
      * A moment of zero or in the future counts as now: that is a run being driven by hand
      * (start, skip, back), where the user is holding the phone and the signal is the answer
      * to a button they just pressed.
+     *
+     * The window itself is [SIGNAL_LATENESS_MS] in domain/Floors.kt, and it is shared rather
+     * than copied: the rest floors apply the identical rule for the identical reason, and two
+     * copies of one number is a divergence waiting for the first person who tunes it.
      */
     private fun isMomentNow(momentMs: Long): Boolean {
         if (momentMs <= 0) return true
@@ -631,6 +695,11 @@ class TimerController internal constructor(context: Context) {
     }
 
     companion object {
+        /**
+         * The conductor's alarm. [cancelAlarm] fires against it on every application of run
+         * state, so anything else in this app that arms an alarm must NOT use this code —
+         * see FloorController.alarmIntent, which explains what sharing it would cost.
+         */
         private const val ALARM_REQUEST = 7001
         private const val WAKE_LOCK_TAG = "gachimuchi:workout-timer"
 
@@ -645,16 +714,6 @@ class TimerController internal constructor(context: Context) {
 
         /** Even a very long program cannot hold the CPU for more than this. */
         private const val MAX_WAKE_LOCK_MS = 3 * 60 * 60 * 1000L
-
-        /**
-         * How late a step boundary may be and still be worth a signal — see [isMomentNow].
-         *
-         * Five seconds is chosen to sit above the worst case of the mechanism that has to
-         * keep working (an exact alarm waking a dead process, which is a broadcast and a
-         * controller construction, and takes well under a second even on a cold start) and
-         * far below the shortest gap that could plausibly be a person picking the phone up.
-         */
-        private const val SIGNAL_LATENESS_MS = 5_000L
 
         @Volatile
         private var instance: TimerController? = null

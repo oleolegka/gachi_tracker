@@ -76,6 +76,8 @@ class TimerControllerTest {
     fun tearDown() {
         controller?.stop()
         context.getSharedPreferences("timer", Context.MODE_PRIVATE).edit().clear().commit()
+        // the floors live in their own preference file and leak into the next test otherwise
+        context.getSharedPreferences("floors", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
     // --- the commands ------------------------------------------------------------------

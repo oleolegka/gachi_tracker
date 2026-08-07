@@ -57,6 +57,8 @@ class TimerOutcomeTest {
     fun tearDown() {
         controllers.forEach { it.stop() }
         context.getSharedPreferences("timer", Context.MODE_PRIVATE).edit().clear().commit()
+        // the floors live in their own preference file and leak into the next test otherwise
+        context.getSharedPreferences("floors", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
     @Test
@@ -101,17 +103,24 @@ class TimerOutcomeTest {
         assertNull(timer.outcome.value)
     }
 
+    /**
+     * There used to be a test here called "a rest between sets leaves no offer, however it
+     * ends". It is gone with the thing it guarded: a rest is no longer a run at all (it is a
+     * floor — domain/Floors.kt), so there is nothing on this path to exclude. What is left
+     * worth checking is that a run STOPPED WITH NOTHING DONE still offers nothing, which is
+     * the test above, and that a run that did complete something offers, which is below.
+     */
     @Test
-    fun `a rest between sets leaves no offer, however it ends`() {
+    fun `a one-step run that reached its end is offered`() {
         val timer = newController()
 
-        timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.REST)
-        timer.skip() // one step, so this finishes the rest
-        assertNull(timer.outcome.value)
+        timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
+        timer.skip() // one step, so this finishes the run
 
-        timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.REST)
-        timer.stop()
-        assertNull(timer.outcome.value)
+        val outcome = timer.outcome.value
+        assertNotNull(outcome)
+        assertTrue(outcome!!.offersLogging)
+        assertEquals(1, outcome.sets.size)
     }
 
     @Test
@@ -192,7 +201,7 @@ class TimerOutcomeTest {
         repeat(7) { timer.skip() }
         assertNotNull(timer.outcome.value)
 
-        timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.REST)
+        timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
 
         assertNull("a stale offer must not follow the next run around", timer.outcome.value)
     }
