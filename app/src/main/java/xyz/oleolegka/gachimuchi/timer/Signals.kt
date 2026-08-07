@@ -49,8 +49,15 @@ import xyz.oleolegka.gachimuchi.domain.TimerSettings
  * try to hide that — mixing a tick into a boundary beep would only produce a noise neither
  * of them is. Instead the CALLER never asks for two at the same instant; that rule lives
  * with the countdown, in `timerCue` (domain/Runner.kt), where it can be tested.
+ *
+ * ── Open, and only so that a test can count ─────────────────────────────────────
+ * The question this whole file is arranged around — one boundary signal or two — cannot be
+ * asked of Robolectric: it models the vibrator as a ledger holding the LAST vibration, and
+ * does not model [ToneGenerator] at all. It can be asked of a subclass that counts, so the
+ * four methods that make a noise are open and [TimerController] takes one of these as a
+ * collaborator, exactly as [FloorController] already did. Nothing in the app subclasses it.
  */
-class Signals(context: Context) {
+open class Signals(context: Context) {
 
     private val app = context.applicationContext
 
@@ -116,7 +123,7 @@ class Signals(context: Context) {
         .build()
 
     /** The last few seconds of a step: a short tap, deliberately small next to a boundary. */
-    fun tick(settings: TimerSettings) {
+    open fun tick(settings: TimerSettings) {
         if (!settings.countdownTicks) return
         if (settings.vibrate) vibrate(longArrayOf(0, 40))
         if (settings.sound) tone(ToneGenerator.TONE_PROP_BEEP, 90)
@@ -126,7 +133,7 @@ class Signals(context: Context) {
      * A step boundary. The pattern differs by what is STARTING, so that "go" and "stop"
      * are distinguishable through a pocket without taking the phone out.
      */
-    fun boundary(settings: TimerSettings, starting: StepKind) {
+    open fun boundary(settings: TimerSettings, starting: StepKind) {
         when (starting) {
             StepKind.WORK -> {
                 if (settings.vibrate) vibrate(longArrayOf(0, 250, 120, 250))
@@ -155,13 +162,13 @@ class Signals(context: Context) {
      * `FLOOR_STAGGER_MS` (domain/Floors.kt), which is what guarantees that two floors coming
      * due together do not talk over each other.
      */
-    fun floor(settings: TimerSettings) {
+    open fun floor(settings: TimerSettings) {
         if (settings.vibrate) vibrate(longArrayOf(0, 150, 100, 150))
         if (settings.sound) tone(ToneGenerator.TONE_PROP_PROMPT, 300)
     }
 
     /** The end of the whole program: longer and unlike any boundary within it. */
-    fun finish(settings: TimerSettings) {
+    open fun finish(settings: TimerSettings) {
         if (settings.vibrate) vibrate(longArrayOf(0, 500, 200, 500, 200, 700))
         if (settings.sound) tone(ToneGenerator.TONE_PROP_ACK, FINISH_TONE_MS)
     }
