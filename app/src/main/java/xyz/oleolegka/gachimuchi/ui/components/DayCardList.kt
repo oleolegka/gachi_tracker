@@ -2,7 +2,6 @@ package xyz.oleolegka.gachimuchi.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,6 +65,17 @@ import java.time.LocalDate
  * screen you stand in the gym with; rewriting the schedule from it is not a thing anyone
  * does mid-set, and a bin one mis-tap from "Start" is a bad trade. [DayActions] leaves both
  * null there and no icons are drawn.
+ *
+ * ── A long press acts on the card (§14.1) ───────────────────────────────────────
+ * A WORKOUT card answers a long press with its own menu, which is where removing it lives —
+ * see [ItemActions] for why the gesture rather than a bin on the row, and why removal is
+ * behind one more question.
+ *
+ * The other three kinds answer nothing, and each for its own reason. A PLANNED card already
+ * carries its two actions as icons where they belong, and giving it a second way to reach the
+ * same pair would be the duplication this change is undoing rather than more of it. A SINGLE
+ * card is a GROUP of entries, and "delete these five" is not a thing anyone means by long
+ * pressing one card — its entries are removed one at a time from the breakdown the card opens.
  */
 @Immutable
 data class DayActions(
@@ -86,6 +96,12 @@ data class DayActions(
 
     /** Look at the history of one exercise — where a single-entry card leads. */
     val openExercise: (Long) -> Unit,
+
+    /**
+     * Remove a workout and everything recorded into it — behind the long press and behind a
+     * confirmation, never on a tap.
+     */
+    val deleteWorkout: (Long) -> Unit,
 
     /** The calendar's own two, absent everywhere else. */
     val editSlot: ((Long) -> Unit)? = null,
@@ -164,13 +180,32 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         DayCardKind.SINGLE -> colors.inkMuted
     }
 
+    /** The workout this card is about, for the actions a long press offers. */
+    val workoutId = card.workoutId.takeIf {
+        card.kind == DayCardKind.RUNNING || card.kind == DayCardKind.DONE
+    }
+    var confirmingDelete by remember(card.key) { mutableStateOf(false) }
+    val menu = if (workoutId == null) {
+        emptyList()
+    } else {
+        listOf(
+            ItemAction("Delete workout", destructive = true) { confirmingDelete = true },
+        )
+    }
+
+    ItemActions(
+        title = card.title,
+        actions = menu,
+        onTap = onTap,
+        modifier = Modifier.fillMaxWidth(),
+    ) { press ->
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, colors.border, RoundedCornerShape(12.dp))
-            .then(if (onTap != null) Modifier.clickable(onClick = onTap) else Modifier),
+            .then(press),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -232,6 +267,25 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         } else {
             Box(Modifier.width(12.dp))
         }
+    }
+    }
+
+    if (confirmingDelete && workoutId != null) {
+        ConfirmRemoveDialog(
+            title = "Delete this workout?",
+            // the card's own two lines, so the dialog is unmistakably about the card that
+            // was pressed and not about the one next to it
+            subject = listOf(card.title, card.subtitle).filter { it.isNotEmpty() }
+                .joinToString(" - "),
+            explanation = "Everything recorded in it goes too - its sets stop counting " +
+                "towards volume, records and the streak. $REMOVAL_IS_REVERSIBLE",
+            confirmLabel = "Delete",
+            onConfirm = {
+                confirmingDelete = false
+                actions.deleteWorkout(workoutId)
+            },
+            onDismiss = { confirmingDelete = false },
+        )
     }
 }
 

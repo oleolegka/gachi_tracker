@@ -722,4 +722,72 @@ class WorkoutTest {
         val stray = set(bench, today).copy(workoutUid = "0198f000-0000-7000-8000-00000000dead")
         assertEquals(1, setsOutsideWorkouts(listOf(started(today), stray), today).size)
     }
+
+    // --- the rows a workout and an exercise are made of (14.1) -----------------------------
+
+    /**
+     * Removing an exercise from a workout has to name its "added" rows as well as its sets, so
+     * the block carries them.
+     *
+     * SEVERAL rows, because adding an exercise again is how the rest is changed in an
+     * append-only journal. Leaving the earlier one alive would put the card straight back.
+     */
+    @Test
+    fun `a workout exercise carries every row that put it in the workout`() {
+        val start = started(today)
+        val first = added(start.id, bench.id, 150)
+        val reconsidered = added(start.id, bench.id, 180, ts = "${today}T09:05:00")
+        val one = set(bench, today, workoutId = start.id)
+
+        val exercise = buildWorkout(listOf(start, first, reconsidered, one), start.id)!!
+            .exercises.single()
+
+        assertEquals(listOf(first.id, reconsidered.id), exercise.addedEventIds)
+        assertEquals(listOf(one.id), exercise.sets.map { it.id })
+        // the last rest wins, unchanged by any of this
+        assertEquals(180, exercise.restSec)
+    }
+
+    /** An exercise present only because a set named it has no "added" row to remove. */
+    @Test
+    fun `an exercise nobody added explicitly carries no added rows`() {
+        val start = started(today)
+        val one = set(bench, today, workoutId = start.id)
+
+        assertEquals(
+            emptyList<Long>(),
+            buildWorkout(listOf(start, one), start.id)!!.exercises.single().addedEventIds,
+        )
+    }
+
+    /**
+     * Deleting a workout is deleting everything in it, and this is the list.
+     *
+     * The start alone would take the workout off every screen and leave its sets counting: a
+     * row pointing at a workout the journal no longer holds is treated as recorded OUTSIDE any
+     * workout, deliberately, so the sets would come back as loose entries on the same day.
+     */
+    @Test
+    fun `every row of a workout is named together, and rows of another workout are not`() {
+        val mine = started(today, ts = "${today}T08:00:00")
+        val mineAdded = added(mine.id, bench.id, 150, ts = "${today}T08:01:00")
+        val mineSet = set(bench, today, workoutId = mine.id, ts = "${today}T08:10:00")
+        val mineDone = finished(mine.id, ts = "${today}T09:00:00")
+        val theirs = started(today, ts = "${today}T18:00:00")
+        val theirSet = set(bench, today, workoutId = theirs.id, ts = "${today}T18:10:00")
+        val loose = set(bench, today, ts = "${today}T12:00:00")
+        val events = listOf(mine, mineAdded, mineSet, mineDone, theirs, theirSet, loose)
+
+        assertEquals(
+            listOf(mine.id, mineAdded.id, mineSet.id, mineDone.id),
+            workoutEventIds(events, mine.id),
+        )
+        assertEquals(listOf(theirs.id, theirSet.id), workoutEventIds(events, theirs.id))
+    }
+
+    /** A workout that is not in this journal names nothing, rather than throwing at a screen. */
+    @Test
+    fun `a workout the journal does not hold names no rows`() {
+        assertEquals(emptyList<Long>(), workoutEventIds(listOf(started(today)), 999L))
+    }
 }

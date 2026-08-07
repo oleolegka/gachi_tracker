@@ -1,6 +1,5 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -66,7 +65,11 @@ import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
+import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
+import xyz.oleolegka.gachimuchi.ui.components.ItemAction
+import xyz.oleolegka.gachimuchi.ui.components.ItemActions
+import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
@@ -151,6 +154,18 @@ data class WorkoutLogActions(
 
     /** Take back a set: an append-only reversal, not a delete. */
     val undoSet: (eventId: Long) -> Unit,
+
+    /**
+     * Take an exercise out of this workout, ROWS AND ALL: the "added" events that put it here
+     * and every set recorded under it, named by the screen because it has already folded them.
+     *
+     * The sets go with it, and they have to. Removing only the "added" row would leave the
+     * card exactly where it was — `buildWorkout` puts an exercise in a workout on the first
+     * set of it as readily as on an explicit add, because a set logged for an exercise nobody
+     * added is still training that happened. So "remove this exercise" is a removal of the
+     * whole block or it is nothing, and the confirmation says which sets are going.
+     */
+    val removeExercise: (eventIds: List<Long>) -> Unit,
 
     /**
      * Declare the workout over.
@@ -240,6 +255,12 @@ fun WorkoutLogScreen(
     var entryFor by rememberSaveable { mutableStateOf<Long?>(null) }
     /** The exercise whose protocol-led set is waiting on the weight question, or null. */
     var weighingFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    /**
+     * The exercise whose removal is being confirmed, by [ExerciseLink.key] rather than by
+     * catalog id: a block can be there for an exercise this phone has no catalog row for, and
+     * that block is exactly the one somebody would want out of the workout.
+     */
+    var removingKey by rememberSaveable { mutableStateOf<String?>(null) }
 
     Scaffold(
         modifier = modifier.imePadding(),
@@ -381,6 +402,7 @@ fun WorkoutLogScreen(
                         }
                     },
                     onRest = id?.let { e -> { askingRestFor = e } },
+                    onRemove = { removingKey = exercise.exercise.key },
                 )
             }
 
@@ -401,6 +423,10 @@ fun WorkoutLogScreen(
                         nowMs = nowMs,
                         onTap = null,
                         onRest = null,
+                        // this card is not an exercise of the workout but a bag of entries
+                        // that name none, so there is no block to take out of it. Removing
+                        // one of them is done from the workout review screen, per entry.
+                        onRemove = null,
                     )
                 }
             }
@@ -458,6 +484,37 @@ fun WorkoutLogScreen(
             onDismiss = { weighingFor = null },
         )
     } }
+
+    /*
+     * Resolved out of the workout on every recomposition rather than captured when the menu
+     * was raised, same rule as the entry editor next door: the journal is re-folded after
+     * every write, so a held copy would be the pre-removal one. A block that disappeared from
+     * under the question simply draws nothing.
+     */
+    removingKey?.let { key ->
+        workout.exercises.firstOrNull { it.exercise.key == key }?.let { exercise ->
+            val setCount = exercise.sets.size
+            ConfirmRemoveDialog(
+                title = "Remove this exercise from the workout?",
+                subject = exerciseName(state, exercise),
+                explanation = (
+                    if (setCount == 0) {
+                        "Nothing has been recorded under it yet, so nothing stops counting. "
+                    } else {
+                        "Its $setCount ${if (setCount == 1) "set goes" else "sets go"} with it " +
+                            "and stop counting towards volume, records and the streak. "
+                    }
+                    ) + REMOVAL_IS_REVERSIBLE,
+                onConfirm = {
+                    removingKey = null
+                    actions.removeExercise(
+                        exercise.addedEventIds + exercise.sets.map { it.id }
+                    )
+                },
+                onDismiss = { removingKey = null },
+            )
+        }
+    }
 
     entryFor?.let { id -> state.refById(id)?.let { ref ->
         QuickEntrySheet(
@@ -601,13 +658,22 @@ private fun ExerciseCard(
     nowMs: Long,
     onTap: (() -> Unit)?,
     onRest: (() -> Unit)?,
+    /** Long press: take this exercise out of the workout. Null leaves it with no menu. */
+    onRemove: (() -> Unit)?,
 ) {
     val colors = LocalGachiColors.current
-    GachiCard(
-        Modifier
-            .fillMaxWidth()
-            .then(if (onTap != null) Modifier.clickable(onClick = onTap) else Modifier)
-    ) {
+    val menu = if (onRemove == null) {
+        emptyList()
+    } else {
+        listOf(ItemAction("Remove from this workout", destructive = true) { onRemove() })
+    }
+    ItemActions(
+        title = name,
+        actions = menu,
+        onTap = onTap,
+        modifier = Modifier.fillMaxWidth(),
+    ) { press ->
+    GachiCard(Modifier.fillMaxWidth().then(press)) {
         Row(
             Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -658,6 +724,7 @@ private fun ExerciseCard(
         )
 
         floor?.let { RestBar(it, nowMs) }
+    }
     }
 }
 

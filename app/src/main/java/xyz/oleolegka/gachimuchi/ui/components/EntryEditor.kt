@@ -61,9 +61,12 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * usual on this screen: the throw would land on a correction, and a crash while fixing a typo
  * is how somebody stops trusting the app with their history.
  *
- * ── Deleting is behind the same dialog rather than beside every row ────────────
- * A delete affordance on each set line is a mis-tap that removes training that actually
- * happened. It lives here, one level in, and it asks once more before it writes.
+ * ── Removing an entry is NOT here (§14.1) ──────────────────────────────────────
+ * It used to be: a "Remove" button beside "Save", with its own confirmation behind it. That
+ * made two ways to reach one act — the row's long press offers the removal directly — and two
+ * ways is how the two drift apart. This dialog now does exactly one thing, which is what its
+ * title says. See [ItemActions] for the gesture and [ConfirmRemoveDialog] for the question it
+ * asks first.
  */
 @Composable
 fun EntryEditorDialog(
@@ -76,11 +79,9 @@ fun EntryEditorDialog(
      */
     oneSided: Boolean = false,
     onAmend: (ActivityForm) -> Unit,
-    onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    var confirmingDelete by remember(entry) { mutableStateOf(false) }
 
     // one draft per field the forms between them can carry; which are shown is decided below
     var day by remember(entry) { mutableStateOf(entry.opDate) }
@@ -100,30 +101,6 @@ fun EntryEditorDialog(
     val candidate = runCatching {
         amended(entry, day, weight, reps, minutes, km, pace, warmup, side)
     }.getOrNull()
-
-    if (confirmingDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmingDelete = false },
-            title = { Text("Remove this entry?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(entry.summaryLine(), style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "It stops counting towards volume, records and the streak. The journal " +
-                            "keeps the original row - removing is itself an entry, so this can " +
-                            "be undone later rather than being the end of the evidence.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkSecondary,
-                    )
-                }
-            },
-            confirmButton = { TextButton(onClick = onDelete) { Text("Remove") } },
-            dismissButton = {
-                TextButton(onClick = { confirmingDelete = false }) { Text("Keep it") }
-            },
-        )
-        return
-    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -265,12 +242,7 @@ fun EntryEditorDialog(
                 enabled = candidate != null,
             ) { Text("Save") }
         },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = { confirmingDelete = true }) { Text("Remove") }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

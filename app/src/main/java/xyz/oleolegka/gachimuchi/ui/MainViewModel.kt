@@ -54,6 +54,7 @@ import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
+import xyz.oleolegka.gachimuchi.domain.workoutEventIds
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
@@ -344,6 +345,42 @@ class MainViewModel(
      */
     fun deleteEntry(eventId: Long) {
         viewModelScope.launch { repo.deleteEntry(eventId) }
+    }
+
+    /**
+     * Removes several events as ONE act — an exercise taken out of a workout, which is its
+     * "added" rows and every set of it.
+     *
+     * Still one deletion event per row, because that is the only thing the journal has to say
+     * with: there is no "delete these" event and inventing one would mean a second shape for
+     * every reader in domain/Amendments.kt to understand. What this adds over a loop at the
+     * call site is that the writes are in one coroutine, so the journal is never read back
+     * half-removed by the flow the screen is collecting.
+     */
+    fun deleteEntries(eventIds: List<Long>) {
+        if (eventIds.isEmpty()) return
+        viewModelScope.launch { eventIds.forEach { repo.deleteEntry(it) } }
+    }
+
+    /**
+     * Removes a workout and everything recorded into it.
+     *
+     * ── Why the whole thing and not just the start event ────────────────────────
+     * Deleting the start alone takes the workout off every screen and leaves its sets counting:
+     * a row pointing at a workout the journal no longer holds is treated as recorded OUTSIDE
+     * any workout (see `setsOutsideWorkouts`), so the sets would come back as loose entries on
+     * the same day and keep their place in the volume, the records and the streak. That is the
+     * opposite of what the confirmation on the card promised, which is why the rows are named
+     * together — see [workoutEventIds].
+     *
+     * The journal is read here rather than in the screen because a card knows only an id; the
+     * rows a workout is made of are a question about the journal, and this is the layer that
+     * has one.
+     */
+    fun deleteWorkout(workoutId: Long) {
+        viewModelScope.launch {
+            workoutEventIds(repo.allEvents(), workoutId).forEach { repo.deleteEntry(it) }
+        }
     }
 
     /**

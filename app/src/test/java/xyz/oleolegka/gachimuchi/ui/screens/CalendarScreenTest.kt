@@ -58,6 +58,7 @@ class CalendarScreenTest : ScreenTest() {
         continueWorkout = {},
         openWorkout = {},
         openExercise = {},
+        deleteWorkout = {},
     )
 
     private fun calendar(slots: List<Slot> = emptyList(), journal: Journal = Journal()) {

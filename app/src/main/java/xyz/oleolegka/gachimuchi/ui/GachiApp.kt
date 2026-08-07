@@ -232,6 +232,7 @@ fun GachiApp(viewModel: MainViewModel) {
             continueWorkout = { id -> continueWorkoutNow(id) },
             openWorkout = { id -> viewingWorkoutId = id },
             openExercise = { id -> detailExerciseId = id },
+            deleteWorkout = viewModel::deleteWorkout,
         )
     }
 
@@ -409,6 +410,9 @@ fun GachiApp(viewModel: MainViewModel) {
                         viewModel.addSet(form, intoWorkoutId = workoutBeingLogged)
                     },
                     undoSet = viewModel::undoSet,
+                    // rows and all: the "added" events and every set of the exercise, so a
+                    // block taken out of the workout does not come straight back on its sets
+                    removeExercise = viewModel::deleteEntries,
                     finish = { viewModel.finishWorkout(workoutBeingLogged) },
                     startProtocolSet = { exercise, addedKg ->
                         viewModel.startProgramForExercise(exercise, addedKg)
