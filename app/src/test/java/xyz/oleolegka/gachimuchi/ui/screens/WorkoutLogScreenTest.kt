@@ -75,6 +75,7 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val started = mutableListOf<Pair<String, Double?>>()
     private var conductorOpened = 0
     private var summaryDismissed = 0
+    private var finishes = 0
     private var closed = 0
 
     /** A monotonic instant the floors are placed around, so no test races a real clock. */
@@ -99,6 +100,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                     createExercise = { _, _, _, _, _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
+                    finish = { finishes++ },
                     startProtocolSet = { exercise, kg -> started += exercise.name to kg },
                     openConductor = { conductorOpened++ },
                     close = { closed++ },
@@ -354,6 +356,50 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Save").performClick()
         assertEquals(listOf(1L to 150), added)
+    }
+
+    // --- finishing --------------------------------------------------------------------------
+
+    @Test
+    fun `finishing is a button, and it is not the way out of the screen`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Finish").performClick()
+
+        assertEquals(1, finishes)
+        // leaving and finishing are two different things and two different controls
+        assertEquals(0, closed)
+    }
+
+    /**
+     * The end is READ OFF THE LAST SET, not stamped when the button was pressed — the button
+     * is pressed in the changing room, the training stopped at the last set. So a finished
+     * workout can be opened again and written into, and the end moves by itself.
+     */
+    @Test
+    fun `a finished workout says when it ended, counted from its last set`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+        journal.strengthSet(bench, iso, at = "19:42", weightKg = 62.5, workoutId = workout)
+        journal.finishWorkout(workout, iso, at = "19:55")
+        show(journal, workout)
+
+        compose.onNodeWithText("Fri 7 Aug - 1 exercise, 2 sets - finished 19:42").assertIsDisplayed()
+        // the button says the state rather than offering it again
+        compose.onNodeWithText("Finished").assertIsDisplayed()
+    }
+
+    /** And an unfinished one says nothing about an end it has not reached. */
+    @Test
+    fun `an unfinished workout has no end time in its heading`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Fri 7 Aug - 2 exercises, 2 sets").assertIsDisplayed()
+        compose.onNodeWithText("Finish").assertIsDisplayed()
     }
 
     // --- what matured while the set was running ---------------------------------------------

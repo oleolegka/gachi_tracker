@@ -7,8 +7,10 @@ import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
@@ -54,6 +56,17 @@ class Journal {
         TYPE_WORKOUT_STARTED,
         payloadJson.encodeToString(WorkoutStarted(day, slotId, name = name)),
         "${day}T$at:00",
+    )
+
+    /**
+     * Closes a workout. It carries NO time of its own: when the training ended is folded out
+     * of the last set recorded, so this row states only which workout is over.
+     */
+    fun finishWorkout(workoutId: Long, day: String, at: String = "20:00") = add(
+        TYPE_WORKOUT_FINISHED,
+        payloadJson.encodeToString(WorkoutFinished(workoutId)),
+        "${day}T$at:00",
+        workoutId,
     )
 
     /** Puts an exercise into a workout before any set of it exists. */

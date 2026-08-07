@@ -185,13 +185,13 @@ class MainViewModel(
      * The duration is resolved AFTER the write, so the gap that has just been measured (the
      * pause before this very set) is part of what the offer is based on.
      */
-    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true) {
+    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true, intoWorkoutId: Long? = null) {
         viewModelScope.launch {
             val worthAPicture = celebratedByPicture(form)
             // BEFORE the write, or the set would be compared against itself and no set
             // would ever be a record
             val record = if (worthAPicture) recordBrokenBy(form) else null
-            repo.record(form, attachToWorkout = attachToWorkout)
+            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
             if (worthAPicture) {
                 _celebrations.tryEmit(
                     CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
@@ -260,6 +260,17 @@ class MainViewModel(
      */
     fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
         viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
+    }
+
+    /**
+     * Says a workout is over.
+     *
+     * It is not an undo and not a lock: the workout keeps everything it has, can be opened
+     * again, and a set added afterwards goes into it and moves its end time. What it changes
+     * is that this workout stops being the one sets land in by default.
+     */
+    fun finishWorkout(workoutId: Long) {
+        viewModelScope.launch { repo.finishWorkout(workoutId) }
     }
 
     // --- celebration -------------------------------------------------------------------

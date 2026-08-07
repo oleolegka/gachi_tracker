@@ -144,6 +144,56 @@ class WorkoutFlowTest {
     }
 
     @Test
+    fun `finishing closes the workout, and the next set belongs to nothing`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val workoutId = repo.startWorkout()
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+
+        repo.finishWorkout(workoutId)
+
+        assertNull(repo.currentWorkoutId())
+        assertTrue(buildWorkout(repo.allEvents(), workoutId)!!.finished)
+        // and logging still works with nothing open, exactly as it does for somebody who
+        // never presses start at all
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5))
+        assertEquals(1, buildWorkout(repo.allEvents(), workoutId)!!.setCount)
+        assertEquals(1, setsOutsideWorkouts(repo.allEvents(), day).size)
+    }
+
+    /** Nobody presses "finish" reliably, so starting the next one does it for them. */
+    @Test
+    fun `starting a workout quietly finishes the one that was left open`() = runTest {
+        val morning = repo.startWorkout()
+        val evening = repo.startWorkout()
+
+        assertTrue(buildWorkout(repo.allEvents(), morning)!!.finished)
+        assertFalse(buildWorkout(repo.allEvents(), evening)!!.finished)
+        assertEquals(evening, repo.currentWorkoutId())
+    }
+
+    /**
+     * The set remembered on the way to the car. "Finished" is a status and not a lock, so a
+     * screen that names the workout it is drawing gets the set into it — which is not where
+     * "the open workout" would have put it, because there is not one.
+     */
+    @Test
+    fun `a set can be added to a finished workout by naming it`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val workoutId = repo.startWorkout()
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+        repo.finishWorkout(workoutId)
+
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5), intoWorkoutId = workoutId)
+
+        val workout = buildWorkout(repo.allEvents(), workoutId)!!
+        assertEquals(2, workout.setCount)
+        assertTrue("adding a set does not re-open it", workout.finished)
+        assertEquals(0, setsOutsideWorkouts(repo.allEvents(), day).size)
+        // and the end moved with the set, because it is read off the last one recorded
+        assertEquals(repo.allEvents().last().ts, workout.endTs)
+    }
+
+    @Test
     fun `cancelling a set removes it from the workout and leaves the journal append-only`() = runTest {
         val bench = ref("Bench press", ExerciseForm.STRENGTH)
         val workoutId = repo.startWorkout()

@@ -153,6 +153,15 @@ data class WorkoutLogActions(
     val undoSet: (eventId: Long) -> Unit,
 
     /**
+     * Declare the workout over.
+     *
+     * Not a lock and not a way out: the screen stays where it is, everything on it can still
+     * be tapped, and a set added afterwards goes into this workout and moves its end time.
+     * What it changes is that sets logged from anywhere ELSE stop landing here.
+     */
+    val finish: () -> Unit,
+
+    /**
      * Begin a protocol-led set and give the screen to the conductor.
      *
      * [addedKg] is what was hung off the belt, answered BEFORE the set rather than after it
@@ -246,8 +255,13 @@ fun WorkoutLogScreen(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            listOfNotNull(date?.let { fmtWeekdayDay(it) }, summaryOf(workout))
-                                .joinToString(" - "),
+                            listOfNotNull(
+                                date?.let { fmtWeekdayDay(it) },
+                                summaryOf(workout),
+                                // stated only once it means something: an unfinished workout
+                                // has an end time too, and it is simply "so far"
+                                "finished ${clockOf(workout.endTs)}".takeIf { workout.finished },
+                            ).joinToString(" - "),
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.inkSecondary,
                         )
@@ -267,6 +281,16 @@ fun WorkoutLogScreen(
                     val last = lastSetOf(workout)
                     TextButton(onClick = { last?.let(actions.undoSet) }, enabled = last != null) {
                         Text("Undo last")
+                    }
+                    /*
+                     * Up here for the same reason as "Undo last", and not because it is
+                     * dangerous — it is not, nothing is lost and the screen carries on
+                     * working. It is simply pressed once at the end of a session, and every
+                     * control the thumb can reach without aiming is reserved for the moves
+                     * made twenty times an hour.
+                     */
+                    TextButton(onClick = actions.finish, enabled = !workout.finished) {
+                        Text(if (workout.finished) "Finished" else "Finish")
                     }
                 },
             )
@@ -459,6 +483,17 @@ fun WorkoutLogScreen(
  * asked to differ, they can — which is the honest state: neither screen depends on the other
  * saying it the same way.
  */
+
+/**
+ * The wall clock out of a journal timestamp: "2026-08-07T18:14:00" -> "18:14".
+ *
+ * By position rather than by parsing, because every timestamp this app writes has that exact
+ * shape and a row that does not is a row nothing else could read either. A string that is
+ * too short comes back whole, which is a visibly odd heading rather than a crash on the
+ * screen somebody is standing in a gym with.
+ */
+private fun clockOf(ts: String): String =
+    ts.substringAfter('T', "").takeIf { it.length >= 5 }?.take(5) ?: ts
 
 /** "3 exercises, 11 sets", or what a workout with nothing in it has instead. */
 private fun summaryOf(workout: Workout): String {

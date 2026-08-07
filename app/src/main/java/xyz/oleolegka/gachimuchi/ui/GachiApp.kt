@@ -146,7 +146,7 @@ fun GachiApp(viewModel: MainViewModel) {
      * it is derived from. It decides which card says "Continue" and whether the workout
      * screen offers a way back into the entry card.
      */
-    val runningWorkoutId = remember(state.events, iso) { openWorkoutRow(state.events, iso)?.id }
+    val runningWorkoutId = remember(state.events) { openWorkoutRow(state.events)?.id }
 
     /*
      * The offered rest length is derived from the whole journal, so it is computed once
@@ -409,8 +409,17 @@ fun GachiApp(viewModel: MainViewModel) {
                     createExercise = { name, form, edge, work, rest, then ->
                         viewModel.createExercise(name, form, edge, work, rest, then)
                     },
-                    addSet = { form -> viewModel.addSet(form) },
+                    /*
+                     * INTO THIS WORKOUT, named rather than looked up. The screen is drawing a
+                     * particular workout and that is the one a set typed on it belongs to —
+                     * which is not the same as "the open one" the moment a FINISHED workout is
+                     * opened to add the set forgotten in the changing room (§13).
+                     */
+                    addSet = { form ->
+                        viewModel.addSet(form, intoWorkoutId = workoutBeingLogged)
+                    },
                     undoSet = viewModel::undoSet,
+                    finish = { viewModel.finishWorkout(workoutBeingLogged) },
                     startProtocolSet = { exercise, addedKg ->
                         viewModel.startProgramForExercise(exercise, addedKg)
                         conductorOpen = true
