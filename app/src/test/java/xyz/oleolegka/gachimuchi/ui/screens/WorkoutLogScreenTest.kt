@@ -74,6 +74,7 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val undone = mutableListOf<Long>()
     private val started = mutableListOf<Pair<String, Double?>>()
     private var conductorOpened = 0
+    private var summaryDismissed = 0
     private var closed = 0
 
     /** A monotonic instant the floors are placed around, so no test races a real clock. */
@@ -84,6 +85,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         workoutId: Long,
         floors: List<RestFloor> = emptyList(),
         liveExerciseId: Long? = null,
+        readySummary: String? = null,
     ) {
         val state = UiState(events = journal.events, exercises = catalog, loading = false)
         screen {
@@ -102,6 +104,8 @@ class WorkoutLogScreenTest : ScreenTest() {
                     close = { closed++ },
                 ),
                 liveExerciseId = liveExerciseId,
+                readySummary = readySummary,
+                onDismissSummary = { summaryDismissed++ },
                 nowMs = now,
             )
         }
@@ -350,6 +354,38 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Save").performClick()
         assertEquals(listOf(1L to 150), added)
+    }
+
+    // --- what matured while the set was running ---------------------------------------------
+
+    /**
+     * The half of §13.4 that was missing: the summary was computed and spoken, and appeared
+     * on no screen. Every rest is silenced while a protocol runs — a beep in the middle of a
+     * seven-second hang is exactly what must not happen — so a set that took two minutes can
+     * end with several rests having come due unannounced, and this line is the only thing
+     * that says which.
+     */
+    @Test
+    fun `the readiness summary from a finished set is shown`() {
+        val journal = Journal()
+        show(
+            journal, supersetWorkout(journal),
+            readySummary = "Bench press has been ready for 1:20, Abs for 0:40",
+        )
+
+        compose.onNodeWithText("Bench press has been ready for 1:20, Abs for 0:40")
+            .assertIsDisplayed()
+
+        compose.onNodeWithText("Got it").performClick()
+        assertEquals(1, summaryDismissed)
+    }
+
+    @Test
+    fun `no summary means no banner, rather than an empty one`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onAllNodesWithText("Got it").assertCountEquals(0)
     }
 
     // --- the protocol-led set ---------------------------------------------------------------

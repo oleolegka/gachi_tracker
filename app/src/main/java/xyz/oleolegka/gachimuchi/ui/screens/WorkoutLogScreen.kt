@@ -189,6 +189,18 @@ fun WorkoutLogScreen(
      */
     liveExerciseId: Long? = null,
     /**
+     * What matured while a protocol-led set had the rests muted, as one sentence, or null.
+     *
+     * Computed and spoken already (domain/Floors.kt, `floorSummaryText`); this is the only
+     * place it is WRITTEN DOWN. It matters because a running conductor silences every floor
+     * (a beep in the middle of a seven-second hang is exactly what must not happen), so a set
+     * that took two minutes can end with three rests having come due unannounced. One line
+     * answers "what is ready now" at a glance, which a queue of missed beeps never could.
+     */
+    readySummary: String? = null,
+    /** Acknowledge the summary. It says nothing that is not already visible on the cards. */
+    onDismissSummary: () -> Unit = {},
+    /**
      * The monotonic reading the bars are drawn against.
      *
      * Defaulted to the ticking clock so the caller does not have to recompose four times a
@@ -223,6 +235,7 @@ fun WorkoutLogScreen(
     Scaffold(
         modifier = modifier.imePadding(),
         topBar = {
+            Column {
             TopAppBar(
                 title = {
                     Column {
@@ -257,6 +270,13 @@ fun WorkoutLogScreen(
                     }
                 },
             )
+            /*
+             * PINNED under the title bar rather than put in the scrolling list. It appears at
+             * the moment a set ends and the phone is being picked up again, and a line that
+             * the same thumb can scroll away before reading it is a line that gets missed.
+             */
+            readySummary?.let { line -> ReadyBanner(line, onDismissSummary) }
+            }
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
@@ -487,6 +507,45 @@ private fun exerciseName(state: UiState, exercise: WorkoutExercise): String =
     state.exerciseById(exercise.exerciseId)?.name
         ?: exercise.sets.firstOrNull()?.form?.activityName()
         ?: "Exercise ${exercise.exerciseId}"
+
+/**
+ * What came due while a protocol-led set had the rests silenced.
+ *
+ * ── One line, and no new noise ──────────────────────────────────────────────────
+ * A running conductor mutes every floor, because a beep in the middle of a seven-second hang
+ * is precisely the thing that ruins the set it was meant to time (domain/Floors.kt). What
+ * that leaves behind is a set of rests that matured unannounced, and the wrong way to settle
+ * up is a burst of the beeps that were withheld: they arrive after the fact, out of order,
+ * and say nothing about WHEN each one came due. So the debt is paid in words instead —
+ * already spoken by the time this appears, and now also written down, which is the half that
+ * was missing (§13.4).
+ *
+ * It is a statement and not a warning, so it carries no icon and no alarm colour: everything
+ * in it is also visible on the cards below, in the bars that have been counting all along.
+ * What it adds is that they can be read at a glance, at the one moment they are all relevant
+ * at once.
+ */
+@Composable
+private fun ReadyBanner(line: String, onDismiss: () -> Unit) {
+    val colors = LocalGachiColors.current
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 15.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                line,
+                fontSize = 12.sp,
+                color = colors.goodText,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+            )
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 44.dp)) {
+                Text("Got it", fontSize = 12.sp)
+            }
+        }
+    }
+}
 
 /**
  * One exercise of the workout: what it is, what has been done of it, and where its rest is.

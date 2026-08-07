@@ -111,6 +111,9 @@ fun GachiApp(viewModel: MainViewModel) {
     val restFloors by viewModel.restFloors.collectAsStateWithLifecycle()
     // the plate answered on the way into the running set, for the offer at the end of it
     val entryAddedKg by viewModel.entryAddedKg.collectAsStateWithLifecycle()
+    // what matured while a protocol-led set had the rests muted. Already spoken by the time
+    // it gets here; the screen is where it gets written down
+    val floorSummary by viewModel.floorSummary.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     /*
@@ -426,6 +429,8 @@ fun GachiApp(viewModel: MainViewModel) {
                 floors = restFloors,
                 actions = workoutActions,
                 liveExerciseId = timerRun?.exerciseId,
+                readySummary = floorSummary,
+                onDismissSummary = viewModel::dismissFloorSummary,
             )
         }
 
