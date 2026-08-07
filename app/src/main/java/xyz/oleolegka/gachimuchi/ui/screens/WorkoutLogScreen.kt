@@ -187,7 +187,6 @@ fun WorkoutLogScreen(
 
     val opDate = workout.opDate
     val date = remember(opDate) { runCatching { LocalDate.parse(opDate) }.getOrNull() }
-    val planned = workout.slotId?.let { id -> state.slots.firstOrNull { it.id == id } }
 
     var picking by rememberSaveable { mutableStateOf(false) }
     /** The exercise whose rest is being asked about, or null for no question on screen. */
@@ -201,8 +200,10 @@ fun WorkoutLogScreen(
             TopAppBar(
                 title = {
                     Column {
+                        // the name snapshot taken when "start" was pressed, never the plan's
+                        // name as it reads today — a plan is editable and a fact is not
                         Text(
-                            planned?.name ?: "Workout",
+                            workout.name ?: "Workout",
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(

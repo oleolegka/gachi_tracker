@@ -137,6 +137,22 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Fri 7 Aug - 2 exercises, 2 sets").assertIsDisplayed()
     }
 
+    /**
+     * The name is the SNAPSHOT taken when start was pressed, not the plan's name as it reads
+     * today: a plan is editable and what a session was called on the day is not. Asserted here
+     * because the obvious implementation — look the slot up and print its name — compiles
+     * perfectly and renames every workout in the history the first time a plan is renamed.
+     */
+    @Test
+    fun `the header shows the name the workout was started under`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05", slotId = 7L, name = "Push day")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        show(journal, workout)
+
+        compose.onNodeWithText("Push day").assertIsDisplayed()
+    }
+
     @Test
     fun `a workout with nothing in it says what to do rather than showing an empty list`() {
         val journal = Journal()
