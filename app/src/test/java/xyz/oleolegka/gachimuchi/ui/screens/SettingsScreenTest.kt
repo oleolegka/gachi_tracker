@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import org.junit.Test
+import xyz.oleolegka.gachimuchi.BuildConfig
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 
 /**
@@ -101,6 +102,25 @@ class SettingsScreenTest : ScreenTest() {
 
         modeIsSelected("On records only").assertIsSelected()
         modeIsSelected("Off").assertIsNotSelected()
+    }
+
+    /**
+     * The installed version is on the screen, because there is nowhere else to read it: the
+     * app is not on a store and Obtainium does not say what it put there.
+     *
+     * Asserted against [BuildConfig] rather than against "0.4.1 (5)" — a test that has to be
+     * edited on every release is a test that will be edited without being read, and the
+     * version bump itself is not what is being checked here. What IS checked is that the two
+     * numbers reach the screen at all, which stops working the moment somebody drops
+     * `buildConfig = true` from the module.
+     */
+    @Test
+    fun `the version installed is shown, name and code`() {
+        screen { SettingsScreen() }
+
+        val version = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText(version))
+        compose.onNodeWithText(version).assertIsDisplayed()
     }
 
     /** The row carrying [title], brought into the lazy list's window first. */

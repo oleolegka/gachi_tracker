@@ -37,6 +37,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.BuildConfig
 import xyz.oleolegka.gachimuchi.data.DeviceStore
 import xyz.oleolegka.gachimuchi.data.GalleryStore
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
@@ -46,7 +47,8 @@ import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicturePicker
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
- * The settings tab: the celebration pictures.
+ * The settings tab: the celebration pictures, and at the foot of it the two things that
+ * identify this copy of the app — which installation it is and which build it is.
  *
  * It exists as a tab of its own rather than as a section of another screen because the
  * settings that are still to come (and the timer's own, which live on the timer screen
@@ -194,6 +196,30 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     "and does not survive the app being removed.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
+            )
+        }
+
+        item {
+            Text(
+                "This build",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            /*
+             * The version, shown because there is nowhere else to read it. The app is not on
+             * a store; updates arrive through Obtainium, which installs whatever the latest
+             * release is without saying afterwards what that was. Both numbers are here
+             * because they answer different questions: the NAME is what a release is called
+             * and what a bug report should quote, the CODE is what the updater compares to
+             * decide whether there is anything to install.
+             */
+            Text(
+                "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
             )
         }
     }
