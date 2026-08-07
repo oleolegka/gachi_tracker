@@ -107,6 +107,16 @@ class JournalBackupTest {
         val benchId = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH, defaultRestSec = 150)
         val hangsId = repo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
         val boulderId = repo.ensureExercise("Bouldering gym", ExerciseForm.TICK)
+        // a catalog row whose every optional column is set, and nothing logged against it: the
+        // reference tables are carried column by column rather than opaquely, so a column added
+        // to `exercises` and forgotten here would come back as its default and say nothing
+        val oneArmId = repo.ensureExercise(
+            "One-arm hang", ExerciseForm.HOLD,
+            edgeMm = 20.0, workSec = 10.0, restSec = 5.0, defaultRestSec = 240,
+        )
+        repo.setOneSided(oneArmId, true)
+        repo.setBodyweightShare(oneArmId, 0.65)
+        repo.setLedByProtocol(oneArmId, false)
         val bench = repo.exercise(benchId)!!.toRef()
         val hangs = repo.exercise(hangsId)!!.toRef()
         val boulder = repo.exercise(boulderId)!!.toRef()
@@ -180,13 +190,24 @@ class JournalBackupTest {
 
             assertTrue("a full restore must write the journal", report.eventsAdded > 0)
             assertEquals(0, report.eventsAlreadyHere)
-            assertEquals(3, report.exercisesAdded)
+            assertEquals(4, report.exercisesAdded)
             assertEquals(1, report.slotsAdded)
             assertEquals(1, report.programsAdded)
             assertEquals(0, report.plannedLinesSkipped)
             assertTrue(report.notes.isEmpty())
 
             assertEquals(first, restored.export("2026-08-07", "device-1"))
+
+            // and said once in the open, because the file text agreeing is a proof that reads
+            // as an accident: every optional column of a catalog row came back as it was
+            val oneArm = other.exercises().all().single { it.name == "One-arm hang" }
+            assertEquals(20.0, oneArm.edgeMm!!, 1e-9)
+            assertEquals(10.0, oneArm.protocolWorkSec!!, 1e-9)
+            assertEquals(5.0, oneArm.protocolRestSec!!, 1e-9)
+            assertEquals(240, oneArm.defaultRestSec)
+            assertEquals(false, oneArm.ledByProtocol)
+            assertTrue(oneArm.oneSided)
+            assertEquals(0.65, oneArm.bodyweightShare!!, 1e-9)
         } finally {
             other.close()
         }
@@ -258,9 +279,9 @@ class JournalBackupTest {
 
             assertEquals(fileEvents, report.eventsAdded)
             assertEquals(fileEvents + 4, other.events().all().size)
-            // the local exercise stayed and the file's three arrived beside it
-            assertEquals(3, report.exercisesAdded)
-            assertEquals(4, other.exercises().all().size)
+            // the local exercise stayed and the file's four arrived beside it
+            assertEquals(4, report.exercisesAdded)
+            assertEquals(5, other.exercises().all().size)
 
             // and both histories read back whole, each under its own exercise
             val events = otherRepo.allEvents()
@@ -291,10 +312,10 @@ class JournalBackupTest {
 
             val report = JournalBackup(other, null).restore(accepted(text))
 
-            // two of the file's three exercises are new; the bench press is not
-            assertEquals(2, report.exercisesAdded)
+            // three of the file's four exercises are new; the bench press is not
+            assertEquals(3, report.exercisesAdded)
             assertEquals(1, report.exercisesMergedByIdentity)
-            assertEquals(3, other.exercises().all().size)
+            assertEquals(4, other.exercises().all().size)
             assertEquals(localUid, other.exercises().all().single { it.name == "Bench press" }.uid)
             assertTrue(
                 "a merged key is not something to keep quiet about",

@@ -171,6 +171,8 @@ class JournalBackup(
                     protocolRestSec = row.protocolRestSec,
                     defaultRestSec = row.defaultRestSec,
                     ledByProtocol = row.ledByProtocol,
+                    oneSided = row.oneSided,
+                    bodyweightShare = row.bodyweightShare,
                     uid = row.uid,
                 )
             )
@@ -372,6 +374,8 @@ private fun ExerciseEntity.toPortable(): PortableExercise = PortableExercise(
     protocolRestSec = protocolRestSec,
     defaultRestSec = defaultRestSec,
     ledByProtocol = ledByProtocol,
+    oneSided = oneSided,
+    bodyweightShare = bodyweightShare,
 )
 
 /**

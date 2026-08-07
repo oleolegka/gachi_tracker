@@ -131,6 +131,13 @@ already a uid.
 | `protocol_work_sec` / `protocol_rest_sec` | number | no | The work:rest protocol; part of identity. |
 | `default_rest_sec` | integer | no | The rest last chosen for this exercise. |
 | `led_by_protocol` | boolean | no | Run sets by the protocol, or just count the rest. `null` means "decide from whether a protocol exists". |
+| `one_sided` | boolean | no | A set is done one side at a time. |
+| `bodyweight_share` | number | no | How much of the body weight this exercise actually lifts. |
+
+The catalog, the plan and the programs are carried **column by column**, unlike an event
+payload. That is a standing obligation on whoever adds a column: a column added to `exercises`
+and not added here does not survive a restore, silently — the file loads, the exercise comes
+back, and one thing about it is quietly the default.
 
 ## A plan slot
 

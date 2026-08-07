@@ -116,6 +116,14 @@ data class PortableEvent(
  * A catalog exercise. Everything about it travels — including [defaultRestSec] and
  * [ledByProtocol], which are preferences rather than identity but are answers the user gave
  * and would otherwise have to give again on a fresh phone.
+ *
+ * ── This list is spelled out, and that is a standing obligation ─────────────────
+ * The catalog, the plan and the programs are reference data with columns, not payloads, so
+ * unlike an event they cannot be carried through blind. A COLUMN ADDED TO `exercises` AND NOT
+ * ADDED HERE IS A COLUMN THAT DOES NOT SURVIVE A RESTORE, silently — the file loads, the
+ * exercise comes back, and one thing about it is quietly the default. Every field is optional
+ * with the same default the entity has, so that a file written before a column existed still
+ * reads and lands on the same value a fresh row would.
  */
 @Serializable
 data class PortableExercise(
@@ -129,6 +137,10 @@ data class PortableExercise(
     @SerialName("protocol_rest_sec") val protocolRestSec: Double? = null,
     @SerialName("default_rest_sec") val defaultRestSec: Int? = null,
     @SerialName("led_by_protocol") val ledByProtocol: Boolean? = null,
+    /** Whether a set of this exercise is done one side at a time (schema version 13). */
+    @SerialName("one_sided") val oneSided: Boolean = false,
+    /** How much of the body weight this exercise actually lifts (schema version 14). */
+    @SerialName("bodyweight_share") val bodyweightShare: Double? = null,
 )
 
 /** A plan slot with the session it is meant to consist of. */
