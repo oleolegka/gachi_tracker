@@ -108,7 +108,26 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    // Room and the seed are verified by running them on the JVM (Robolectric); no emulator needed
+    // Room and the screens are verified by running them on the JVM (Robolectric); no emulator needed
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+
+    /*
+     * Compose screens are tested on the JVM as well: `createComposeRule` under the
+     * Robolectric runner, so `./gradlew test` covers them and there is no second command
+     * and no device. The BOM has to be repeated on the test classpath — a platform applies
+     * to one configuration only, and without it ui-test-junit4 would arrive versionless.
+     */
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+
+    /*
+     * `createComposeRule` launches a ComponentActivity, which has to be DECLARED in the
+     * manifest Robolectric reads — and that is the app's own debug manifest, not the test
+     * one. This artifact is nothing but that declaration, which is why it is
+     * debugImplementation (as Google documents it) rather than testImplementation: on the
+     * test configuration the activity would never reach the merged manifest and every
+     * screen test would die with "unable to resolve activity".
+     */
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
