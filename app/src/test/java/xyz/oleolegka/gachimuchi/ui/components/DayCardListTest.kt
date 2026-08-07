@@ -31,8 +31,14 @@ import java.time.LocalDate
  * Nothing here is rasterised. A card can be behind another card, clipped by the system bars,
  * scrolled off the bottom, drawn in white on white, or 4 dp tall, and every assertion below
  * still passes: the semantics tree records that a Text exists and what it says, not where or
- * whether a human can read it. Touch targets, contrast, animation, the keyboard, RTL and
- * dark-theme legibility are all outside it. See ScreenTest.
+ * whether a human can read it. Touch targets, contrast, the keyboard, RTL and dark-theme
+ * legibility are all outside it.
+ *
+ * ANIMATION IS NOT EXERCISED AT ALL. The harness holds the frame clock still, because a
+ * Material text field otherwise never lets the composition settle (ScreenTest says why), and
+ * a test only winds it on far enough for a surface to finish arriving. So a transition that
+ * flickers, lands in the wrong place, or never ends is invisible from here — which is a
+ * whole class of defect that stays the user's to find.
  */
 class DayCardListTest : ScreenTest() {
 
@@ -217,6 +223,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("Single entry").assertDoesNotExist()
 
         compose.onNodeWithText("Add").performClick()
+        settle()
         compose.onNodeWithText("Workout").assertIsDisplayed()
         compose.onNodeWithText("Single entry").assertIsDisplayed()
 
@@ -230,6 +237,7 @@ class DayCardListTest : ScreenTest() {
         day(date = yesterday)
 
         compose.onNodeWithText("Add").performClick()
+        settle()
         compose.onNodeWithText("Single entry").performClick()
 
         assertEquals("the entry belongs to the day on screen, not to today", yesterday, loggedSingle)
