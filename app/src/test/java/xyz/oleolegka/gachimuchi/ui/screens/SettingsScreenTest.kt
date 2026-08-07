@@ -1,7 +1,13 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
@@ -13,18 +19,22 @@ import xyz.oleolegka.gachimuchi.ui.ScreenTest
 /**
  * The settings tab, which is the celebration pictures and nothing else yet.
  *
- * Two tests, because there is not much here and what there is has no arguable behaviour: it
- * reads a store and draws three radio rows. What is worth pinning is that the screen comes
- * up at all — it reaches for a process-wide gallery and for the system picture picker, and
- * either of those failing would take the tab down on a device without ever failing to
- * compile.
+ * Not much here, and what there is has no arguable behaviour: it reads a store and draws
+ * three radio rows. What is worth pinning is that the screen comes up at all — it reaches
+ * for a process-wide gallery and for the system picture picker, and either of those failing
+ * would take the tab down on a device without ever failing to compile.
  *
- * ── A gap, stated rather than papered over ──────────────────────────────────────
- * WHICH mode is selected cannot be asserted. The rows draw a `RadioButton(onClick = null)`
- * inside a `Modifier.clickable` Row, so the selected state is painted but never published
- * as semantics — a screen reader cannot tell which one is chosen either, and nor can a
- * test. Fixing that means moving the row to `Modifier.selectable`, which is a change to a
- * screen rather than to a test and was left out of this piece of work deliberately.
+ * ── Which mode is on is now a fact the tree carries ─────────────────────────────
+ * The rows used to be a `RadioButton(onClick = null)` inside a `Modifier.clickable` Row,
+ * which paints the choice and publishes nothing: no test and no screen reader could say
+ * which mode was picked. They are `Modifier.selectable` with a radio role now, so the state
+ * is in semantics and [modeIsSelected] can read it.
+ *
+ * ── Why the test chooses a mode instead of trusting the default ─────────────────
+ * The gallery is a process-wide singleton and the mode it holds is written through to
+ * SharedPreferences, so a mode chosen by one test method is still chosen when the next one
+ * composes the screen. Asserting on the store's default would therefore pass or fail on the
+ * order the methods happen to run in. Each assertion below follows a click of its own.
  */
 class SettingsScreenTest : ScreenTest() {
 
@@ -62,4 +72,48 @@ class SettingsScreenTest : ScreenTest() {
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("On every set"))
         compose.onNodeWithText("On every set").assertHasClickAction().performClick()
     }
+
+    /**
+     * Choosing a mode marks that row as chosen and unmarks the others — which is the whole of
+     * what a radio group has to say about itself, and what a screen reader reads out.
+     *
+     * The row is asserted rather than the `RadioButton` inside it, because the button is
+     * `onClick = null` on purpose: the row is the target, so the row is what carries the
+     * state. The chips of Compose semantics involved (a merged node, a role, a selected flag)
+     * are exactly the ones a talkback user hears.
+     */
+    @Test
+    fun `the chosen mode is published as chosen, and the other two as not`() {
+        screen { SettingsScreen() }
+
+        // the click writes to a flow the screen collects, and with the frame clock held still
+        // the recomposition it causes has not been drawn when the next line reads the tree
+        modeRow("Off").performClick()
+        settle()
+
+        modeIsSelected("Off").assertIsSelected()
+        modeIsSelected("On every set").assertIsNotSelected()
+        modeIsSelected("On records only").assertIsNotSelected()
+
+        // and the mark moves rather than accumulating
+        modeRow("On records only").performClick()
+        settle()
+
+        modeIsSelected("On records only").assertIsSelected()
+        modeIsSelected("Off").assertIsNotSelected()
+    }
+
+    /** The row carrying [title], brought into the lazy list's window first. */
+    private fun modeRow(title: String): SemanticsNodeInteraction {
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText(title))
+        return compose.onNodeWithText(title)
+    }
+
+    /**
+     * The row as the tree publishes it: a node with a radio ROLE, which is the row rather
+     * than the text inside it. Matching on the role is what makes this a check of the
+     * semantics and not of the wording.
+     */
+    private fun modeIsSelected(title: String) =
+        compose.onNode(hasText(title) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
 }

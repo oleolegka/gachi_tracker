@@ -1,7 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -198,14 +199,27 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * One celebration mode as a row: the button, the name, and what choosing it means.
+ *
+ * ── Selectable, not merely clickable ────────────────────────────────────────────
+ * The whole row is the target and the `RadioButton` inside it takes no click of its own, so
+ * the row has to say what the button would have said. `Modifier.selectable` with
+ * [Role.RadioButton] publishes BOTH the role and the chosen state into semantics; a plain
+ * `clickable` publishes neither, and then which mode is on is only painted. A screen reader
+ * reading these rows would announce three identical buttons and never say which one is
+ * already picked — and a test could not tell either, which is how it stayed that way.
+ */
 @Composable
 private fun ModeRow(selected: Boolean, title: String, hint: String, onSelect: () -> Unit) {
     val colors = LocalGachiColors.current
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // the whole row is the target; the button itself takes no click of its own
         RadioButton(selected = selected, onClick = null)
         Column(Modifier.padding(start = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)
