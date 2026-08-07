@@ -1,6 +1,7 @@
 package xyz.oleolegka.gachimuchi.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import xyz.oleolegka.gachimuchi.data.db.AliasDao
 import xyz.oleolegka.gachimuchi.data.db.AliasEntity
@@ -9,10 +10,12 @@ import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
+import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
@@ -49,7 +52,19 @@ class ActivityRepository(private val db: AppDatabase) {
 
     val aliases: Flow<List<AliasEntity>> = db.aliases().observeAll()
 
-    val slots: Flow<List<Slot>> = db.slots().observeAll().map { rows -> rows.map { it.toSlot() } }
+    /**
+     * The plan, each slot carrying what it is meant to consist of.
+     *
+     * Two tables combined here rather than left for the screens to join, so that "a slot"
+     * means the same thing everywhere: a screen holding a [Slot] can read its composition
+     * without a second lookup, and there is no half-loaded slot to forget about. Both flows
+     * are live, so adding an exercise to a plan reaches the calendar the same way renaming
+     * the slot does.
+     */
+    val slots: Flow<List<Slot>> = combine(
+        db.slots().observeAll(),
+        db.slots().observeExercises(),
+    ) { rows, planned -> assembleSlots(rows, planned) }
 
     suspend fun allEvents(): List<JournalEvent> = db.events().all().map { it.toJournalEvent() }
 
@@ -266,7 +281,7 @@ class ActivityRepository(private val db: AppDatabase) {
 
     // --- calendar slots (§12-B) ---
 
-    suspend fun allSlots(): List<Slot> = db.slots().all().map { it.toSlot() }
+    suspend fun allSlots(): List<Slot> = assembleSlots(db.slots().all(), db.slots().allExercises())
 
     suspend fun createSlot(
         name: String,
@@ -281,7 +296,20 @@ class ActivityRepository(private val db: AppDatabase) {
         )
     )
 
-    suspend fun slot(id: Long): Slot? = db.slots().byId(id)?.toSlot()
+    suspend fun slot(id: Long): Slot? =
+        db.slots().byId(id)?.toSlot(db.slots().exercisesOf(id).map { it.toPlanned() })
+
+    /**
+     * What one slot is meant to consist of, in order — the read the "start a workout from
+     * this session" path needs when it holds an id and not the slot.
+     *
+     * A slot that does not exist answers with an empty list rather than throwing. Nothing
+     * about starting a workout depends on this succeeding: an empty composition is the
+     * normal case (see domain/Schedule.kt), so "the slot is gone" and "the slot had nothing
+     * in it" deserve the same answer here.
+     */
+    suspend fun slotExercises(slotId: Long): List<PlannedExercise> =
+        db.slots().exercisesOf(slotId).map { it.toPlanned() }
 
     /**
      * Writes a slot the editor built: an INSERT when [id] is null, an UPDATE of that id
@@ -292,21 +320,47 @@ class ActivityRepository(private val db: AppDatabase) {
      * blank name or an unreadable time would come back out as a row the calendar has to
      * render forever. The screen refuses first (with a message); the repository refuses
      * last (quietly), and neither relies on the other.
+     *
+     * The composition is written in the same call and REPLACED rather than diffed, exactly
+     * as a program's groups are (see ProgramRepository): adding, removing and reordering all
+     * become the same two statements, and no path leaves a stale row behind. It follows the
+     * refusals — a draft that is not storable writes no exercises either, and neither does
+     * an edit of a slot that has been deleted in the meantime.
      */
     suspend fun saveSlot(draft: SlotDraft, id: Long? = null): Long? {
         // aliased on import: this file also declares a SlotEntity.toSlot of its own
         val slot = draft.draftToSlot(id ?: 0L) ?: return null
-        if (id == null) {
-            return createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
+        val savedId = if (id == null) {
+            createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
+        } else {
+            val touched = db.slots().updateFields(
+                id = id,
+                name = slot.name,
+                atTime = slot.atTime,
+                repeatRule = slot.repeatRule,
+                anchorDate = slot.anchorDate,
+            )
+            if (touched == 0) return null
+            id
         }
-        val touched = db.slots().updateFields(
-            id = id,
-            name = slot.name,
-            atTime = slot.atTime,
-            repeatRule = slot.repeatRule,
-            anchorDate = slot.anchorDate,
+        writeSlotExercises(savedId, slot.exercises)
+        return savedId
+    }
+
+    /** Replaces a slot's composition. The list order becomes the stored `position`. */
+    private suspend fun writeSlotExercises(slotId: Long, exercises: List<PlannedExercise>) {
+        db.slots().deleteExercisesOf(slotId)
+        if (exercises.isEmpty()) return
+        db.slots().insertExercises(
+            exercises.mapIndexed { index, planned ->
+                SlotExerciseEntity(
+                    slotId = slotId,
+                    exerciseId = planned.exerciseId,
+                    position = index,
+                    restSec = planned.restSec,
+                )
+            }
         )
-        return if (touched > 0) id else null
     }
 
     /**
@@ -314,6 +368,9 @@ class ActivityRepository(private val db: AppDatabase) {
      * occurrences are computed from this row, so removing it removes the whole series,
      * past days included. Nothing in the journal is affected (see domain/Schedule.kt,
      * `deletionWarning`, which is the text the user confirms).
+     *
+     * The planned composition goes too, by cascade rather than by a second statement here —
+     * see [SlotExerciseEntity]. It has to go: those rows are reachable only through the slot.
      */
     suspend fun deleteSlot(id: Long) = db.slots().deleteByIds(listOf(id))
 
@@ -366,6 +423,25 @@ fun EventEntity.toJournalEvent() = JournalEvent(
     workoutId = workoutId,
 )
 
-fun SlotEntity.toSlot() = Slot(
+fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
     id = id, name = name, atTime = atTime, repeatRule = repeatRule, anchorDate = anchorDate,
+    exercises = exercises,
 )
+
+fun SlotExerciseEntity.toPlanned() = PlannedExercise(exerciseId = exerciseId, restSec = restSec)
+
+/**
+ * Slot rows plus their composition rows -> the plan as the domain sees it.
+ *
+ * The composition arrives already ordered by (slot, position), and [groupBy] preserves that
+ * order — which is why nothing sorts again here. A slot with no rows gets an empty list
+ * rather than being skipped: an empty composition is the normal state of a plan, not a slot
+ * that failed to load.
+ */
+private fun assembleSlots(
+    rows: List<SlotEntity>,
+    planned: List<SlotExerciseEntity>,
+): List<Slot> {
+    val bySlot = planned.groupBy { it.slotId }
+    return rows.map { row -> row.toSlot(bySlot[row.id].orEmpty().map { it.toPlanned() }) }
+}

@@ -14,9 +14,9 @@ import androidx.room.PrimaryKey
  * deliberate choice in favour of conflict-free sync: two devices appending to opposite
  * ends of the journal merge by union rather than by resolving field conflicts.
  *
- * The catalog [ExerciseEntity], the aliases [AliasEntity] and the slots [SlotEntity]
- * are NOT part of the journal: they are editable reference data and the plan (§12-B
- * explicitly allows editing the plan).
+ * The catalog [ExerciseEntity], the aliases [AliasEntity], the slots [SlotEntity] and the
+ * composition of a slot [SlotExerciseEntity] are NOT part of the journal: they are editable
+ * reference data and the plan (§12-B explicitly allows editing the plan).
  *
  * `space_id` (the profile) is present everywhere, exactly as on the server:
  * multi-tenancy is preserved in the schema even though the app has exactly one profile
@@ -271,4 +271,49 @@ data class SlotEntity(
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
     /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
     @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
+)
+
+/**
+ * One exercise planned into a slot (schema version 6): the intended composition of a
+ * session, which a workout started from that slot can be filled in from.
+ *
+ * A TABLE RATHER THAN A JSON COLUMN ON `slots`, for the same reason the program tables are
+ * three tables and not a blob (see [ProgramEntity]): the row is the unit the editor works
+ * in, and a blob turns adding one exercise into a read-modify-write of the whole list. It
+ * also keeps the exercise link queryable, which "what am I supposed to be doing today" will
+ * eventually want.
+ *
+ * ON DELETE CASCADE against `slots`, so deleting a plan cannot leave its composition behind
+ * as rows nothing can reach. That is the ONLY foreign key here, and the omission of the
+ * other one is the decision worth writing down: there is deliberately no key on
+ * [exerciseId]. The catalog is editable and §12-A can split a hangboard exercise by edge — a
+ * cascade would let deleting an exercise silently rewrite a plan, and `SET NULL` would leave
+ * a planned line pointing at nothing while claiming to be intact. A dangling id simply reads
+ * as "that exercise is gone", which the editor can say out loud.
+ *
+ * [position] is written from the list index on every save (the composition is replaced, not
+ * diffed), so the stored order and the order on screen cannot drift apart.
+ *
+ * There is no `seeded` column: the demo seed writes no compositions, and if it ever does,
+ * these rows go when their slot does.
+ */
+@Entity(
+    tableName = "slot_exercises",
+    indices = [Index(value = ["slot_id"])],
+    foreignKeys = [
+        androidx.room.ForeignKey(
+            entity = SlotEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["slot_id"],
+            onDelete = androidx.room.ForeignKey.CASCADE,
+        )
+    ],
+)
+data class SlotExerciseEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @androidx.room.ColumnInfo(name = "slot_id") val slotId: Long,
+    @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: Long,
+    val position: Int,
+    /** Rest between sets of this exercise IN THIS SESSION, or null for "the usual one". */
+    @androidx.room.ColumnInfo(name = "rest_sec") val restSec: Int? = null,
 )

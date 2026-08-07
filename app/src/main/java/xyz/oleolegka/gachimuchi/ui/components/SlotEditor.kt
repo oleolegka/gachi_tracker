@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -44,6 +49,7 @@ import xyz.oleolegka.gachimuchi.domain.REPEAT_DAILY
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.REPEAT_RULES
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
+import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
@@ -58,7 +64,14 @@ import xyz.oleolegka.gachimuchi.domain.problemText
 import xyz.oleolegka.gachimuchi.domain.repeatLabel
 import xyz.oleolegka.gachimuchi.domain.toDraft
 import xyz.oleolegka.gachimuchi.domain.toSlot
+import xyz.oleolegka.gachimuchi.domain.withExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.withExerciseMoved
+import xyz.oleolegka.gachimuchi.domain.withExerciseRemoved
+import xyz.oleolegka.gachimuchi.domain.withExerciseRest
+import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.fmtRest
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
+import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
 
@@ -93,6 +106,17 @@ import java.time.LocalDate
  * `parseSlotTime` refuses it, the field turns red and Save stays disabled. The alternative
  * — reading it as 17:00 — would store a time the user did not type whenever they meant
  * 17:05, and would do it silently.
+ *
+ * ── The exercises are an extra, and the layout has to say so ────────────────────
+ * A slot with nothing under it is a complete plan (domain/Schedule.kt), and by far the most
+ * common one — "gym on Thursday" is the whole thought most of the time. So the composition
+ * lives behind a COLLAPSED LINE that opens on a tap, and the line reads "none planned"
+ * rather than sitting there as an empty field. An empty required-looking control is a
+ * standing reproach: it makes the cheapest useful plan feel half-finished and invites the
+ * user to fill something in before they know what they will do.
+ *
+ * It opens by itself when a slot already has exercises, because then there is something to
+ * see and hiding it would mean a tap to find out whether anything is in there at all.
  */
 @Composable
 fun SlotEditorDialog(
@@ -100,6 +124,8 @@ fun SlotEditorDialog(
     day: LocalDate,
     suggestions: List<String>,
     today: LocalDate,
+    /** The catalog and the journal behind it: what the exercise picker searches through. */
+    state: UiState,
     onSave: (SlotDraft) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -110,6 +136,9 @@ fun SlotEditorDialog(
     }
     // transient like the dialog itself: a clock left open across a rotation is a surprise
     var clockOpen by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(false) }
+    // open on what is already there, shut on what is not — see the header
+    var exercisesOpen by remember(initial) { mutableStateOf(initial?.exercises?.isNotEmpty() == true) }
     val problem = draft.problem()
     val anchor = remember(draft.anchorDate) {
         runCatching { LocalDate.parse(draft.anchorDate) }.getOrDefault(day)
@@ -126,6 +155,21 @@ fun SlotEditorDialog(
                 clockOpen = false
             },
             onDismiss = { clockOpen = false },
+        )
+    }
+
+    if (picking) {
+        ExercisePickerSheet(
+            state = state,
+            today = today,
+            // the typed word is dropped rather than learned as an alias: teaching a word is a
+            // write to the catalog, and this dialog has no way to make one — it hands a draft
+            // back and touches nothing until Save. The logging screen still teaches it.
+            onPick = { id, _ -> draft = draft.withExerciseAdded(id) },
+            // planning picks from what is already trained; creating an exercise asks the
+            // §12-A identity questions, which belong to the moment of the first set
+            onCreate = null,
+            onDismiss = { picking = false },
         )
     }
 
@@ -245,6 +289,17 @@ fun SlotEditorDialog(
                     )
                 }
 
+                PlannedExercisesSection(
+                    exercises = draft.exercises,
+                    open = exercisesOpen,
+                    onToggle = { exercisesOpen = !exercisesOpen },
+                    nameOf = { state.exerciseById(it)?.name },
+                    onAdd = { picking = true },
+                    onRemove = { draft = draft.withExerciseRemoved(it) },
+                    onMove = { index, delta -> draft = draft.withExerciseMoved(index, delta) },
+                    onRest = { index, sec -> draft = draft.withExerciseRest(index, sec) },
+                )
+
                 if (problem != null) {
                     Text(problemText(problem), fontSize = 12.sp, color = colors.inkMuted)
                 }
@@ -294,6 +349,173 @@ fun DeleteSlotDialog(slot: Slot, onConfirm: () -> Unit, onDismiss: () -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text("Keep it") } },
     )
 }
+
+/**
+ * What the session is meant to consist of — a plan for the workout, not a record of one.
+ *
+ * ── Collapsed by default, and worded as an option ───────────────────────────────
+ * The header is the whole control when nothing is planned: one line saying so, which opens
+ * on a tap. It deliberately does NOT look like an empty field, because it is not one — the
+ * slot saves perfectly well without it, and the user said as much ("exercises are needed,
+ * but not required; sometimes I will not be bothered"). A control that looks unfilled reads
+ * as an instruction, and the instruction here would be wrong.
+ *
+ * ── Order is the plan, so order is editable ─────────────────────────────────────
+ * Up and down rather than drag-and-drop: the list is three or four rows inside a scrolling
+ * dialog, and a long-press-drag inside a scroll container inside a dialog fights the two
+ * gestures either side of it. The arrows are unambiguous and stay hittable one-handed.
+ *
+ * ── The rest is per exercise and optional ───────────────────────────────────────
+ * "Usual" is the default and it is NOT the absence of an answer to a required question: it
+ * means "whatever this exercise normally gets", which is a live value the catalog keeps and
+ * this plan should not freeze a copy of. A number is only stored when the user says this
+ * session is different — the heavy day that wants three minutes where ninety seconds is
+ * normal.
+ */
+@Composable
+private fun PlannedExercisesSection(
+    exercises: List<PlannedExercise>,
+    open: Boolean,
+    onToggle: () -> Unit,
+    nameOf: (Long) -> String?,
+    onAdd: () -> Unit,
+    onRemove: (Int) -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onRest: (Int, Int?) -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (exercises.isEmpty()) "Exercises - none planned" else "Exercises (${exercises.size})",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.inkSecondary,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (open) "Hide the exercises" else "Show the exercises",
+                tint = colors.inkMuted,
+            )
+        }
+
+        if (open) {
+            Text(
+                "Optional. A session with nothing listed is a plan just the same - this is " +
+                    "only here for when you already know what you are going to do.",
+                fontSize = 12.sp,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+            )
+
+            exercises.forEachIndexed { index, planned ->
+                PlannedExerciseRow(
+                    position = index,
+                    last = index == exercises.lastIndex,
+                    // a name the catalog no longer has: the line is KEPT and labelled rather
+                    // than dropped, because a plan quietly losing a line is worse than one
+                    // showing a line it cannot name (data/db/Entities.kt, SlotExerciseEntity)
+                    name = nameOf(planned.exerciseId) ?: "Removed exercise",
+                    restSec = planned.restSec,
+                    onUp = { onMove(index, -1) },
+                    onDown = { onMove(index, 1) },
+                    onRemove = { onRemove(index) },
+                    onRest = { onRest(index, it) },
+                )
+            }
+
+            TextButton(onClick = onAdd, modifier = Modifier.padding(top = 2.dp)) {
+                Icon(Icons.Filled.Add, contentDescription = null, tint = colors.accent)
+                Text("  Add an exercise", color = colors.accent)
+            }
+        }
+    }
+}
+
+/** One planned exercise: where it sits, what it is, and how long the pauses in it are. */
+@Composable
+private fun PlannedExerciseRow(
+    position: Int,
+    last: Boolean,
+    name: String,
+    restSec: Int?,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+    onRemove: () -> Unit,
+    onRest: (Int?) -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${position + 1}.",
+                fontSize = 13.sp,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(end = 6.dp),
+            )
+            Text(
+                name,
+                fontSize = 13.5.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onUp, enabled = position > 0) {
+                Icon(
+                    Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Move \"$name\" earlier",
+                    tint = colors.inkSecondary,
+                )
+            }
+            IconButton(onClick = onDown, enabled = !last) {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Move \"$name\" later",
+                    tint = colors.inkSecondary,
+                )
+            }
+            IconButton(onClick = onRemove) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Take \"$name\" out of the plan",
+                    tint = colors.critical,
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Rest", fontSize = 12.sp, color = colors.inkMuted)
+            SiblingChip(
+                text = "Usual",
+                selected = restSec == null,
+                accent = colors.accent,
+                onClick = { onRest(null) },
+            )
+            REST_CHOICES.forEach { seconds ->
+                SiblingChip(
+                    text = fmtRest(seconds.toDouble()),
+                    selected = restSec == seconds,
+                    accent = colors.accent,
+                    onClick = { onRest(seconds) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Rests offered as one tap. Chips rather than a number field for the reason the quick times
+ * above are chips: the phone's numeric keyboard over a dialog is three interactions to say
+ * something that has five plausible answers. A rest outside this set is a thing to set on
+ * the day, on the timer, where it is actually being counted.
+ */
+private val REST_CHOICES = listOf(60, 90, 120, 150, 180, 240)
 
 /**
  * A day picked by stepping, not by a calendar popup: the calendar is already on screen

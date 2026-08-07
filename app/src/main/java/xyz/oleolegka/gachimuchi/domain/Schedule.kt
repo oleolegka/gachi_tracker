@@ -43,14 +43,58 @@ const val SLOT_WINDOW_BEFORE_MIN = 30
  */
 const val SLOT_WINDOW_AFTER_MIN = 180
 
-/** A master plan slot (the domain mirror of a `slots` table row). */
+/**
+ * One exercise planned into a slot: which catalog exercise it is, and the rest between its
+ * sets for THIS session.
+ *
+ * The exercise is held by ID and nothing else — no name, no form. Copying the name in would
+ * make the plan disagree with the catalog the moment an exercise is renamed, and §11 exists
+ * precisely so that a name is a label on a row rather than an identity. A dangling id (the
+ * exercise was deleted) reads as "that exercise is not in the catalog any more", which is
+ * the honest answer; it is not silently dropped, because a plan quietly losing a line is
+ * worse than one showing a line it cannot name.
+ *
+ * [restSec] is NULLABLE and null is the normal value: it means "whatever this exercise
+ * usually gets" (the catalog's remembered rest, and failing that the settings). A number
+ * here is the user saying "in this session, that one is different" — a heavy day wants
+ * three minutes where the same exercise normally gets ninety seconds.
+ *
+ * There is no position field: the LIST ORDER is the order. The stored table has a position
+ * column, but it is written from the index on save, so there is no second copy of the order
+ * that can drift from the one the editor shows.
+ */
+data class PlannedExercise(
+    val exerciseId: Long,
+    val restSec: Int? = null,
+)
+
+/**
+ * A master plan slot (the domain mirror of a `slots` table row).
+ *
+ * [exercises] is what the session is MEANT to consist of, and it is empty far more often
+ * than not — a slot is a promise to train at a time, and filling in the exercises ahead of
+ * time is an extra the user may never bother with. Nothing in the calendar reads it: the
+ * plan/fact verdict is about whether a workout happened, not about whether it matched.
+ */
 data class Slot(
     val id: Long,
     val name: String,
     val atTime: String?,
     val repeatRule: String,
     val anchorDate: String,
+    val exercises: List<PlannedExercise> = emptyList(),
 )
+
+/**
+ * What is planned in one slot, for a caller that holds the plan and a slot id rather than
+ * the slot itself — which is the shape starting a workout from a planned session has.
+ *
+ * An unknown id (or none) answers "nothing planned" rather than throwing: the slot may have
+ * been deleted between the screen reading it and the button being pressed, and a workout
+ * must start regardless. Nothing here is required for a workout to happen — see [Slot].
+ */
+fun plannedExercises(slots: List<Slot>, slotId: Long?): List<PlannedExercise> =
+    slots.firstOrNull { it.id == slotId }?.exercises.orEmpty()
 
 /** A single occurrence of a slot in the calendar: the day plus the master slot itself. */
 data class SlotOccurrence(val day: String, val slot: Slot) {
@@ -345,6 +389,13 @@ data class SlotDraft(
     val timeText: String = "",
     val repeatRule: String = REPEAT_NONE,
     val anchorDate: String,
+    /**
+     * The planned session, in order. AN EMPTY LIST IS A COMPLETE DRAFT — [problem] never
+     * looks at it. "Gym on Thursday" with nothing under it is the plan most of the time,
+     * and making the composition a thing that has to be filled in would turn the cheapest
+     * useful plan into a form.
+     */
+    val exercises: List<PlannedExercise> = emptyList(),
 )
 
 /** Why a draft cannot be saved yet. One reason at a time — the editor shows one message. */
@@ -356,6 +407,7 @@ fun Slot.toDraft(): SlotDraft = SlotDraft(
     timeText = atTime.orEmpty(),
     repeatRule = repeatRule,
     anchorDate = anchorDate,
+    exercises = exercises,
 )
 
 /** The draft of a NEW slot on [day]: a one-off with no time, which is the cheapest plan. */
@@ -366,6 +418,11 @@ fun newSlotDraft(day: LocalDate): SlotDraft = SlotDraft(anchorDate = day.toStrin
  *
  * A blank time is NOT a problem: a session without a clock time is a normal plan ("gym
  * some time on Thursday"), which is why the column is nullable in the first place.
+ *
+ * Neither is an empty list of exercises, and that one is deliberate rather than an
+ * oversight: the composition of a session is an OPTIONAL note to self, and a plan that
+ * refused to save until it was filled in would be a form standing between the user and the
+ * one thing this dialog is for.
  */
 fun SlotDraft.problem(): SlotProblem? = when {
     name.isBlank() -> SlotProblem.NAME_EMPTY
@@ -393,6 +450,49 @@ fun SlotDraft.toSlot(id: Long = 0L): Slot? {
         atTime = parseSlotTime(timeText),
         repeatRule = repeatRule,
         anchorDate = anchorDate,
+        exercises = exercises,
+    )
+}
+
+// --- editing the composition ----------------------------------------------------------
+//
+// Four operations on a list, kept here rather than in the dialog for the usual reason: they
+// are the part with the off-by-one in it. An index that no longer exists is a NO-OP in all
+// of them — the editor and the list it is editing are one recomposition apart, and a tap
+// that arrives against a stale index should do nothing rather than crash the dialog the
+// user is halfway through.
+
+/** Appends an exercise to the plan. Duplicates are allowed — see [SlotDraft.exercises]. */
+fun SlotDraft.withExerciseAdded(exerciseId: Long, restSec: Int? = null): SlotDraft =
+    copy(exercises = exercises + PlannedExercise(exerciseId, restSec?.takeIf { it > 0 }))
+
+fun SlotDraft.withExerciseRemoved(index: Int): SlotDraft =
+    if (index !in exercises.indices) this
+    else copy(exercises = exercises.filterIndexed { i, _ -> i != index })
+
+/**
+ * Moves one exercise by [delta] places. Off either end is a no-op rather than a clamp: the
+ * buttons that drive this are disabled at the ends, so an out-of-range move means the list
+ * changed underneath and doing nothing is the only answer that cannot reorder the wrong row.
+ */
+fun SlotDraft.withExerciseMoved(index: Int, delta: Int): SlotDraft {
+    val target = index + delta
+    if (index !in exercises.indices || target !in exercises.indices || delta == 0) return this
+    val moved = exercises.toMutableList()
+    moved.add(target, moved.removeAt(index))
+    return copy(exercises = moved)
+}
+
+/**
+ * Sets (or clears) the rest for one planned exercise. A non-positive number is stored as
+ * null: zero is not a rest of no seconds, it is the absence of an answer, and null is how
+ * "nothing was said, use the usual one" is spelled everywhere else in the model.
+ */
+fun SlotDraft.withExerciseRest(index: Int, restSec: Int?): SlotDraft {
+    if (index !in exercises.indices) return this
+    val wanted = restSec?.takeIf { it > 0 }
+    return copy(
+        exercises = exercises.mapIndexed { i, e -> if (i == index) e.copy(restSec = wanted) else e }
     )
 }
 

@@ -29,11 +29,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ExerciseEntity::class,
         AliasEntity::class,
         SlotEntity::class,
+        SlotExerciseEntity::class,
         ProgramEntity::class,
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -187,8 +188,47 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 5 -> 6: what a planned session is made of.
+         *
+         * ONE NEW TABLE AND NOTHING ELSE — no existing table is touched, so every slot on
+         * the phone comes through with an empty composition, which is exactly what it had.
+         * That is also the shape of the feature: a slot with no exercises stays a complete
+         * plan (see domain/Schedule.kt), so "nothing was migrated into it" is not a gap to
+         * be filled in later, it is the resting state.
+         *
+         * The foreign key is declared here because it is declared on [SlotExerciseEntity],
+         * and the two have to agree: Room compares the database against the entities on the
+         * next open, and a key present in one place and missing in the other fails that check
+         * rather than failing quietly. It is also what makes deleting a slot take its
+         * composition with it, which is enforcement rather than bookkeeping — Room switches
+         * foreign keys on at the connection level.
+         *
+         * `rest_sec` is nullable with no default: null means "use the rest this exercise
+         * usually gets", and a NOT NULL column with a sentinel would turn that into a magic
+         * number every reader has to remember.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `slot_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`slot_id` INTEGER NOT NULL, " +
+                        "`exercise_id` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`rest_sec` INTEGER, " +
+                        "FOREIGN KEY(`slot_id`) REFERENCES `slots`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_slot_exercises_slot_id` " +
+                        "ON `slot_exercises` (`slot_id`)"
+                )
+            }
+        }
+
         val MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

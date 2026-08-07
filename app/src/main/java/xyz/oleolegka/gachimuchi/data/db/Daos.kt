@@ -230,4 +230,40 @@ interface SlotDao {
 
     @Query("DELETE FROM slots WHERE space_id = :spaceId AND id IN (:ids)")
     suspend fun deleteByIds(ids: List<Long>, spaceId: Long = LOCAL_SPACE_ID)
+
+    // --- what a slot is made of (schema version 6) ---
+    //
+    // There is no delete-one-row and no update here, and there does not need to be: the
+    // composition is REPLACED wholesale on every save, exactly as a program's groups are
+    // (see ProgramRepository). Reordering, inserting and removing then all reduce to the
+    // same two statements, and no path exists on which a stale row survives an edit.
+    //
+    // Nor is there a delete keyed on the slot going away: `slot_exercises` cascades from
+    // `slots`, so [deleteByIds] takes the composition with it.
+
+    @Insert
+    suspend fun insertExercises(rows: List<SlotExerciseEntity>)
+
+    @Query("DELETE FROM slot_exercises WHERE slot_id = :slotId")
+    suspend fun deleteExercisesOf(slotId: Long)
+
+    @Query("SELECT * FROM slot_exercises WHERE slot_id = :slotId ORDER BY position, id")
+    suspend fun exercisesOf(slotId: Long): List<SlotExerciseEntity>
+
+    /**
+     * Every slot's composition at once, for assembling the whole plan in one pass. Scoped
+     * through `slots` rather than carrying its own `space_id`: the row belongs to a slot and
+     * has no independent existence, so its profile is whatever its slot's is.
+     */
+    @Query(
+        "SELECT * FROM slot_exercises WHERE slot_id IN " +
+            "(SELECT id FROM slots WHERE space_id = :spaceId) ORDER BY slot_id, position, id"
+    )
+    fun observeExercises(spaceId: Long = LOCAL_SPACE_ID): Flow<List<SlotExerciseEntity>>
+
+    @Query(
+        "SELECT * FROM slot_exercises WHERE slot_id IN " +
+            "(SELECT id FROM slots WHERE space_id = :spaceId) ORDER BY slot_id, position, id"
+    )
+    suspend fun allExercises(spaceId: Long = LOCAL_SPACE_ID): List<SlotExerciseEntity>
 }

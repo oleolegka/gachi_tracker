@@ -227,6 +227,8 @@ fun CalendarScreen(
                 state.slots.asReversed().map { it.name }.distinct().take(6)
             },
             today = today,
+            // the catalog the editor's exercise picker searches through
+            state = state,
             onSave = { draft ->
                 onSaveSlot(draft, target.slot?.id)
                 // follow the plan to where it landed, month included

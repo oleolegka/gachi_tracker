@@ -78,7 +78,16 @@ fun ExercisePickerSheet(
     state: UiState,
     today: LocalDate,
     onPick: (Long, String?) -> Unit,
-    onCreate: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
+    /**
+     * Creating a new catalog exercise, or NULL for a caller that only picks from what is
+     * already there — the slot editor, which plans sessions out of exercises the user
+     * already trains and has no business asking §12-A identity questions (form, edge,
+     * protocol) days before the first set.
+     *
+     * Nullable rather than defaulted, so that every caller has to say which it is: a create
+     * button wired to nothing is exactly the failure this is meant to make impossible.
+     */
+    onCreate: ((String, ExerciseForm, Double?, Double?, Double?) -> Unit)?,
     onDismiss: () -> Unit,
     /**
      * Skip the list and open on the create form. Set when the catalog is empty: a search
@@ -89,7 +98,8 @@ fun ExercisePickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by rememberSaveable { mutableStateOf("") }
-    var creating by rememberSaveable { mutableStateOf(startInCreate) }
+    // a caller that cannot create can never open on the create form, whatever it asked for
+    var creating by rememberSaveable { mutableStateOf(startInCreate && onCreate != null) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -100,7 +110,7 @@ fun ExercisePickerSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (creating) {
+            if (creating && onCreate != null) {
                 CreateExerciseForm(
                     initialName = query,
                     onCancel = { creating = false },
@@ -120,7 +130,7 @@ fun ExercisePickerSheet(
                         onPick(id, query.takeIf { it.isNotBlank() })
                         onDismiss()
                     },
-                    onNew = { creating = true },
+                    onNew = onCreate?.let { { creating = true } },
                 )
             }
         }
@@ -134,7 +144,8 @@ private fun PickExisting(
     query: String,
     onQuery: (String) -> Unit,
     onPick: (Long) -> Unit,
-    onNew: () -> Unit,
+    /** Null when this caller does not create exercises — see [ExercisePickerSheet]. */
+    onNew: (() -> Unit)?,
 ) {
     val colors = LocalGachiColors.current
     val order = remember(state.events) { pickerOrder(exerciseUsage(state.events)) }
@@ -171,12 +182,14 @@ private fun PickExisting(
         )
     }
 
-    Button(
-        onClick = onNew,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-    ) {
-        Icon(Icons.Filled.Add, contentDescription = null)
-        Text(if (catalogEmpty) "  Create your first exercise" else "  New exercise")
+    if (onNew != null) {
+        Button(
+            onClick = onNew,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Text(if (catalogEmpty) "  Create your first exercise" else "  New exercise")
+        }
     }
 
     HorizontalDivider()
@@ -190,14 +203,30 @@ private fun PickExisting(
     if (teaching || items.isEmpty()) {
         Text(
             when {
+                /*
+                 * Without a way to create, every one of these has to stop offering one. The
+                 * sentences are otherwise identical, because the situation is: the difference
+                 * is only in which exits exist from it, and naming an exit that is not on the
+                 * screen is how a dead end gets dressed up as a choice.
+                 */
+                catalogEmpty && onNew == null ->
+                    "Nothing in the catalog yet. Exercises are created while logging a workout; " +
+                        "once one exists it can be planned here."
+
                 catalogEmpty ->
                     "Nothing in the catalog yet. An exercise is created once and then reused " +
                         "for every set of it."
+
+                teaching && onNew == null ->
+                    "Nothing is called \"$query\" yet. Tap the exercise you mean and the word " +
+                        "becomes one of its names, so it finds it next time."
 
                 teaching ->
                     "Nothing is called \"$query\" yet. Tap the exercise you mean and the word " +
                         "becomes one of its names, so it finds it next time - or create it as a " +
                         "new exercise, with a history of its own."
+
+                onNew == null -> "Nothing matches."
 
                 else ->
                     "Nothing matches. Create it as a new exercise, and the typed word becomes " +
