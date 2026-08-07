@@ -320,9 +320,27 @@ data class Bodyweight(
     }
 }
 
-/** Set reversal: payload = {"cancels": id}. */
+/**
+ * Set reversal — the journal is append-only, so undoing a set is a new event naming the old
+ * one rather than a delete.
+ *
+ * ── Two fields for one link, and the uid is the real one ────────────────────────
+ * [cancelsUid] is the identity of the event being reversed ([JournalEvent.uid]); [cancels] is
+ * the local row number it used to be said with. Both are written, and the readers believe the
+ * uid — a reversal that travelled here from another journal would otherwise cancel whichever
+ * unrelated row happened to have that number on this phone, which is a set silently
+ * disappearing out of somebody's history.
+ *
+ * BOTH ARE NULLABLE, which is not sloppiness. A payload written before version 9 has only the
+ * number, and one that arrives from a journal with no numbers at all has only the uid; a
+ * reversal with NEITHER names nothing and is dropped by [cancelledEventUids] rather than
+ * throwing, on the same grounds as [formFromEventOrNull].
+ */
 @Serializable
-data class SetCancel(@SerialName("cancels") val cancels: Long)
+data class SetCancel(
+    @SerialName("cancels") val cancels: Long? = null,
+    @SerialName("cancels_uid") val cancelsUid: String? = null,
+)
 
 /**
  * Payload of [TYPE_WORKOUT_STARTED].

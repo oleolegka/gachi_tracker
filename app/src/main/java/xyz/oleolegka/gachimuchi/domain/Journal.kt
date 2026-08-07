@@ -79,17 +79,30 @@ data class ActivityEvent(
 )
 
 /**
- * Ids of the sets reversed by [TYPE_SET_CANCEL] events.
+ * Identities of the sets reversed by [TYPE_SET_CANCEL] events.
+ *
+ * ── Uids, not row numbers ───────────────────────────────────────────────────────
+ * The reversal states the identity of what it cancels whenever it has one, and this resolves
+ * the rest: a payload from before schema version 9 carries only a local row number, which is
+ * looked up in this same journal and turned into the uid it meant. A number that names no row
+ * here resolves to nothing and cancels nothing — which is the honest answer, and a strictly
+ * better one than the old behaviour of cancelling whatever row happened to hold that number.
  *
  * A reversal that cannot be read is skipped rather than thrown on — see [formFromEventOrNull]
  * for why one bad row must not be able to take the app down. The cost is stated plainly: the
  * set that reversal belonged to goes back to counting, which is visible in the feed and can
  * be cancelled again, whereas the alternative is four screens that do not open.
  */
-fun cancelledEventIds(events: List<JournalEvent>): Set<Long> =
-    events.filter { it.type == TYPE_SET_CANCEL }
-        .mapNotNull { runCatching { payloadJson.decodeFromString<SetCancel>(it.payload).cancels }.getOrNull() }
-        .toSet()
+fun cancelledEventUids(events: List<JournalEvent>): Set<String> {
+    val reversals = events.filter { it.type == TYPE_SET_CANCEL }
+    if (reversals.isEmpty()) return emptySet()
+    // built only when something actually needs translating, since it walks the whole journal
+    val uidOfNumber: Map<Long, String> by lazy { events.associate { it.id to it.uid } }
+    return reversals.mapNotNullTo(HashSet()) { row ->
+        val payload = runCatching { payloadJson.decodeFromString<SetCancel>(row.payload) }.getOrNull()
+        payload?.cancelsUid ?: payload?.cancels?.let { uidOfNumber[it] }
+    }
+}
 
 /**
  * Domain events from the journal, in journal order.
@@ -113,11 +126,11 @@ fun readActivities(
 ): List<ActivityEvent> {
     val typeSet = types.toSet()
     val wantKey = key?.let { normPhrase(it) }
-    val cancelled = if (includeCancelled) emptySet() else cancelledEventIds(events)
+    val cancelled = if (includeCancelled) emptySet() else cancelledEventUids(events)
     val out = ArrayList<ActivityEvent>()
     for (row in events) {
         if (row.type !in typeSet) continue
-        if (row.id in cancelled) continue
+        if (row.uid in cancelled) continue
         val form = formFromEventOrNull(row.type, row.payload) ?: continue
         if (dateFrom != null && form.opDate < dateFrom) continue
         if (dateTo != null && form.opDate > dateTo) continue

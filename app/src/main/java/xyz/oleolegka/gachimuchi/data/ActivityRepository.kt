@@ -171,7 +171,11 @@ class ActivityRepository(private val db: AppDatabase) {
         db.events().insert(
             EventEntity(
                 ts = now(), type = TYPE_SET_CANCEL,
-                payload = payloadJson.encodeToString(SetCancel(eventId)),
+                // both links: the uid is what the reducers read, the number is what a build
+                // older than schema version 9 would look for
+                payload = payloadJson.encodeToString(
+                    SetCancel(cancels = eventId, cancelsUid = db.events().byId(eventId)?.uid)
+                ),
             )
         )
 
