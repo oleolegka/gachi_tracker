@@ -127,41 +127,42 @@ data class ActivityEvent(
     val workout: WorkoutRef? = null,
     /** Identity of the underlying journal row — see [JournalEvent.uid]. */
     val uid: String = newUid(),
+    /**
+     * When this entry was last corrected, or null when nobody has — see [EntryState.amendedAt].
+     *
+     * Carried here so that a screen showing an entry can say it was edited without folding the
+     * journal again for the answer. Nothing in the domain branches on it: [form] already holds
+     * the corrected values, which is the whole point of applying them in one place.
+     */
+    val amendedAt: String? = null,
 )
 
 /**
- * Identities of the sets reversed by [TYPE_SET_CANCEL] events.
+ * Identities of the events the journal no longer holds — deleted by [TYPE_ENTRY_DELETED] or by
+ * its predecessor [TYPE_SET_CANCEL], and not themselves deleted since.
  *
- * ── Uids, not row numbers ───────────────────────────────────────────────────────
- * The reversal states the identity of what it cancels whenever it has one, and this resolves
- * the rest: a payload from before schema version 9 carries only a local row number, which is
- * looked up in this same journal and turned into the uid it meant. A number that names no row
- * here resolves to nothing and cancels nothing — which is the honest answer, and a strictly
- * better one than the old behaviour of cancelling whatever row happened to hold that number.
- *
- * A reversal that cannot be read is skipped rather than thrown on — see [formFromEventOrNull]
- * for why one bad row must not be able to take the app down. The cost is stated plainly: the
- * set that reversal belonged to goes back to counting, which is visible in the feed and can
- * be cancelled again, whereas the alternative is four screens that do not open.
+ * A thin reading of [journalView] rather than a second implementation of the same fold: it used
+ * to BE the implementation, which is exactly how the reducers that did not call it ended up
+ * disagreeing with the ones that did.
  */
-fun cancelledEventUids(events: List<JournalEvent>): Set<String> {
-    val reversals = events.filter { it.type == TYPE_SET_CANCEL }
-    if (reversals.isEmpty()) return emptySet()
-    // built only when something actually needs translating, since it walks the whole journal
-    val uidOfNumber: Map<Long, String> by lazy { events.associate { it.id to it.uid } }
-    return reversals.mapNotNullTo(HashSet()) { row ->
-        val payload = runCatching { payloadJson.decodeFromString<SetCancel>(row.payload) }.getOrNull()
-        payload?.cancelsUid ?: payload?.cancels?.let { uidOfNumber[it] }
-    }
+fun deletedEventUids(events: List<JournalEvent>): Set<String> {
+    val view = journalView(events)
+    return events.filterNotTo(ArrayList()) { view.isAlive(it) }.mapTo(HashSet()) { it.uid }
 }
 
 /**
- * Domain events from the journal, in journal order.
+ * Domain events from the journal, in journal order, WITH EVERY CORRECTION APPLIED.
  *
  * The filters are combined with AND: [types] (all of [ACTIVITY_TYPES] by default), the
  * inclusive [dateFrom]..[dateTo] range over op_date, and an exact normalized [key]
  * (body weight is excluded whenever a key is given — it has no key).
- * [includeCancelled] = false drops reversed sets.
+ *
+ * Deleted entries are dropped and amended ones carry their amended values — both decided by
+ * [journalView] and by nothing here, so that this reducer and the ones that do not go through
+ * it cannot answer differently. [includeDeleted] = true asks for the history instead: the
+ * deleted entries come back, still carrying their corrections. Note what it does NOT do — it
+ * does not undo an amendment. A correction is what the entry says; a deletion is whether it is
+ * there at all, and only the second one has a reason to be looked past.
  *
  * A row whose payload will not parse is SKIPPED, not thrown on ([formFromEventOrNull]).
  * This function is the floor every screen stands on, and one damaged row used to take all
@@ -173,16 +174,17 @@ fun readActivities(
     dateFrom: String? = null,
     dateTo: String? = null,
     key: String? = null,
-    includeCancelled: Boolean = false,
+    includeDeleted: Boolean = false,
 ): List<ActivityEvent> {
     val typeSet = types.toSet()
     val wantKey = key?.let { normPhrase(it) }
-    val cancelled = if (includeCancelled) emptySet() else cancelledEventUids(events)
+    val view = journalView(events)
     val out = ArrayList<ActivityEvent>()
     for (row in events) {
         if (row.type !in typeSet) continue
-        if (row.uid in cancelled) continue
-        val form = formFromEventOrNull(row.type, row.payload) ?: continue
+        val state = view.stateOf(row)
+        if (state.deleted && !includeDeleted) continue
+        val form = formFromEventOrNull(row.type, state.payload) ?: continue
         if (dateFrom != null && form.opDate < dateFrom) continue
         if (dateTo != null && form.opDate > dateTo) continue
         if (wantKey != null && form.key != wantKey) continue
@@ -190,7 +192,7 @@ fun readActivities(
             ActivityEvent(
                 id = row.id, ts = row.ts, authorId = row.authorId, type = row.type,
                 opDate = form.opDate, key = form.key, form = form, workout = row.workoutRef(),
-                uid = row.uid,
+                uid = row.uid, amendedAt = state.amendedAt,
             )
         )
     }

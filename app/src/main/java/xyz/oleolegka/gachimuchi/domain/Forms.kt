@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.domain
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -43,8 +44,72 @@ const val TYPE_BODYWEIGHT = "bodyweight"
  * Cancelling a set is NOT an activity form but a reversing journal event. The journal
  * is append-only and nothing may be deleted: a cancellation is a separate event that
  * the reducers exclude (payload = {"cancels": <event_id>}).
+ *
+ * SUPERSEDED BY [TYPE_ENTRY_DELETED], which says the same thing about any event rather than
+ * only about a set. This one is still written by nothing and read by everything: every journal
+ * on every phone is full of it, and [journalView] treats the two as one word for one act.
  */
 const val TYPE_SET_CANCEL = "set_cancel"
+
+/**
+ * "That event's values were wrong; here are the right ones." A correction, not a rewrite: the
+ * original row stays exactly as it was written and this one says what to read instead.
+ *
+ * ── Why a patch of fields rather than a whole new payload ───────────────────────
+ * The payload carries only the keys being changed, and [journalView] lays them over the
+ * original. Two reasons, and the second is the one that decided it:
+ *
+ *  - it is the only shape that works for EVERY event type. There are six activity forms plus
+ *    two service events, and a typed amendment per type would be eight classes that have to be
+ *    kept in step with the eight they mirror — the second definition of a form, waiting to
+ *    disagree with the first;
+ *  - a correction is a small fact ("it was 8 reps, not 6"), and writing the whole payload again
+ *    would make every amendment claim authority over fields nobody touched. When two of them
+ *    land on one entry, a patch merges and a full payload overwrites.
+ *
+ * ── What an amendment may NOT change ────────────────────────────────────────────
+ * WHICH exercise the entry is about — see [AMENDMENT_PROTECTED_KEYS]. Moving a set to another
+ * exercise is a deletion and a new entry, because an exercise's history is the set of entries
+ * that always were its own; a set that can walk from one exercise to another turns every record
+ * and every chart into a statement about wherever the sets happen to be pointing today. The
+ * protected keys are dropped on the way in AND ignored on the way out, so a journal merged in
+ * from elsewhere cannot do it either.
+ *
+ * Values and the date are what it is for. [opDate] specifically: "I logged this on Tuesday but
+ * did it on Monday" is the correction people actually need, and it is only a value.
+ */
+const val TYPE_ENTRY_AMENDED = "entry_amended"
+
+/**
+ * "That event should not be there at all."
+ *
+ * The successor to [TYPE_SET_CANCEL] and the same act, with two differences that are the whole
+ * point of adding it. It names ANY event — a workout started by accident, an exercise added to
+ * the wrong block — where the old one was only ever written against a set. And it names its
+ * target by IDENTITY ONLY (see [EntryDeleted]).
+ *
+ * It applies to itself, which is what makes undoing an undo work: a deletion that has itself
+ * been deleted stops hiding anything, and whatever it was hiding comes back. Nothing is ever
+ * removed from the journal — see [journalView] for the fold that turns a pile of these into an
+ * answer.
+ */
+const val TYPE_ENTRY_DELETED = "entry_deleted"
+
+/**
+ * Payload keys an amendment is not allowed to carry — everything that says WHICH thing an
+ * event is about, as opposed to what happened.
+ *
+ * The exercise keys are the reason this list exists ([TYPE_ENTRY_AMENDED] explains it). The
+ * name keys ride along because they are the exercise said in words, and the `*_key` pair
+ * because they are computed from the names and would go stale the moment a name moved without
+ * them. The workout keys are the same argument one level up: which workout a block belongs to
+ * is not a value of the block.
+ */
+val AMENDMENT_PROTECTED_KEYS: Set<String> = setOf(
+    "exercise_id", "exercise_uid", "exercise", "exercise_key",
+    "activity", "activity_key",
+    "workout_id", "workout_uid",
+)
 
 /**
  * "A workout has begun". Like [TYPE_SET_CANCEL] this is a SERVICE event and not an activity
@@ -490,7 +555,7 @@ data class Bodyweight(
  *
  * BOTH ARE NULLABLE, which is not sloppiness. A payload written before version 9 has only the
  * number, and one that arrives from a journal with no numbers at all has only the uid; a
- * reversal with NEITHER names nothing and is dropped by [cancelledEventUids] rather than
+ * reversal with NEITHER names nothing and is dropped by [journalView] rather than
  * throwing, on the same grounds as [formFromEventOrNull].
  */
 @Serializable
@@ -498,6 +563,50 @@ data class SetCancel(
     @SerialName("cancels") val cancels: Long? = null,
     @SerialName("cancels_uid") val cancelsUid: String? = null,
 )
+
+/**
+ * Payload of [TYPE_ENTRY_AMENDED]: which event, and the fields that were wrong.
+ *
+ * ── The target is an identity and nothing else ──────────────────────────────────
+ * Unlike [SetCancel] there is no row-number twin here, and that is deliberate rather than an
+ * omission. The number exists on the older event because it predates uids and had to keep
+ * working for rows written before them; nothing writes an amendment except this app, today,
+ * against a row that certainly has an identity. Offering a number as well would only offer a
+ * way to amend the wrong entry on a phone that numbers its journal differently.
+ *
+ * [fields] is a fragment of the target's own payload — the same keys, the same spellings —
+ * carrying only what changed. Keys in [AMENDMENT_PROTECTED_KEYS] are refused; see
+ * [TYPE_ENTRY_AMENDED] for why, and [journalView] for how several of these fold together.
+ */
+@Serializable
+data class EntryAmended(
+    @SerialName("target_uid") val targetUid: String,
+    @SerialName("fields") val fields: JsonObject,
+) {
+    init {
+        require(targetUid.isNotBlank()) { "entry_amended: target_uid must name an event" }
+    }
+
+    /** The patch as it is allowed to be applied — see [AMENDMENT_PROTECTED_KEYS]. */
+    val allowedFields: Map<String, JsonElement>
+        get() = fields.filterKeys { it !in AMENDMENT_PROTECTED_KEYS }
+}
+
+/**
+ * Payload of [TYPE_ENTRY_DELETED]: which event should stop being read.
+ *
+ * By identity only, for the reason spelled out on [EntryAmended]. A deletion naming an event
+ * that is not in this journal is inert rather than an error — the row it meant may simply not
+ * have arrived yet, and a journal is a stream that can be read halfway.
+ */
+@Serializable
+data class EntryDeleted(
+    @SerialName("target_uid") val targetUid: String,
+) {
+    init {
+        require(targetUid.isNotBlank()) { "entry_deleted: target_uid must name an event" }
+    }
+}
 
 /**
  * Payload of [TYPE_WORKOUT_STARTED].
@@ -534,11 +643,10 @@ data class SetCancel(
  * arrives from a journal with no numbers at all has only the uid, and a workout started
  * off-plan has neither — which is not a defect but the ordinary case.
  *
- * NOTE, no whitewashing: writing this field does not by itself change how the calendar
- * decides anything. domain/Schedule.kt still matches by time and does not look at it;
- * switching it over is a separate change with its own verification. What does read it is
- * domain/DayCards.kt, which uses it to keep a plan and the workout started from it from
- * appearing as two cards.
+ * This IS what the calendar decides by now: domain/Schedule.kt closes a planned session with
+ * the workout that names it and consults the clock only for training logged without pressing
+ * start. domain/DayCards.kt reads it as well, to keep a plan and the workout started from it
+ * from appearing as two cards.
  *
  * ── the name is a SNAPSHOT, not a lookup ────────────────────────────────────────
  * [name] is what this workout was called AT THE MOMENT IT WAS STARTED: copied off the plan

@@ -243,13 +243,18 @@ fun JournalEvent.workoutFinishedOrNull(): WorkoutFinished? =
 /**
  * Start events, newest last, paired with what their payload says.
  *
+ * THROUGH [liveEvents], which it did not used to be. A workout started by mistake can now be
+ * deleted and one started on the wrong date corrected, and this is the reducer every other
+ * question about workouts is asked through — so a start event that bypassed the check here was
+ * a workout that could be removed from the logging feed and stay in the day's cards.
+ *
  * A start event whose payload will not parse is NOT skipped — the same reasoning as
  * [formFromEventOrNull], only sharper: skipping it would orphan every set recorded into that
  * workout, and those sets are the training. It degrades to "dated by its write time, started
  * from no slot", which is what an older or hand-edited row would have meant anyway.
  */
 internal fun workoutStarts(events: List<JournalEvent>): List<Pair<JournalEvent, WorkoutStarted?>> =
-    events.filter { it.type == TYPE_WORKOUT_STARTED }
+    liveEvents(events).filter { it.type == TYPE_WORKOUT_STARTED }
         .map { it to runCatching { payloadJson.decodeFromString<WorkoutStarted>(it.payload) }.getOrNull() }
 
 /**
@@ -326,12 +331,19 @@ private fun isFinished(events: List<JournalEvent>, startRow: JournalEvent): Bool
  * it elsewhere. The writer is responsible for building sets with the open workout's date.
  */
 fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
-    val (startRow, started) = workoutStarts(events).firstOrNull { (row, _) -> row.id == workoutId }
+    /*
+     * Folded ONCE, here, and passed down. The loop below used to walk the raw list, which is
+     * how an exercise added to a workout by mistake stayed in the workout after being removed:
+     * the sets went through readActivities and were dropped, the "exercise added" rows did not
+     * go through anything at all. liveEvents is idempotent, so handing it on costs nothing.
+     */
+    val journal = liveEvents(events)
+    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }
         ?: return null
 
-    // parsed once: readActivities is what drops cancelled sets and unreadable payloads, and
+    // parsed once: readActivities is what drops deleted sets and unreadable payloads, and
     // rebuilding it per row would fold the whole journal for every event in it
-    val live = readActivities(events).associateBy { it.id }
+    val live = readActivities(journal).associateBy { it.id }
 
     // keyed by ExerciseLink.key so that an entry naming its exercise by identity and one
     // naming it by number land in the same block; the link itself is merged as they arrive,
@@ -349,7 +361,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         return key
     }
 
-    for (row in events) {
+    for (row in journal) {
         if (row.workoutRef()?.matches(startRow) != true) continue
         if (row.type == TYPE_WORKOUT_FINISHED) {
             // sets recorded AFTER this one are still folded in below: finishing is a status,
