@@ -5,6 +5,7 @@ import xyz.oleolegka.gachimuchi.domain.Bodyweight
 import xyz.oleolegka.gachimuchi.domain.Cardio
 import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
@@ -29,6 +30,25 @@ import kotlin.math.roundToInt
 fun fmtKg(x: Double): String {
     val r = (x * 10).roundToInt() / 10.0
     return if (r == r.toLong().toDouble()) "${r.toLong()} kg" else "$r kg"
+}
+
+/**
+ * Weight added to your own body weight, WITH ITS SIGN: "+20 kg", "-20 kg".
+ *
+ * ── Why this is not a "+" in front of [fmtKg] ───────────────────────────────────
+ * Added weight is a SIGNED axis (see [xyz.oleolegka.gachimuchi.domain.StrengthSet.addedKg]):
+ * a minus means the load was reduced by a band or a counterweight, which is an ordinary way
+ * to train a pull-up nobody can do yet. Callers used to write `" +${fmtKg(it)}"`, so a hang
+ * off a band that took twenty kilograms printed as "+-20 kg" — two signs in a row, and a
+ * reader left to work out which of them was meant.
+ *
+ * The sign is decided by what [fmtKg] ACTUALLY PRINTED rather than by the input, so exactly
+ * one sign comes out in every case: a value that rounds away to zero prints "+0 kg" instead
+ * of a "-0 kg" that claims an assistance nobody had.
+ */
+fun fmtAddedKg(x: Double): String {
+    val text = fmtKg(x)
+    return if (text.startsWith("-")) text else "+$text"
 }
 
 fun fmtDuration(sec: Int): String {
@@ -66,6 +86,16 @@ fun fmtMonth(d: LocalDate): String = d.format(monthFormat)
 
 /** Activity name taken from the form (body weight has no name — its role is used instead). */
 fun ActivityForm.displayName(): String = activityName()
+
+/**
+ * How a side is named on screen. The enum's [HoldSide.code] is the STORED value and is not a
+ * label: it is the payload's own spelling and must stay readable by anything that does not
+ * know this app, so the wording lives here where every other piece of wording does.
+ */
+fun HoldSide.label(): String = when (this) {
+    HoldSide.LEFT -> "Left"
+    HoldSide.RIGHT -> "Right"
+}
 
 /**
  * A series value in its own units, for tile headlines and record lines.
@@ -207,7 +237,9 @@ fun ActivityForm.summaryLine(): String = when (this) {
         weightKg?.let { append(fmtKg(it)); append(" × ") }
         if (ownWeight) {
             append("body weight")
-            addedKg?.let { append(" +${fmtKg(it)}") }
+            // signed by [fmtAddedKg] and never by a "+" written here: assistance is a
+            // negative added weight, and a hard-coded plus printed it as "+-20 kg"
+            addedKg?.let { append(" ${fmtAddedKg(it)}") }
             append(" × ")
         }
         append("$reps reps")
@@ -217,7 +249,10 @@ fun ActivityForm.summaryLine(): String = when (this) {
     is HoldSet -> buildString {
         // §12-A: edge and protocol are properties of the exercise, so the added weight is
         // what matters in a set line; edge and protocol are shown only as context
-        addedKg?.let { append(fmtKg(it)); append(", ") }
+        // signed too, and for a hangboard the sign is the more important half: most of the
+        // work happens on the negative side of this axis, and a bare "15 kg" said neither
+        // which direction it went nor that it was ADDED weight rather than an absolute one
+        addedKg?.let { append(fmtAddedKg(it)); append(", ") }
         reps?.let { append("$it reps") }
         holdSec?.let { if (reps != null) append(" × "); append(fmtDuration(it.toInt())) }
         if (workSec != null && restSec != null) {

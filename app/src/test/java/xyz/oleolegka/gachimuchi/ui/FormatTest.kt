@@ -3,6 +3,8 @@ package xyz.oleolegka.gachimuchi.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import java.time.LocalDate
 
@@ -76,6 +78,41 @@ class FormatTest {
         assertEquals("today", fmtRecordDate(today, today))
         assertEquals("yesterday", fmtRecordDate(today.minusDays(1), today))
         assertEquals("1 Aug", fmtRecordDate(today.minusDays(5), today))
+    }
+
+    /**
+     * The defect this pins: added weight is a signed axis, and the summary line used to print
+     * it as `" +${fmtKg(it)}"`. A band taking twenty kilograms off a pull-up therefore read
+     * "body weight +-20 kg" — two signs in a row, on the one line that says what was lifted.
+     */
+    @Test
+    fun `an added weight carries exactly one sign, whichever way it goes`() {
+        assertEquals("+20 kg", fmtAddedKg(20.0))
+        assertEquals("-20 kg", fmtAddedKg(-20.0))
+        assertEquals("+2.5 kg", fmtAddedKg(2.5))
+        assertEquals("-7.5 kg", fmtAddedKg(-7.5))
+        listOf(20.0, -20.0, 2.5, -7.5, 0.04, -0.04).forEach { kg ->
+            val signs = fmtAddedKg(kg).count { it == '+' || it == '-' }
+            assertEquals("$kg must print exactly one sign, got ${fmtAddedKg(kg)}", 1, signs)
+        }
+    }
+
+    /** The same, through the line a person actually reads in the day's feed. */
+    @Test
+    fun `assistance reads as one minus on the summary line of a set`() {
+        val assisted = StrengthSet(
+            exercise = "Pull-ups", reps = 5, ownWeight = true, addedKg = -20.0,
+            opDate = "2026-08-07",
+        )
+        assertEquals("body weight -20 kg × 5 reps", assisted.summaryLine())
+
+        val weighted = assisted.copy(addedKg = 10.0)
+        assertEquals("body weight +10 kg × 5 reps", weighted.summaryLine())
+
+        // a hang off a band: the negative half of the axis is where most hangboard work is
+        val hang = HoldSet(activity = "Hangs 20 mm", reps = 4, addedKg = -15.0, opDate = "2026-08-07")
+        assertEquals("-15 kg, 4 reps", hang.summaryLine())
+        assertEquals("+15 kg, 4 reps", hang.copy(addedKg = 15.0).summaryLine())
     }
 
     @Test

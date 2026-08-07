@@ -2,10 +2,13 @@ package xyz.oleolegka.gachimuchi.ui
 
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
@@ -99,6 +102,10 @@ class Journal {
     /**
      * A hang. [addedKg] null is the plate-free case, which is the one the weight question on
      * the way into a protocol-led set is required NOT to appear for (§13.5).
+     *
+     * [side] is what a one-sided exercise records instead of nothing, and [warmup] keeps a
+     * ramp-up out of the volume and the records. Both go through `holdSetOf` rather than into
+     * a hand-made payload, so a fixture cannot say something the app itself could not.
      */
     fun holdSet(
         exercise: ExerciseRef,
@@ -107,9 +114,28 @@ class Journal {
         addedKg: Double? = null,
         at: String = "09:10",
         workoutId: Long? = null,
+        side: HoldSide? = null,
+        warmup: Boolean = false,
     ): Long {
-        val form = holdSetOf(exercise, day, addedKg = addedKg, reps = reps)
+        val form = holdSetOf(
+            exercise = exercise, opDate = day, addedKg = addedKg, reps = reps,
+            warmup = warmup, side = side,
+        )
         return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
+    }
+
+    /**
+     * Removes an entry the way the app does: a new event naming the target's IDENTITY, never a
+     * row taken out of the list. Written into a fixture so a screen test can assert that the
+     * screen reads the journal through the amendment funnel rather than raw.
+     */
+    fun deleteEntry(eventId: Long): Long {
+        val target = rows.first { it.id == eventId }
+        return add(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid)),
+            target.ts,
+        )
     }
 
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */

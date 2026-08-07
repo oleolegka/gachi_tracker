@@ -115,8 +115,19 @@ fun FormDetailScreen(
     // the screen navigates by row number; the journal is keyed by identity (see ExerciseLink)
     val link = remember(state.exercises, currentId) { state.linkOf(currentId) }
     val trendAll = remember(activities, link, form) { trendSeries(activities, link, form) }
-    val volumeAll = remember(activities, link, form) { volumeSeries(activities, link, form) }
-    val records = remember(activities, link, form) { recordsOf(activities, link, form) }
+    /*
+     * The two catalog columns are passed rather than left to their defaults, and the defaults
+     * are the whole hazard: both are the pre-column answer, so omitting them compiles and
+     * quietly draws the old chart. Without the share a pull-up is worth no tonnage at all and
+     * a week of them looks like a week off; without the flag the records block shows one best
+     * for both hands, which is the better hand wearing the exercise's name.
+     */
+    val volumeAll = remember(activities, link, form, entity.bodyweightShare) {
+        volumeSeries(activities, link, form, entity.bodyweightShare)
+    }
+    val records = remember(activities, link, form, entity.oneSided) {
+        recordsOf(activities, link, form, entity.oneSided)
+    }
 
     val siblings = remember(state.exercises, currentId, form) {
         if (form != ExerciseForm.HOLD) emptyList()

@@ -2,16 +2,21 @@ package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
@@ -48,6 +53,12 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val bench = exerciseRef(1, "Bench press")
     private val abs = exerciseRef(2, "Abs")
 
+    /** A fingerboard hang: one hand at a time, so every set of it owes a side. */
+    private val oneArm = exerciseRef(4, "One-arm hang 20 mm", ExerciseForm.HOLD)
+
+    /** The other kind of hold, hung off both hands — the control for the side question. */
+    private val twoArm = exerciseRef(5, "Both-arm hang 20 mm", ExerciseForm.HOLD)
+
     /**
      * A hangboard exercise, which is what a protocol-led one is in practice: the 7:3 protocol
      * is part of its identity (§12-A), so it is on the catalog row rather than asked per set.
@@ -67,6 +78,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         exerciseEntity(2, "Abs").copy(defaultRestSec = 90),
         exerciseEntity(3, "Hangs 20 mm", ExerciseForm.HOLD)
             .copy(defaultRestSec = 240, edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0),
+        // the flag lives on the catalog row; the side it makes the card ask for lives on the set
+        exerciseEntity(4, "One-arm hang 20 mm", ExerciseForm.HOLD)
+            .copy(defaultRestSec = 180, oneSided = true),
+        exerciseEntity(5, "Both-arm hang 20 mm", ExerciseForm.HOLD).copy(defaultRestSec = 180),
     )
 
     private val added = mutableListOf<Pair<Long, Int>>()
@@ -310,6 +325,119 @@ class WorkoutLogScreenTest : ScreenTest() {
         assertEquals(past, set.opDate)
         assertEquals(5, set.reps)
         assertEquals(60.0, set.weightKg!!, 0.0001)
+    }
+
+    // --- the warm-up flag -------------------------------------------------------------------
+
+    /**
+     * A warm-up counts towards neither volume nor records, so the flag has to reach the payload
+     * — a chip that looks ticked and writes nothing is worse than no chip, because the set then
+     * inflates the tonnage of a week that did not earn it.
+     */
+    @Test
+    fun `ticking warm-up writes the flag onto the set`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Warm-up").performClick()
+        // the clock is held still (see ScreenTest), so the tick needs a frame to reach the tree
+        settle()
+
+        // no longer the same set as the last one, and the button stops claiming it is
+        compose.onNodeWithText("Add set").performClick()
+
+        assertTrue("the set must be marked as a warm-up", (logged.single() as StrengthSet).warmup)
+    }
+
+    /**
+     * The other half, and the one that matters more: the ordinary working set is still two taps
+     * and is still NOT a warm-up. A card arriving pre-ticked would quietly file working sets as
+     * ramp-ups, which is how a set ends up in the journal and missing from every number.
+     */
+    @Test
+    fun `a working set stays two taps and is not marked as a warm-up`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Warm-up").assertExists()
+        compose.onNodeWithText("Repeat set").performClick()
+
+        assertFalse("an untouched card must record a working set", (logged.single() as StrengthSet).warmup)
+    }
+
+    // --- which hand a one-sided hold was done with ------------------------------------------
+
+    /**
+     * A workout holding one hang, with an earlier RIGHT-hand set of it to prefill the numbers
+     * from. The earlier set is what leaves the missing side as the only thing standing between
+     * the card and the journal — without it the button would also be waiting for the reps, and
+     * the test would prove nothing about the hand.
+     */
+    private fun hangWorkout(journal: Journal, exercise: ExerciseRef, side: HoldSide?): Long {
+        journal.holdSet(exercise, "2026-08-05", reps = 5, addedKg = 10.0, side = side)
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, exercise, restSec = 180)
+        return workout
+    }
+
+    /**
+     * The defect this refuses to write: a set on a one-sided exercise that names no hand. It is
+     * not "both hands" — the record is per (exercise, side), so such a row belongs to neither
+     * history and the reducers file it under "side not recorded". Refusing it at the card is the
+     * only place it can be refused, because the journal is append-only.
+     */
+    @Test
+    fun `a one-sided hold cannot be recorded until a hand is chosen`() {
+        val journal = Journal()
+        show(journal, hangWorkout(journal, oneArm, HoldSide.RIGHT))
+
+        compose.onNodeWithText("no sets yet").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Left").assertExists()
+        compose.onNodeWithText("Right").assertExists()
+        // a dead button that explains nothing is the worst thing to meet mid-set
+        compose.onNodeWithText(
+            "Say which side. This one is trained a limb at a time, and each side keeps " +
+                "its own record - a set that names neither belongs to neither."
+        ).assertExists()
+        compose.onNodeWithText("Add set").assertIsNotEnabled()
+
+        compose.onNodeWithText("Left").performClick()
+        settle()
+
+        compose.onNodeWithText("Add set").performClick()
+        assertEquals("left", (logged.single() as HoldSet).side)
+    }
+
+    /**
+     * The control, and it is the half that would be quietly broken by an over-eager fix: a hold
+     * hung off both hands must not be made to answer a question that does not apply to it. A
+     * null side there is what "both hands" has always meant.
+     */
+    @Test
+    fun `a two-handed hold is never asked which hand, and records without one`() {
+        val journal = Journal()
+        show(journal, hangWorkout(journal, twoArm, side = null))
+
+        compose.onNodeWithText("no sets yet").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Left").assertDoesNotExist()
+        compose.onNodeWithText("Right").assertDoesNotExist()
+
+        compose.onNodeWithText("Repeat set").performClick()
+        assertNull((logged.single() as HoldSet).side)
     }
 
     // --- putting an exercise into the workout ---------------------------------------------
