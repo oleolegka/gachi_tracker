@@ -49,6 +49,7 @@ import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
+import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
@@ -213,10 +214,20 @@ class MainViewModel(
              */
             val exerciseId = form.exerciseId
             if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
+                val exercise = repo.exercise(exerciseId)
+                /*
+                 * THE REST THAT WAS CHOSEN, and only failing that the one that was measured —
+                 * which is what [restHintSec] resolves and what [resolveRestSec] on its own
+                 * does not. The difference became visible the moment a workout could be asked
+                 * which rest an exercise gets: the card would say "rest 3:00" because that is
+                 * what was agreed to, and the bar underneath would count the median gap
+                 * between the last few sets instead. A timer disagreeing with the number
+                 * printed above it is worse than no timer, because it is believed.
+                 */
                 timer.floors.start(
                     exerciseId = exerciseId,
-                    exerciseName = repo.exercise(exerciseId)?.name ?: "Rest",
-                    orderedMs = resolveRestSec(settings, repo.allEvents(), exerciseId) * 1000L,
+                    exerciseName = exercise?.name ?: "Rest",
+                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.toRef()) * 1000L,
                 )
             }
         }
@@ -234,6 +245,21 @@ class MainViewModel(
      */
     fun startWorkout(day: LocalDate, slotId: Long? = null, then: (Long) -> Unit) {
         viewModelScope.launch { then(repo.startWorkout(day.toString(), slotId)) }
+    }
+
+    /**
+     * Puts an exercise into a workout at a chosen rest — and, called again for one already
+     * there, changes that rest.
+     *
+     * ONE METHOD FOR BOTH, because the journal has one event for both: adding an exercise
+     * twice does not duplicate it, the last rest wins, and the order it was added in is kept
+     * (see `buildWorkout`). The repository also writes the rest onto the catalog row, so the
+     * choice made here is what the NEXT workout will be offered — the two writes are two
+     * different facts and neither can be derived from the other; see
+     * [ActivityRepository.addExerciseToWorkout].
+     */
+    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
+        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
     }
 
     // --- celebration -------------------------------------------------------------------
@@ -277,6 +303,11 @@ class MainViewModel(
      * Creates a catalog exercise and immediately points the entry card at it. For holds,
      * edge and protocol are part of the identity (§12-A) and are stored on the exercise
      * rather than asked for on every set.
+     *
+     * [then] receives the new row's id. It exists because creating an exercise mid-workout is
+     * never the last step — the workout then asks what rest it should get, and that question
+     * cannot be put until the row it is about exists. A caller that only needs the exercise to
+     * become the active one leaves it out and reads [activeExerciseId] as before.
      */
     fun createExercise(
         name: String,
@@ -284,9 +315,12 @@ class MainViewModel(
         edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
+        then: ((Long) -> Unit)? = null,
     ) {
         viewModelScope.launch {
-            _activeExerciseId.value = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            val id = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            _activeExerciseId.value = id
+            then?.invoke(id)
         }
     }
 
