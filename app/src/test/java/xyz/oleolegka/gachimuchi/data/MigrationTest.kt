@@ -16,6 +16,8 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -24,19 +26,34 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
-import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
-import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
-import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
-import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
+import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.formsOfExercise
+import xyz.oleolegka.gachimuchi.domain.formFromEventOrNull
+import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
+import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
+import xyz.oleolegka.gachimuchi.domain.StrengthSet
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
+import xyz.oleolegka.gachimuchi.domain.isUid
+import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
+import xyz.oleolegka.gachimuchi.domain.payloadJson
+import xyz.oleolegka.gachimuchi.domain.readActivities
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.toDraft
 import xyz.oleolegka.gachimuchi.domain.toPayload
@@ -231,14 +248,15 @@ interface LegacyCatalogDaoV4 {
 /**
  * Writing into a version 5 or version 6 database.
  *
- * The journal is inserted through the CURRENT [EventEntity]: `events` has not changed since
- * version 5, so a snapshot of it would be a copy that can only rot. Everything else goes
- * through the snapshots above.
+ * The journal used to be inserted through the CURRENT `EventEntity`, because `events` had not
+ * changed since version 5. Version 8 changed it, so that reuse became exactly the kind of lie
+ * the rule at the top of this file forbids, and the journal now goes through [EventEntityV7]
+ * like everything else.
  */
 @Dao
 interface LegacyCatalogDaoV5 {
     @Insert
-    suspend fun insertEvent(event: EventEntity): Long
+    suspend fun insertEvent(event: EventEntityV7): Long
 
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV5): Long
@@ -382,9 +400,9 @@ abstract class SchemaV2Database : RoomDatabase() {
         ExerciseEntityV3::class,
         AliasEntityV3::class,
         SlotEntityV3::class,
-        ProgramEntity::class,
-        ProgramGroupEntity::class,
-        ProgramBlockEntity::class,
+        ProgramEntityV3::class,
+        ProgramGroupEntityV3::class,
+        ProgramBlockEntityV3::class,
     ],
     version = 3,
     exportSchema = false,
@@ -405,9 +423,9 @@ abstract class SchemaV3Database : RoomDatabase() {
         ExerciseEntityV4::class,
         AliasEntityV4::class,
         SlotEntityV4::class,
-        ProgramEntity::class,
-        ProgramGroupEntity::class,
-        ProgramBlockEntity::class,
+        ProgramEntityV3::class,
+        ProgramGroupEntityV3::class,
+        ProgramBlockEntityV3::class,
     ],
     version = 4,
     exportSchema = false,
@@ -424,13 +442,13 @@ abstract class SchemaV4Database : RoomDatabase() {
  */
 @Database(
     entities = [
-        EventEntity::class,
+        EventEntityV7::class,
         ExerciseEntityV5::class,
         AliasEntityV4::class,
         SlotEntityV4::class,
-        ProgramEntity::class,
-        ProgramGroupEntity::class,
-        ProgramBlockEntity::class,
+        ProgramEntityV3::class,
+        ProgramGroupEntityV3::class,
+        ProgramBlockEntityV3::class,
     ],
     version = 5,
     exportSchema = false,
@@ -452,14 +470,14 @@ abstract class SchemaV5Database : RoomDatabase() {
  */
 @Database(
     entities = [
-        EventEntity::class,
+        EventEntityV7::class,
         ExerciseEntityV5::class,
         AliasEntityV4::class,
         SlotEntityV4::class,
         SlotExerciseEntityV6::class,
-        ProgramEntity::class,
-        ProgramGroupEntity::class,
-        ProgramBlockEntity::class,
+        ProgramEntityV3::class,
+        ProgramGroupEntityV3::class,
+        ProgramBlockEntityV3::class,
     ],
     version = 6,
     exportSchema = false,
@@ -467,6 +485,354 @@ abstract class SchemaV5Database : RoomDatabase() {
 abstract class SchemaV6Database : RoomDatabase() {
     abstract fun catalog(): LegacyCatalogDaoV5
     abstract fun compositions(): LegacySlotExerciseDao
+}
+
+
+/*
+ * SNAPSHOTS OF VERSION 7 — the shape of the database immediately before every row grew a
+ * `uid`. Five tables changed in the 7 -> 8 step, and the rule at the top of this file says a
+ * current entity may only stand in for a table that has NOT changed since; so `events`,
+ * `exercises`, `slots`, `slot_exercises` and `programs` all need one, and the two program
+ * child tables need one only because their foreign key has to name a `programs` entity that
+ * this test's databases actually declare.
+ */
+
+/** The journal from version 5 to version 7: the workout link, and no uid yet. */
+@Entity(tableName = "events", indices = [Index(value = ["space_id", "id"])])
+data class EventEntityV7(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: String,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    @ColumnInfo(name = "author_id") val authorId: Long = LOCAL_AUTHOR_ID,
+    val type: String,
+    val payload: String,
+    @ColumnInfo(name = "workout_id") val workoutId: Long? = null,
+)
+
+/** The catalog of version 7: the demo mark is gone, the uid has not arrived. */
+@Entity(tableName = "exercises", indices = [Index(value = ["space_id", "id"])])
+data class ExerciseEntityV7(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+)
+
+@Entity(tableName = "slots", indices = [Index(value = ["space_id", "id"])])
+data class SlotEntityV7(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    @ColumnInfo(name = "at_time") val atTime: String?,
+    @ColumnInfo(name = "repeat_rule") val repeatRule: String,
+    @ColumnInfo(name = "anchor_date") val anchorDate: String,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+)
+
+@Entity(
+    tableName = "slot_exercises",
+    indices = [Index(value = ["slot_id"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = SlotEntityV7::class,
+            parentColumns = ["id"],
+            childColumns = ["slot_id"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+)
+data class SlotExerciseEntityV7(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "slot_id") val slotId: Long,
+    @ColumnInfo(name = "exercise_id") val exerciseId: Long,
+    val position: Int,
+    @ColumnInfo(name = "rest_sec") val restSec: Int? = null,
+)
+
+/** Programs from version 3 to version 7: linked and filed, and with no uid. */
+@Entity(tableName = "programs", indices = [Index(value = ["space_id", "id"])])
+data class ProgramEntityV3(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    @ColumnInfo(name = "prepare_sec") val prepareSec: Int,
+    val position: Int = 0,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "exercise_id") val exerciseId: Long? = null,
+    val category: String = "",
+)
+
+@Entity(
+    tableName = "program_groups",
+    indices = [Index(value = ["program_id"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = ProgramEntityV3::class,
+            parentColumns = ["id"],
+            childColumns = ["program_id"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+)
+data class ProgramGroupEntityV3(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "program_id") val programId: Long,
+    val name: String,
+    val position: Int,
+    val repeats: Int,
+    @ColumnInfo(name = "rest_between_repeats_sec") val restBetweenRepeatsSec: Int,
+    @ColumnInfo(name = "rest_after_sec") val restAfterSec: Int,
+)
+
+@Entity(
+    tableName = "program_blocks",
+    indices = [Index(value = ["group_id"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = ProgramGroupEntityV3::class,
+            parentColumns = ["id"],
+            childColumns = ["group_id"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+)
+data class ProgramBlockEntityV3(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "group_id") val groupId: Long,
+    val name: String,
+    val position: Int,
+    @ColumnInfo(name = "work_sec") val workSec: Int,
+    @ColumnInfo(name = "rest_sec") val restSec: Int,
+    val repeats: Int,
+)
+
+/** Just enough to put rows into a version 7 database. */
+@Dao
+interface LegacyCatalogDaoV7 {
+    @Insert
+    suspend fun insertEvent(event: EventEntityV7): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV7): Long
+
+    @Insert
+    suspend fun insertSlot(slot: SlotEntityV7): Long
+
+    @Insert
+    suspend fun insertComposition(row: SlotExerciseEntityV7): Long
+
+    @Insert
+    suspend fun insertProgram(program: ProgramEntityV3): Long
+
+    @Query("DELETE FROM exercises WHERE id = :id")
+    suspend fun deleteExercise(id: Long)
+}
+
+/**
+ * Version 7: the demo seed and the learned words are gone, and nothing in the database can
+ * name itself anywhere but on this phone. This is what the uid migration actually runs on.
+ */
+@Database(
+    entities = [
+        EventEntityV7::class,
+        ExerciseEntityV7::class,
+        SlotEntityV7::class,
+        SlotExerciseEntityV7::class,
+        ProgramEntityV3::class,
+        ProgramGroupEntityV3::class,
+        ProgramBlockEntityV3::class,
+    ],
+    version = 7,
+    exportSchema = false,
+)
+abstract class SchemaV7Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV7
+}
+
+/*
+ * SNAPSHOT OF VERSION 12 — the shape of the database immediately before the catalog could say
+ * that an exercise is trained one limb at a time.
+ *
+ * ONLY `exercises` NEEDS ONE. Versions 8 through 12 have identical DDL (9, 10, 11 and 12 are
+ * rewrites of stored JSON and change no column), and of those tables the 12 -> 13 step touches
+ * `exercises` alone. The rule at the top of this file allows the CURRENT entity to stand in for
+ * a table that has not changed since, which is every other table here — and that is not a
+ * shortcut, it is the rule doing its job: the day one of them changes, this database stops
+ * describing version 12 and the compiler or these assertions say so.
+ */
+
+/*
+ * SNAPSHOT OF THE JOURNAL FROM VERSION 9 TO VERSION 15 — the workout link said in uids, and
+ * nothing about when a row was written beyond a local clock with no zone.
+ *
+ * The version 12 and version 14 databases below used to declare the CURRENT `EventEntity` here,
+ * which the rule at the top of this file allowed because `events` had not changed since version
+ * 9. Version 16 changed it — three columns and an index — so the reuse became exactly the lie
+ * that rule exists to forbid, and this snapshot is what replaced it.
+ */
+@Entity(
+    tableName = "events",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class EventEntityV15(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: String,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    @ColumnInfo(name = "author_id") val authorId: Long = LOCAL_AUTHOR_ID,
+    val type: String,
+    val payload: String,
+    @ColumnInfo(name = "workout_id") val workoutId: Long? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
+)
+
+/** The catalog of versions 8 to 12: identity, preferences, and nothing about sides. */
+@Entity(
+    tableName = "exercises",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class ExerciseEntityV12(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+)
+
+@Dao
+interface LegacyCatalogDaoV12 {
+    @Insert
+    suspend fun insertEvent(event: EventEntityV15): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV12): Long
+
+    @Query("DELETE FROM exercises WHERE id = :id")
+    suspend fun deleteExercise(id: Long)
+}
+
+@Database(
+    entities = [
+        EventEntityV15::class,
+        ExerciseEntityV12::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 12,
+    exportSchema = false,
+)
+abstract class SchemaV12Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV12
+}
+
+/**
+ * The catalog of versions 13 and 14: sides and the body-weight share, and NOTHING that says
+ * two rows cannot be the same exercise.
+ *
+ * That last part is the point of this double. Version 15 adds the identity key and its unique
+ * index, and the interesting question is what the upgrade does to a catalog that already holds
+ * two rows one index would refuse — which cannot be set up through the app at all, only by
+ * writing the rows as a version 14 phone could.
+ */
+@Entity(
+    tableName = "exercises",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class ExerciseEntityV14(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
+    @ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
+)
+
+@Dao
+interface LegacyCatalogDaoV14 {
+    @Insert
+    suspend fun insertEvent(event: EventEntityV15): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV14): Long
+}
+
+@Database(
+    entities = [
+        EventEntityV15::class,
+        ExerciseEntityV14::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 14,
+    exportSchema = false,
+)
+abstract class SchemaV14Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV14
+}
+
+/**
+ * Version 15: the catalog is already what it is today, and the journal still says WHEN in one
+ * local clock with no zone and hides WHICH DAY inside the payload.
+ *
+ * Only the journal needs a snapshot ([EventEntityV15]); every other table here is the current
+ * entity because the 15 -> 16 step leaves them alone, which is the rule at the top of this file
+ * doing its job rather than a shortcut.
+ */
+@Dao
+interface LegacyEventDaoV15 {
+    @Insert
+    suspend fun insert(event: EventEntityV15): Long
+}
+
+@Database(
+    entities = [
+        EventEntityV15::class,
+        xyz.oleolegka.gachimuchi.data.db.ExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 15,
+    exportSchema = false,
+)
+abstract class SchemaV15Database : RoomDatabase() {
+    abstract fun events(): LegacyEventDaoV15
 }
 
 /**
@@ -891,7 +1257,7 @@ class MigrationTest {
             opDate = "2026-07-01", reps = 5, weightKg = 80.0,
         )
         v5.catalog().insertEvent(
-            EventEntity(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
+            EventEntityV7(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
         )
         v5.catalog().insertAlias(AliasEntityV4(key = "bench", value = exerciseId))
         val slotId = v5.catalog().insertSlot(
@@ -1047,7 +1413,7 @@ class MigrationTest {
             opDate = "2026-07-01", reps = 5, weightKg = 80.0,
         )
         v6.catalog().insertEvent(
-            EventEntity(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
+            EventEntityV7(ts = "2026-07-01T10:00:00", type = set.type, payload = set.toPayload())
         )
         v6.catalog().insertAlias(AliasEntityV4(key = "bench", value = mine))
         v6.catalog().insertAlias(AliasEntityV4(key = "hang20", value = seeded, seeded = true))
@@ -1189,19 +1555,1178 @@ class MigrationTest {
 
     @Test
     fun `a phone that skipped every release in between still arrives intact`() = runTest {
-        // 1 -> 7 in one go. Nobody upgrades one version at a time, and a chain that only ever
+        // 1 -> 8 in one go. Nobody upgrades one version at a time, and a chain that only ever
         // gets tested link by link is a chain whose middle is untested.
         writeVersion1()
 
-        val v7 = openCurrent()
+        val current = openCurrent()
 
-        assertEquals(1, v7.events().count())
-        assertTrue(v7.events().all().single().workoutId == null)
-        val exercise = v7.exercises().all().single()
+        assertEquals(1, current.events().count())
+        assertTrue(current.events().all().single().workoutId == null)
+        val exercise = current.exercises().all().single()
         assertNull(exercise.defaultRestSec)
         assertEquals(20.0, exercise.edgeMm!!, 1e-9)
-        assertEquals(1, v7.slots().all().size)
-        assertTrue(v7.slots().allExercises().isEmpty())
-        assertEquals(0, v7.programs().countPrograms())
+        assertEquals(1, current.slots().all().size)
+        assertTrue(current.slots().allExercises().isEmpty())
+        assertEquals(0, current.programs().countPrograms())
+    }
+
+    // --- version 7 -> 8: every row learns its own name --------------------------------------
+
+    /** What a version 7 database was left holding. */
+    private data class PhoneV7(
+        val slotId: Long,
+        val exerciseId: Long,
+        val goneExerciseId: Long,
+        val workoutStartId: Long = 0,
+    )
+
+    /**
+     * A phone at version 7 with a real history on it: a catalog, a plan with a composition, a
+     * program, and a journal of sets written on different days. It also has a HOLE at the top
+     * of its catalog, because rebuilding five tables is exactly where an id counter gets lost.
+     */
+    private suspend fun writeVersion7(): PhoneV7 {
+        val v7 = Room.databaseBuilder(context, SchemaV7Database::class.java, dbName).build()
+        opened = v7
+
+        val exerciseId = v7.catalog().insertExercise(
+            ExerciseEntityV7(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-07-01T10:00:00", defaultRestSec = 150, ledByProtocol = false,
+            )
+        )
+        val gone = v7.catalog().insertExercise(
+            ExerciseEntityV7(
+                name = "Overhead press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-07-02T10:00:00",
+            )
+        )
+        v7.catalog().deleteExercise(gone)
+
+        for (day in listOf("2026-07-01", "2026-07-03", "2026-07-05")) {
+            val set = strengthSetOf(
+                exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                    id = exerciseId, name = "Bench press", form = ExerciseForm.STRENGTH,
+                ),
+                opDate = day, reps = 5, weightKg = 80.0,
+            )
+            v7.catalog().insertEvent(
+                EventEntityV7(ts = "${day}T10:00:00", type = set.type, payload = set.toPayload())
+            )
+        }
+
+        val slotId = v7.catalog().insertSlot(
+            SlotEntityV7(
+                name = "Gym", atTime = "19:00", repeatRule = REPEAT_WEEKLY,
+                anchorDate = "2026-07-01", createdAt = "2026-07-01T09:00:00",
+            )
+        )
+        v7.catalog().insertComposition(
+            SlotExerciseEntityV7(slotId = slotId, exerciseId = exerciseId, position = 0, restSec = 180)
+        )
+        v7.catalog().insertComposition(
+            SlotExerciseEntityV7(slotId = slotId, exerciseId = exerciseId, position = 1, restSec = null)
+        )
+
+        /*
+         * A workout started from that plan, and one set recorded inside it. Version 7 could
+         * name neither the workout nor the plan by identity, which is what the 8 -> 9 and the
+         * 10 -> 11 steps have to translate.
+         *
+         * The payload is spelled out as JSON rather than built from [WorkoutStarted]. That is
+         * the whole difference between a fixture and a phone: the class writes every key it
+         * knows about, `slot_uid` among them, so a payload built from it would carry the key
+         * with a null in it — which is a shape version 7 never wrote. The migration has to
+         * cope with the key being ABSENT, and it can only be shown to if the fixture leaves
+         * it out.
+         */
+        val startId = v7.catalog().insertEvent(
+            EventEntityV7(
+                ts = "2026-07-05T18:00:00",
+                type = TYPE_WORKOUT_STARTED,
+                payload = """{"op_date":"2026-07-05","slot_id":$slotId}""",
+            )
+        )
+        val inWorkout = strengthSetOf(
+            exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                id = exerciseId, name = "Bench press", form = ExerciseForm.STRENGTH,
+            ),
+            opDate = "2026-07-05", reps = 3, weightKg = 90.0,
+        )
+        v7.catalog().insertEvent(
+            EventEntityV7(
+                ts = "2026-07-05T18:10:00", type = inWorkout.type,
+                payload = inWorkout.toPayload(), workoutId = startId,
+            )
+        )
+
+        v7.catalog().insertProgram(
+            ProgramEntityV3(
+                name = "Repeaters 7:3", prepareSec = 15, position = 0,
+                createdAt = "2026-06-01T10:00:00", category = "Hangboard",
+            )
+        )
+        v7.close()
+        opened = null
+        return PhoneV7(
+            slotId = slotId, exerciseId = exerciseId, goneExerciseId = gone,
+            workoutStartId = startId,
+        )
+    }
+
+    @Test
+    fun `every row already on the phone comes out of the upgrade with an id of its own`() =
+        runTest {
+            val (slotId, _, _) = writeVersion7()
+
+            val db = openCurrent()
+
+            val uids = db.events().all().map { it.uid } +
+                db.exercises().all().map { it.uid } +
+                db.slots().all().map { it.uid } +
+                db.slots().allExercises().map { it.uid } +
+                db.programs().allPrograms().map { it.uid }
+
+            // thirteen rows across five tables, and not one of them left holding the empty
+            // string the rebuild inserted before the ids were handed out
+            assertEquals(5 + 1 + 1 + 2 + 1, uids.size)
+            assertTrue("a migrated row was left without a uid", uids.all { isUid(it) })
+            assertEquals("two rows were given the same uid", uids.size, uids.toSet().size)
+
+            // and nothing moved while that happened
+            assertEquals(1, db.slots().all().size)
+            assertEquals(2, ActivityRepository(db).slotExercises(slotId).size)
+        }
+
+    @Test
+    fun `the ids of migrated rows sort the way the rows themselves do`() = runTest {
+        writeVersion7()
+
+        val db = openCurrent()
+
+        /*
+         * The whole reason for choosing UUIDv7 over v4: the leading 48 bits are the millisecond
+         * the id was minted at, so plain string order is creation order. A migration that
+         * stamped "now" onto every old row would satisfy the uniqueness check above and quietly
+         * throw that property away, which is the kind of thing nothing else would ever notice.
+         *
+         * The sets were written on three different days, so their ids have to come out in the
+         * same order as their timestamps.
+         */
+        val events = db.events().all().sortedBy { it.ts }
+        assertEquals(events.map { it.uid }, events.map { it.uid }.sorted())
+    }
+
+    @Test
+    fun `the uid index is unique, and the database says so rather than merely believing it`() =
+        runTest {
+            writeVersion7()
+
+            val db = openCurrent()
+            val existing = db.events().all().first().uid
+
+            val clash = runCatching {
+                db.events().insert(
+                    EventEntity(
+                        ts = "2026-07-06T10:00:00",
+                        type = xyz.oleolegka.gachimuchi.domain.TYPE_TICK,
+                        payload = """{"activity":"x","op_date":"2026-07-06","activity_key":"x"}""",
+                        uid = existing,
+                    )
+                )
+            }.exceptionOrNull()
+
+            assertNotNull("two events were allowed to share a uid", clash)
+        }
+
+    @Test
+    fun `an id handed out before the uid rebuild is never handed out again`() = runTest {
+        val (_, _, goneId) = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+
+        // five tables were dropped and recreated in one migration, and every one of them
+        // restarts its AUTOINCREMENT counter at its highest surviving id unless the counter is
+        // carried across. The journal outlives the catalog, so a reissued exercise id silently
+        // re-attaches old entries to a new exercise.
+        val fresh = repo.ensureExercise("Front squat", ExerciseForm.STRENGTH)
+        assertTrue("id $fresh belonged to an exercise deleted before the upgrade", fresh > goneId)
+    }
+
+    @Test
+    fun `the composition still cascades after five tables are rebuilt`() = runTest {
+        val (slotId, _, _) = writeVersion7()
+
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+
+        // `slot_exercises` was recreated against a `slots` that was itself recreated, so the
+        // key that ties them has to be re-established rather than merely survive
+        repo.deleteSlot(slotId)
+        assertEquals(0, repo.allSlots().size)
+        assertTrue(db.slots().allExercises().isEmpty())
+    }
+
+    @Test
+    fun `the uid columns pass Room's schema check on the next open`() = runTest {
+        writeVersion7()
+
+        openCurrent().also { it.events().count() }.close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(5, again.events().count())
+        assertEquals(1, again.exercises().all().size)
+        assertEquals(1, again.programs().countPrograms())
+    }
+
+    // --- version 8 -> 9: the workout link said in uids ---------------------------------------
+
+    @Test
+    fun `a set recorded inside a workout is repointed at that workout's uid`() = runTest {
+        val phone = writeVersion7()
+
+        val db = openCurrent()
+        val events = db.events().all()
+
+        val start = events.single { it.type == TYPE_WORKOUT_STARTED }
+        assertEquals(phone.workoutStartId, start.id)
+
+        /*
+         * THE BACKFILL IS THE POINT OF THE STEP. Adding the column empty and letting only new
+         * rows fill it would split every workout in two: the sets written before the upgrade
+         * would be findable only by the number and the ones after it only by the uid, and the
+         * reducers read the uid first.
+         */
+        val inWorkout = events.single { it.workoutId != null }
+        assertEquals(start.uid, inWorkout.workoutUid)
+
+        // and the rows that belonged to no workout still belong to none — a uid invented for
+        // them would be a claim about a workout that never happened
+        assertTrue(events.filter { it.id != inWorkout.id }.all { it.workoutUid == null })
+    }
+
+    // --- version 9 -> 10: entries name their exercise by identity ----------------------------
+
+    @Test
+    fun `every entry that can be resolved comes out naming its exercise by identity`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val exerciseUid = repo.exercise(phone.exerciseId)!!.uid
+
+        val sets = repo.allEvents().mapNotNull { formFromEventOrNull(it.type, it.payload) }
+        assertEquals(4, sets.size)
+        assertTrue(
+            "an entry was left naming its exercise only by number",
+            sets.all { it.exerciseUid == exerciseUid },
+        )
+        // the number is kept beside it rather than replaced: a build older than version 10
+        // still has to be able to read this journal
+        assertTrue(sets.all { it.exerciseId == phone.exerciseId })
+    }
+
+    @Test
+    fun `an entry written before the field existed is back-filled too, key and all`() = runTest {
+        val phone = writeVersion7()
+        /*
+         * THE SHAPE THE TEST ABOVE CANNOT PRODUCE, and the one every real phone is full of.
+         *
+         * That fixture builds its payloads from StrengthSet, which is TODAY's class: written
+         * with `encodeDefaults` it stores `"exercise_uid": null` — the key present, holding
+         * nothing. A build old enough to predate the field wrote no key at all. The two are
+         * different JSON, and the difference is what the 9 -> 10 backfill got wrong once
+         * already: a null is a JsonNull, an object, not an absence, and "the key is there"
+         * read it as a link.
+         *
+         * Both shapes resolve correctly now. Only one of them was ever exercised, and it was
+         * the one no phone has — so a later change that made the backfill depend on the key
+         * being present would break every upgrade and pass every test. Hence a payload spelled
+         * out by hand, without the key.
+         */
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_STRENGTH_SET,
+            """{"exercise":"Bench press","exercise_key":"bench press","reps":5,""" +
+                """"weight_kg":80.0,"own_weight":false,"exercise_id":${phone.exerciseId},""" +
+                """"op_date":"2026-07-04"}""",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+        val exerciseUid = repo.exercise(phone.exerciseId)!!.uid
+        val events = repo.allEvents()
+
+        val migrated = formFromEventOrNull(
+            events.single { it.id == strayId }.type,
+            events.single { it.id == strayId }.payload,
+        )!!
+        assertEquals(exerciseUid, migrated.exerciseUid)
+        assertEquals(phone.exerciseId, migrated.exerciseId)
+
+        // and it is filed with the rest of that exercise's history rather than under a key of
+        // its own, which is the only symptom a missed row would ever have shown
+        val link = ExerciseLink(exerciseUid, phone.exerciseId)
+        assertEquals(5, formsOfExercise<StrengthSet>(events, link, TYPE_STRENGTH_SET).size)
+    }
+
+    @Test
+    fun `the backfill keeps one exercise under one key rather than splitting its history`() =
+        runTest {
+            val phone = writeVersion7()
+
+            val repo = ActivityRepository(openCurrent())
+            val events = repo.allEvents()
+
+            /*
+             * THE POINT OF DOING THIS AT UPGRADE TIME. The reducers group by identity where an
+             * entry has one and by number where it does not. Leave the old entries alone and
+             * the exercise appears twice — half its history under "id:N", half under a uid —
+             * with the records computed over half the sets and nothing looking broken.
+             */
+            val link = ExerciseLink(repo.exercise(phone.exerciseId)!!.uid, phone.exerciseId)
+            assertEquals(4, formsOfExercise<StrengthSet>(events, link, TYPE_STRENGTH_SET).size)
+            assertEquals(1, buildSession(events, "2026-07-05").groups.size)
+        }
+
+    @Test
+    fun `an entry pointing at an exercise that is gone keeps its number and gets no identity`() =
+        runTest {
+            val phone = writeVersion7()
+
+            // an entry naming the exercise that was deleted before the upgrade: there is no
+            // identity to give it, and inventing one would attach this history to whatever is
+            // created next
+            val stray = strengthSetOf(
+                exercise = xyz.oleolegka.gachimuchi.domain.ExerciseRef(
+                    id = phone.goneExerciseId, name = "Overhead press", form = ExerciseForm.STRENGTH,
+                ),
+                opDate = "2026-07-04", reps = 5, weightKg = 40.0,
+            )
+            writeExtraEventAtVersion7(stray)
+
+            val repo = ActivityRepository(openCurrent())
+            val migrated = repo.allEvents()
+                .mapNotNull { formFromEventOrNull(it.type, it.payload) }
+                .single { it.exerciseId == phone.goneExerciseId }
+
+            assertNull(migrated.exerciseUid)
+            assertEquals(phone.goneExerciseId, migrated.exerciseId)
+        }
+
+    /** Appends one more event to the version 7 file already on disk, without upgrading it. */
+    private suspend fun writeExtraEventAtVersion7(form: xyz.oleolegka.gachimuchi.domain.ActivityForm) =
+        writeExtraRowAtVersion7(form.type, form.toPayload())
+
+    /**
+     * The same, for a payload spelled out by hand.
+     *
+     * Needed wherever the shape of the payload is the thing under test: every form class
+     * writes all the keys it knows about, so a fixture built from one can only ever produce
+     * TODAY's shape. An old phone's rows are missing the keys that did not exist yet, and that
+     * difference is not cosmetic — a key holding null and a key that is absent read the same
+     * to a careless check and differently to a correct one.
+     */
+    private suspend fun writeExtraRowAtVersion7(
+        type: String,
+        payload: String,
+        ts: String = "2026-07-04T10:00:00",
+    ): Long {
+        val v7 = Room.databaseBuilder(context, SchemaV7Database::class.java, dbName).build()
+        opened = v7
+        val id = v7.catalog().insertEvent(EventEntityV7(ts = ts, type = type, payload = payload))
+        v7.close()
+        opened = null
+        return id
+    }
+
+    @Test
+    fun `the migrated workout folds out of the journal with all of its sets`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)
+
+        assertNotNull("the workout was lost in the upgrade", workout)
+        assertEquals(1, workout!!.setCount)
+        assertEquals(listOf(phone.exerciseId), workout.exercises.map { it.exerciseId })
+
+        // the other three sets were written outside any workout and stay outside it
+        assertEquals(1, setsOutsideWorkouts(repo.allEvents(), "2026-07-05").size)
+    }
+
+    // --- version 10 -> 11: a workout names its plan by identity ------------------------------
+
+    /** The [WorkoutStarted] payload of one event, as the domain reads it back. */
+    private fun startedPayload(events: List<JournalEvent>, id: Long): WorkoutStarted =
+        payloadJson.decodeFromString(events.single { it.id == id }.payload)
+
+    @Test
+    fun `a workout started from a plan comes out naming that plan by identity`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val slotUid = repo.allSlots().single().uid
+
+        val started = startedPayload(repo.allEvents(), phone.workoutStartId)
+        assertEquals(slotUid, started.slotUid)
+        // the number is kept beside it rather than replaced, so a build older than version 11
+        // can still read this journal
+        assertEquals(phone.slotId, started.slotId)
+    }
+
+    @Test
+    fun `the backfilled plan link is the one the day's cards are decided by`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+        val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)!!
+
+        /*
+         * THE POINT OF DOING THIS AT UPGRADE TIME. The readers compare plans through SlotLink,
+         * which prefers identities whenever both sides have one. A start event left holding
+         * only a number would be compared against a slot that now has a uid, and would keep
+         * being matched by the number — right on this phone and wrong the moment either side
+         * of the comparison has travelled.
+         */
+        val slot = repo.allSlots().single()
+        assertTrue("the migrated workout lost the plan it was started from", workout.slot!!.matches(slot.link))
+        assertEquals(slot.uid, workout.slot!!.uid)
+    }
+
+    @Test
+    fun `a workout started off-plan is left naming no plan at all`() = runTest {
+        writeVersion7()
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04"}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        val started = startedPayload(repo.allEvents(), strayId)
+        assertNull(started.slotUid)
+        assertNull(started.slotId)
+        assertNull(buildWorkout(repo.allEvents(), strayId)!!.slot)
+    }
+
+    // --- version 11 -> 12: a workout keeps the name it was started under ---------------------
+
+    @Test
+    fun `a workout started from a plan comes out carrying that plan's name`() = runTest {
+        val phone = writeVersion7()
+
+        val repo = ActivityRepository(openCurrent())
+
+        assertEquals("Gym", startedPayload(repo.allEvents(), phone.workoutStartId).name)
+    }
+
+    @Test
+    fun `the backfilled name is what the card shows, and renaming the plan no longer moves it`() =
+        runTest {
+            val phone = writeVersion7()
+
+            val repo = ActivityRepository(openCurrent())
+            val workout = buildWorkout(repo.allEvents(), phone.workoutStartId)!!
+            assertEquals("Gym", workout.name)
+
+            /*
+             * WHY THE BACKFILL IS NOT OPTIONAL. The screens stop asking the plan what a
+             * workout is called the moment this ships, so a start event left without a
+             * snapshot is a workout that loses its name on upgrade. And with the snapshot in
+             * place, editing the plan afterwards leaves the fact alone — which is the whole
+             * reason for the field.
+             */
+            val slot = repo.allSlots().single()
+            repo.saveSlot(slot.copy(name = "Powerlifting").toDraft(), id = slot.id)
+
+            assertEquals("Powerlifting", repo.allSlots().single().name)
+            assertEquals("Gym", buildWorkout(repo.allEvents(), phone.workoutStartId)!!.name)
+        }
+
+    @Test
+    fun `a workout that named no plan is left nameless rather than given one`() = runTest {
+        writeVersion7()
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04"}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        assertNull(startedPayload(repo.allEvents(), strayId).name)
+        assertNull(buildWorkout(repo.allEvents(), strayId)!!.name)
+    }
+
+    // --- version 12 -> 13: the catalog can say an exercise is one-sided ----------------------
+
+    /** What a version 12 phone was left holding, so the assertions can name it afterwards. */
+    private data class PhoneV12(val exerciseId: Long, val goneId: Long, val hangId: Long)
+
+    /**
+     * A version 12 database with a hangboard exercise, one hang logged against it, and a gap
+     * at the top of the catalog left by a deleted exercise.
+     *
+     * The gap is the point of the second row: `exercises` is REBUILT by this migration, and a
+     * rebuilt AUTOINCREMENT table restarts its counter at the highest surviving id.
+     */
+    private suspend fun writeVersion12(): PhoneV12 {
+        val v12 = Room.databaseBuilder(context, SchemaV12Database::class.java, dbName).build()
+        opened = v12
+
+        val exerciseId = v12.catalog().insertExercise(
+            ExerciseEntityV12(
+                name = "One-arm hang 20 mm", form = ExerciseForm.HOLD.code,
+                createdAt = "2026-08-01T10:00:00", edgeMm = 20.0,
+                protocolWorkSec = 7.0, protocolRestSec = 3.0,
+                defaultRestSec = 180, ledByProtocol = false,
+            )
+        )
+        val goneId = v12.catalog().insertExercise(
+            ExerciseEntityV12(
+                name = "Deleted later", form = ExerciseForm.HOLD.code,
+                createdAt = "2026-08-01T10:05:00",
+            )
+        )
+        v12.catalog().deleteExercise(goneId)
+
+        val hang = """{"activity":"One-arm hang 20 mm","added_kg":-15.0,"own_weight":true,""" +
+            """"exercise_id":$exerciseId,"op_date":"2026-08-02",""" +
+            """"activity_key":"one arm hang 20 mm"}"""
+        val hangId = v12.catalog().insertEvent(
+            EventEntityV15(ts = "2026-08-02T10:00:00", type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET, payload = hang)
+        )
+
+        v12.close()
+        opened = null
+        return PhoneV12(exerciseId, goneId, hangId)
+    }
+
+    @Test
+    fun `every exercise on the phone comes through the rebuild, two-handed`() = runTest {
+        val phone = writeVersion12()
+
+        val db = openCurrent()
+        val exercise = db.exercises().byId(phone.exerciseId)
+
+        assertNotNull("the catalog row was lost in the rebuild", exercise)
+        assertEquals("One-arm hang 20 mm", exercise!!.name)
+        assertEquals(20.0, exercise.edgeMm!!, 1e-9)
+        assertEquals(180, exercise.defaultRestSec)
+        assertEquals(false, exercise.ledByProtocol)
+        assertTrue("the identity did not survive the rebuild", isUid(exercise.uid))
+
+        /*
+         * False, and it is a TRUE statement rather than a placeholder: nothing in the catalog
+         * was one-sided before there was a way to say so. Marking it next week is new
+         * information, not a correction of this.
+         */
+        assertFalse(exercise.oneSided)
+    }
+
+    @Test
+    fun `an id handed out before the catalog rebuild is never handed out again`() = runTest {
+        val phone = writeVersion12()
+
+        val db = openCurrent()
+        val fresh = db.exercises().insert(
+            xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                name = "Added after the upgrade", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-03T10:00:00",
+            )
+        )
+
+        // the journal outlives the catalog, so a reissued id would silently re-attach the
+        // entries of the deleted exercise to this new one
+        assertTrue(
+            "the rebuilt catalog reused id ${phone.goneId}",
+            fresh > phone.goneId,
+        )
+    }
+
+    @Test
+    fun `the one-sided column passes Room's schema check on the next open`() = runTest {
+        writeVersion12()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(1, again.exercises().all().size)
+    }
+
+    @Test
+    fun `a hang logged before sides existed keeps its history and names no side`() = runTest {
+        val phone = writeVersion12()
+
+        val repo = ActivityRepository(openCurrent())
+        val events = repo.allEvents()
+        val hang = events.single { it.id == phone.hangId }
+        val form = formFromEventOrNull(hang.type, hang.payload) as xyz.oleolegka.gachimuchi.domain.HoldSet
+
+        // the payload is untouched by this migration: no side is written into history that
+        // nobody recorded
+        assertNull(form.side)
+        assertEquals(-15.0, form.addedKg!!, 1e-9)
+
+        // and while the exercise stays two-handed the record reads exactly as it always did
+        val records = xyz.oleolegka.gachimuchi.domain.holdRecord(
+            xyz.oleolegka.gachimuchi.domain.readActivities(events),
+            ExerciseLink.ofId(phone.exerciseId),
+        )
+        assertEquals(1, records.size)
+        assertNull(records.single().side)
+        assertFalse(records.single().sideMissing)
+    }
+
+    @Test
+    fun `marking an exercise one-sided turns its sideless history into a stated defect`() = runTest {
+        val phone = writeVersion12()
+
+        val repo = ActivityRepository(openCurrent())
+        repo.setOneSided(phone.exerciseId, true)
+        assertTrue(repo.exercise(phone.exerciseId)!!.oneSided)
+
+        /*
+         * THE POINT OF THE FLAG BEING A COLUMN AND THE SIDE BEING A PAYLOAD FIELD. Turning it
+         * on cannot rewrite the sets already logged — they genuinely do not say which hand did
+         * them — so the reducers report a record whose side is unknown rather than filing it
+         * as "both hands", which is the one answer that is certainly wrong.
+         */
+        val records = xyz.oleolegka.gachimuchi.domain.holdRecord(
+            xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
+            ExerciseLink.ofId(phone.exerciseId),
+            oneSided = true,
+        )
+        assertEquals(1, records.size)
+        assertNull(records.single().side)
+        assertTrue(records.single().sideMissing)
+        assertTrue(records.single().text, records.single().text.contains("side not recorded"))
+    }
+
+    // --- version 13 -> 14: the share of body weight, and the snapshots behind it -------------
+
+    /** A version 12 phone whose owner does pull-ups and sometimes stands on the scales. */
+    private data class PhoneWithScales(
+        val exerciseId: Long,
+        val beforeTheScales: Long,
+        val betweenWeighIns: Long,
+    )
+
+    /**
+     * A version 12 database holding a body-weight history that straddles two weigh-ins, plus
+     * one set from before the scales were ever used.
+     *
+     * The dates are the point. The backfill has to match a set to what the scales said ON OR
+     * BEFORE ITS OWN DAY, and a fixture where every set postdates every weigh-in would pass
+     * just as happily with a migration that stamped the latest reading onto everything.
+     */
+    private suspend fun writeVersion12WithScales(): PhoneWithScales {
+        val v12 = Room.databaseBuilder(context, SchemaV12Database::class.java, dbName).build()
+        opened = v12
+
+        val exerciseId = v12.catalog().insertExercise(
+            ExerciseEntityV12(
+                name = "Pull-ups", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-06-01T10:00:00",
+            )
+        )
+
+        fun pullUp(day: String) =
+            """{"exercise":"Pull-ups","reps":8,"own_weight":true,""" +
+                """"exercise_id":$exerciseId,"op_date":"$day","exercise_key":"pull ups"}"""
+
+        fun weighIn(kg: Double, day: String) = """{"weight_kg":$kg,"op_date":"$day"}"""
+
+        val beforeTheScales = v12.catalog().insertEvent(
+            EventEntityV15(ts = "2026-06-01T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-06-01"))
+        )
+        v12.catalog().insertEvent(
+            EventEntityV15(
+                ts = "2026-07-01T08:00:00",
+                type = xyz.oleolegka.gachimuchi.domain.TYPE_BODYWEIGHT,
+                payload = weighIn(72.0, "2026-07-01"),
+            )
+        )
+        val betweenWeighIns = v12.catalog().insertEvent(
+            EventEntityV15(ts = "2026-07-15T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-07-15"))
+        )
+        v12.catalog().insertEvent(
+            EventEntityV15(
+                ts = "2026-08-01T08:00:00",
+                type = xyz.oleolegka.gachimuchi.domain.TYPE_BODYWEIGHT,
+                payload = weighIn(69.0, "2026-08-01"),
+            )
+        )
+
+        v12.close()
+        opened = null
+        return PhoneWithScales(exerciseId, beforeTheScales, betweenWeighIns)
+    }
+
+    /** The [StrengthSet] one event carries, as the domain reads it back. */
+    private fun strengthPayload(events: List<JournalEvent>, id: Long): StrengthSet =
+        formFromEventOrNull(TYPE_STRENGTH_SET, events.single { it.id == id }.payload) as StrengthSet
+
+    @Test
+    fun `a set logged before the upgrade is stamped with what the scales said on its own day`() =
+        runTest {
+            val phone = writeVersion12WithScales()
+
+            val repo = ActivityRepository(openCurrent())
+            val events = repo.allEvents()
+
+            // 72 kg and not 69: the set is from July, and the August weigh-in had not happened
+            assertEquals(72.0, strengthPayload(events, phone.betweenWeighIns).bodyweightKg!!, 1e-9)
+        }
+
+    @Test
+    fun `a set older than every weigh-in is left without a snapshot`() = runTest {
+        val phone = writeVersion12WithScales()
+
+        val repo = ActivityRepository(openCurrent())
+
+        /*
+         * There is no honest number for it. Reaching forward to the first later weigh-in would
+         * be claiming to know what somebody weighed before they had ever weighed themselves,
+         * and the set stays worth nothing on the tonnage chart — exactly as it was.
+         */
+        assertNull(strengthPayload(repo.allEvents(), phone.beforeTheScales).bodyweightKg)
+    }
+
+    @Test
+    fun `the share column arrives empty, and until it is filled in nothing moves`() = runTest {
+        val phone = writeVersion12WithScales()
+
+        val repo = ActivityRepository(openCurrent())
+        assertNull(repo.exercise(phone.exerciseId)!!.bodyweightShare)
+
+        // no share, so the chart still counts reps, which is what it counted yesterday
+        val series = xyz.oleolegka.gachimuchi.domain.volumeSeries(
+            xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
+            ExerciseLink.ofId(phone.exerciseId),
+            ExerciseForm.STRENGTH,
+        )!!
+        assertEquals("Reps", series.spec.label)
+    }
+
+    @Test
+    fun `filling in the share turns the backfilled history into tonnage, not a wall of zeros`() =
+        runTest {
+            val phone = writeVersion12WithScales()
+
+            val repo = ActivityRepository(openCurrent())
+            repo.setBodyweightShare(phone.exerciseId, 1.0)
+            assertEquals(1.0, repo.exercise(phone.exerciseId)!!.bodyweightShare!!, 1e-9)
+
+            /*
+             * WHY THE BACKFILL IS NOT OPTIONAL. Without it this chart switches from counting
+             * reps to counting kilograms and every day before the upgrade draws as zero — a
+             * history that reads as nothing followed by a wall, which is worse than the flat
+             * rep count it replaced.
+             */
+            val series = xyz.oleolegka.gachimuchi.domain.volumeSeries(
+                xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
+                ExerciseLink.ofId(phone.exerciseId),
+                ExerciseForm.STRENGTH,
+                1.0,
+            )!!
+            assertEquals("Volume, reps x weight", series.spec.label)
+
+            val july = series.points.single { it.opDate == "2026-07-15" }
+            assertEquals(72.0 * 8, july.value, 1e-9)
+
+            // and the set from before the scales is still honestly worth nothing
+            val june = series.points.single { it.opDate == "2026-06-01" }
+            assertEquals(0.0, june.value, 1e-9)
+        }
+
+    @Test
+    fun `a set written after the upgrade is stamped without anybody asking`() = runTest {
+        writeVersion12WithScales()
+
+        val repo = ActivityRepository(openCurrent())
+        val exercise = repo.allExercises().single { it.name == "Pull-ups" }
+        val id = repo.record(
+            strengthSetOf(
+                exercise = exercise.toRef(), opDate = "2026-08-05", reps = 6, ownWeight = true,
+            ),
+            attachToWorkout = false,
+        )
+
+        // stamped in the repository rather than on the screen: one method sees every write
+        assertEquals(69.0, strengthPayload(repo.allEvents(), id).bodyweightKg!!, 1e-9)
+    }
+
+    @Test
+    fun `the share column passes Room's schema check on the next open`() = runTest {
+        writeVersion12WithScales()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(1, again.exercises().all().size)
+    }
+
+    @Test
+    fun `a workout whose plan has been deleted keeps its number and gets no identity`() = runTest {
+        val phone = writeVersion7()
+        // a plan that is gone: there is no identity to give this workout, and minting one
+        // would be a claim about a plan this database has never held
+        val strayId = writeExtraRowAtVersion7(
+            TYPE_WORKOUT_STARTED,
+            """{"op_date":"2026-07-04","slot_id":${phone.slotId + 99}}""",
+            ts = "2026-07-04T18:00:00",
+        )
+
+        val repo = ActivityRepository(openCurrent())
+
+        val started = startedPayload(repo.allEvents(), strayId)
+        assertNull(started.slotUid)
+        assertEquals(phone.slotId + 99, started.slotId)
+    }
+
+    // --- version 14 -> 15: the identity becomes a constraint, and rows can be hidden --------
+
+    /** What a version 14 phone was left holding, so the assertions can name it afterwards. */
+    private data class PhoneV14(
+        val hangsId: Long,
+        val twinId: Long,
+        val benchId: Long,
+        val setOnTwinId: Long,
+    )
+
+    /**
+     * A version 14 database whose catalog holds a pair of rows that version 15 would refuse:
+     * the same name, form, edge and protocol, twice.
+     *
+     * It is written through a version 14 database on purpose. The pair cannot be created
+     * through today's app at all — which is the point of the whole change — so the only honest
+     * way to ask "what does the upgrade do with one" is to write it as the old schema could,
+     * and a hand-edited or restored catalog is exactly where such a pair comes from.
+     *
+     * A hang is logged against the SECOND of the two, because that is the row the upgrade will
+     * mark, and "the marked row keeps its own history" is the thing worth proving.
+     */
+    private suspend fun writeVersion14(): PhoneV14 {
+        val v14 = Room.databaseBuilder(context, SchemaV14Database::class.java, dbName).build()
+        opened = v14
+
+        val hangsId = v14.catalog().insertExercise(
+            ExerciseEntityV14(
+                name = "Hangs", form = ExerciseForm.HOLD.code, createdAt = "2026-08-01T10:00:00",
+                edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0,
+                defaultRestSec = 180, ledByProtocol = false, oneSided = true,
+                bodyweightShare = 1.0,
+            )
+        )
+        // the same exercise again, spelled differently — one identity, two rows
+        val twinId = v14.catalog().insertExercise(
+            ExerciseEntityV14(
+                name = "HANGS", form = ExerciseForm.HOLD.code, createdAt = "2026-08-01T10:05:00",
+                edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0,
+            )
+        )
+        val benchId = v14.catalog().insertExercise(
+            ExerciseEntityV14(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-01T10:10:00",
+            )
+        )
+
+        val hang = """{"activity":"hangs","added_kg":10.0,"own_weight":true,""" +
+            """"exercise_id":$twinId,"op_date":"2026-08-02","activity_key":"hangs"}"""
+        val setOnTwinId = v14.catalog().insertEvent(
+            EventEntityV15(
+                ts = "2026-08-02T10:00:00",
+                type = xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET,
+                payload = hang,
+            )
+        )
+
+        v14.close()
+        opened = null
+        return PhoneV14(hangsId, twinId, benchId, setOnTwinId)
+    }
+
+    /**
+     * The upgrade must not fail on a catalog it disagrees with, and must not silently make the
+     * disagreement go away either. Both rows survive; the later one is marked so the index can
+     * exist at all.
+     */
+    @Test
+    fun `two catalog rows claiming one identity both come through, the later one marked`() = runTest {
+        val phone = writeVersion14()
+
+        val db = openCurrent()
+        val kept = db.exercises().byId(phone.hangsId)
+        val marked = db.exercises().byId(phone.twinId)
+
+        assertNotNull("the first row was lost", kept)
+        assertNotNull("the duplicate was deleted rather than kept", marked)
+        assertEquals("the row that was there first keeps its name", "Hangs", kept!!.name)
+        assertEquals("HANGS (2)", marked!!.name)
+        assertNotEquals(kept.identityKey, marked.identityKey)
+        assertEquals(3, db.exercises().all().size)
+    }
+
+    /**
+     * The reason renaming was chosen over merging: nothing about the history moves. The hang
+     * logged against the marked row is still the marked row's, and the row it was logged
+     * against still has the uid it had.
+     */
+    @Test
+    fun `the marked row keeps its identity and everything logged against it`() = runTest {
+        val phone = writeVersion14()
+
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+        val marked = db.exercises().byId(phone.twinId)!!
+
+        assertTrue("the uid must not be reissued by a rebuild", isUid(marked.uid))
+        val sets = holdSetsOfExercise(repo.allEvents(), marked.toRef().link)
+        assertEquals("the set left the row it was logged against", 1, sets.size)
+        assertEquals(10.0, sets.single().addedKg!!, 1e-9)
+        // and it did not land on the row that kept the name
+        assertTrue(holdSetsOfExercise(repo.allEvents(), db.exercises().byId(phone.hangsId)!!.toRef().link).isEmpty())
+    }
+
+    /** Everything the catalog knew before the rebuild is still there afterwards. */
+    @Test
+    fun `every column of a catalog row survives the rebuild, and none of them is hidden`() = runTest {
+        val phone = writeVersion14()
+
+        val exercise = openCurrent().exercises().byId(phone.hangsId)!!
+
+        assertEquals(20.0, exercise.edgeMm!!, 1e-9)
+        assertEquals(7.0, exercise.protocolWorkSec!!, 1e-9)
+        assertEquals(3.0, exercise.protocolRestSec!!, 1e-9)
+        assertEquals(180, exercise.defaultRestSec)
+        assertEquals(false, exercise.ledByProtocol)
+        assertTrue(exercise.oneSided)
+        assertEquals(1.0, exercise.bodyweightShare!!, 1e-9)
+        /*
+         * False, and it is a TRUE statement rather than a placeholder: nothing in the catalog
+         * was hidden before there was a way to hide it.
+         */
+        assertFalse(exercise.hidden)
+        assertEquals(
+            exerciseIdentityKey("Hangs", ExerciseForm.HOLD.code, 20.0, 7.0, 3.0),
+            exercise.identityKey,
+        )
+    }
+
+    /**
+     * A catalog with no duplicates in it must come through with nobody's name touched. The
+     * marking is a last resort, and a phone that never needed it should not be able to tell
+     * this migration ran.
+     */
+    @Test
+    fun `a catalog with nothing to resolve comes through with every name as it was`() = runTest {
+        val phone = writeVersion14()
+
+        val bench = openCurrent().exercises().byId(phone.benchId)!!
+
+        assertEquals("Bench press", bench.name)
+        assertEquals(exerciseIdentityKey("Bench press", ExerciseForm.STRENGTH.code), bench.identityKey)
+    }
+
+    @Test
+    fun `the identity index is unique after the upgrade, and the database says so itself`() = runTest {
+        writeVersion14()
+
+        val db = openCurrent()
+        val failure = runCatching {
+            db.exercises().insert(
+                xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                    name = "bench press", form = ExerciseForm.STRENGTH.code,
+                    createdAt = "2026-08-07T10:00:00",
+                )
+            )
+        }.exceptionOrNull()
+
+        assertTrue(
+            "expected the upgraded database to refuse a duplicate, got $failure",
+            failure is android.database.sqlite.SQLiteConstraintException,
+        )
+    }
+
+    @Test
+    fun `an id handed out before the identity rebuild is never handed out again`() = runTest {
+        val phone = writeVersion14()
+
+        val db = openCurrent()
+        val fresh = db.exercises().insert(
+            xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                name = "Front squat", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-07T10:00:00",
+            )
+        )
+
+        assertTrue("the rebuilt table restarted its counter", fresh > phone.benchId)
+    }
+
+    @Test
+    fun `the identity and hidden columns pass Room's schema check on the next open`() = runTest {
+        writeVersion14()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(3, again.exercises().all().size)
+    }
+
+    // --- version 15 -> 16: the day becomes a column and the time becomes a moment -----------
+
+    /** What a version 15 phone was left holding, so the assertions can name the rows. */
+    private data class PhoneV15(
+        val setId: Long,
+        val backdatedId: Long,
+        val cancelId: Long,
+        val brokenId: Long,
+    )
+
+    /**
+     * A version 15 journal with one of each kind of row the upgrade has to have an answer for:
+     * a set logged on the day it happened, a set typed up a fortnight late, a reversal that is
+     * about no training day at all, and a payload that will not parse.
+     */
+    private suspend fun writeVersion15(): PhoneV15 {
+        val v15 = Room.databaseBuilder(context, SchemaV15Database::class.java, dbName).build()
+        opened = v15
+
+        fun set(day: String) =
+            """{"exercise":"Bench press","reps":5,"weight_kg":80.0,""" +
+                """"op_date":"$day","exercise_key":"bench press"}"""
+
+        val setId = v15.events().insert(
+            EventEntityV15(ts = "2026-08-06T10:00:00", type = TYPE_STRENGTH_SET, payload = set("2026-08-06"))
+        )
+        // written on the 6th, about the 1st: the two facts the column has to keep apart
+        val backdatedId = v15.events().insert(
+            EventEntityV15(ts = "2026-08-06T21:30:00", type = TYPE_STRENGTH_SET, payload = set("2026-08-01"))
+        )
+        val cancelId = v15.events().insert(
+            EventEntityV15(
+                ts = "2026-08-06T22:00:00", type = TYPE_SET_CANCEL,
+                payload = """{"cancels":$setId}""",
+            )
+        )
+        val brokenId = v15.events().insert(
+            EventEntityV15(ts = "2026-08-06T23:00:00", type = TYPE_STRENGTH_SET, payload = "{not json")
+        )
+
+        v15.close()
+        opened = null
+        return PhoneV15(setId, backdatedId, cancelId, brokenId)
+    }
+
+    private suspend fun rowById(db: AppDatabase, id: Long) = db.events().byId(id)!!
+
+    @Test
+    fun `the day inside the payload becomes a column, and the day written on stays out of it`() =
+        runTest {
+            val phone = writeVersion15()
+            val db = openCurrent()
+
+            assertEquals("2026-08-06", rowById(db, phone.setId).opDate)
+            // the backfill takes the day the training belongs to, never the day it was typed up
+            assertEquals("2026-08-01", rowById(db, phone.backdatedId).opDate)
+            assertEquals("2026-08-06T21:30:00", rowById(db, phone.backdatedId).ts)
+        }
+
+    @Test
+    fun `a row that is about no training day gets no day, and a broken payload costs only itself`() =
+        runTest {
+            val phone = writeVersion15()
+            val db = openCurrent()
+
+            assertNull("a reversal belongs to no training day", rowById(db, phone.cancelId).opDate)
+            val broken = rowById(db, phone.brokenId)
+            assertNull("nothing may be invented for a payload nobody can read", broken.opDate)
+            assertEquals("the row itself must survive", "{not json", broken.payload)
+            // and its write time is still known: the timestamp is a column, not part of the mess
+            assertNotNull(broken.tsUtc)
+        }
+
+    /**
+     * The instant and the offset are filled in from the local clock and the device's zone, and
+     * the pair is REVERSIBLE: applying the offset to the instant gives back exactly the string
+     * that was stored, whatever zone this test happens to run in.
+     *
+     * That round trip is the assertion worth making. Comparing against a hand-written UTC string
+     * would only pass in the zone it was written for, and comparing against the app's own
+     * conversion would be the code agreeing with itself.
+     */
+    @Test
+    fun `the write time becomes an instant plus the offset it was written at`() = runTest {
+        val phone = writeVersion15()
+        val db = openCurrent()
+
+        val row = rowById(db, phone.setId)
+        val utc = row.tsUtc!!
+        val offset = row.tzOffsetMin!!
+
+        assertTrue("the instant must say it is one", utc.endsWith("Z"))
+        assertEquals("fixed width, or text ordering is a lie", 20, utc.length)
+
+        val backToLocal = java.time.LocalDateTime.parse(utc.dropLast(1))
+            .plusMinutes(offset.toLong())
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+        assertEquals(row.ts, backToLocal)
+    }
+
+    /** Every row comes through, and the reducers read the upgraded journal as they always did. */
+    @Test
+    fun `the journal survives, and reading it by date still finds what is in it`() = runTest {
+        writeVersion15()
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+
+        assertEquals(4, db.events().all().size)
+        val events = repo.allEvents()
+        // the cancelled set is gone from the reading, the unreadable row is skipped, and the
+        // backdated one is found under the day it belongs to rather than the day it was written
+        assertEquals(
+            listOf("2026-08-01"),
+            readActivities(events).map { it.opDate },
+        )
+        assertEquals(1, readActivities(events, dateFrom = "2026-08-01", dateTo = "2026-08-01").size)
+        assertTrue(readActivities(events, dateFrom = "2026-08-02").isEmpty())
+    }
+
+    /** A row this build writes carries all three, so nothing has to be inferred twice. */
+    @Test
+    fun `a set written after the upgrade carries its day and its instant`() = runTest {
+        writeVersion15()
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+
+        val id = repo.record(
+            strengthSetOf(
+                ExerciseRef(id = 1, name = "Bench press", form = ExerciseForm.STRENGTH),
+                opDate = "2026-08-07", reps = 5, weightKg = 80.0,
+            ),
+            attachToWorkout = false,
+        )
+
+        val row = rowById(db, id)
+        assertEquals("2026-08-07", row.opDate)
+        assertNotNull(row.tsUtc)
+        assertNotNull(row.tzOffsetMin)
+    }
+
+    @Test
+    fun `the time columns pass Room's schema check on the next open`() = runTest {
+        writeVersion15()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(4, again.events().all().size)
     }
 }

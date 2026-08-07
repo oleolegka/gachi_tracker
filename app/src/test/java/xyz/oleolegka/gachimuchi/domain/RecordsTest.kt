@@ -88,7 +88,7 @@ class RecordsTest {
             JournalEvent(1, "t", 1, 1, TYPE_STRENGTH_SET, set(60.0, 5, day = "2026-08-01").toPayload()),
             JournalEvent(2, "t", 1, 1, TYPE_STRENGTH_SET, set(70.0, 3, day = "2026-08-05").toPayload()),
         )
-        val record = strengthRecord(readActivities(events), 1)
+        val record = strengthRecord(readActivities(events), ExerciseLink.ofId(1))
         assertNotNull(record)
         assertEquals("2026-08-05", record!!.opDate)
         assertEquals(est1rm(70.0, 3), record.value, 1e-9)
@@ -102,8 +102,9 @@ class RecordsTest {
             JournalEvent(1, "t", 1, 1, TYPE_HOLD_SET, a.toPayload()),
             JournalEvent(2, "t", 1, 1, TYPE_HOLD_SET, b.toPayload()),
         )
-        val record = holdRecord(readActivities(events), 5)
-        assertEquals(12.0, record!!.value, 1e-9)
+        // one record and not two: nothing here names a side, so this is two-handed work
+        val record = holdRecord(readActivities(events), ExerciseLink.ofId(5)).single()
+        assertEquals(12.0, record.value, 1e-9)
         assertEquals("2026-08-04", record.opDate)
     }
 }

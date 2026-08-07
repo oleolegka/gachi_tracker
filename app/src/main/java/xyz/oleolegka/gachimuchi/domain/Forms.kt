@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.domain
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -43,8 +44,72 @@ const val TYPE_BODYWEIGHT = "bodyweight"
  * Cancelling a set is NOT an activity form but a reversing journal event. The journal
  * is append-only and nothing may be deleted: a cancellation is a separate event that
  * the reducers exclude (payload = {"cancels": <event_id>}).
+ *
+ * SUPERSEDED BY [TYPE_ENTRY_DELETED], which says the same thing about any event rather than
+ * only about a set. This one is still written by nothing and read by everything: every journal
+ * on every phone is full of it, and [journalView] treats the two as one word for one act.
  */
 const val TYPE_SET_CANCEL = "set_cancel"
+
+/**
+ * "That event's values were wrong; here are the right ones." A correction, not a rewrite: the
+ * original row stays exactly as it was written and this one says what to read instead.
+ *
+ * ── Why a patch of fields rather than a whole new payload ───────────────────────
+ * The payload carries only the keys being changed, and [journalView] lays them over the
+ * original. Two reasons, and the second is the one that decided it:
+ *
+ *  - it is the only shape that works for EVERY event type. There are six activity forms plus
+ *    two service events, and a typed amendment per type would be eight classes that have to be
+ *    kept in step with the eight they mirror — the second definition of a form, waiting to
+ *    disagree with the first;
+ *  - a correction is a small fact ("it was 8 reps, not 6"), and writing the whole payload again
+ *    would make every amendment claim authority over fields nobody touched. When two of them
+ *    land on one entry, a patch merges and a full payload overwrites.
+ *
+ * ── What an amendment may NOT change ────────────────────────────────────────────
+ * WHICH exercise the entry is about — see [AMENDMENT_PROTECTED_KEYS]. Moving a set to another
+ * exercise is a deletion and a new entry, because an exercise's history is the set of entries
+ * that always were its own; a set that can walk from one exercise to another turns every record
+ * and every chart into a statement about wherever the sets happen to be pointing today. The
+ * protected keys are dropped on the way in AND ignored on the way out, so a journal merged in
+ * from elsewhere cannot do it either.
+ *
+ * Values and the date are what it is for. [opDate] specifically: "I logged this on Tuesday but
+ * did it on Monday" is the correction people actually need, and it is only a value.
+ */
+const val TYPE_ENTRY_AMENDED = "entry_amended"
+
+/**
+ * "That event should not be there at all."
+ *
+ * The successor to [TYPE_SET_CANCEL] and the same act, with two differences that are the whole
+ * point of adding it. It names ANY event — a workout started by accident, an exercise added to
+ * the wrong block — where the old one was only ever written against a set. And it names its
+ * target by IDENTITY ONLY (see [EntryDeleted]).
+ *
+ * It applies to itself, which is what makes undoing an undo work: a deletion that has itself
+ * been deleted stops hiding anything, and whatever it was hiding comes back. Nothing is ever
+ * removed from the journal — see [journalView] for the fold that turns a pile of these into an
+ * answer.
+ */
+const val TYPE_ENTRY_DELETED = "entry_deleted"
+
+/**
+ * Payload keys an amendment is not allowed to carry — everything that says WHICH thing an
+ * event is about, as opposed to what happened.
+ *
+ * The exercise keys are the reason this list exists ([TYPE_ENTRY_AMENDED] explains it). The
+ * name keys ride along because they are the exercise said in words, and the `*_key` pair
+ * because they are computed from the names and would go stale the moment a name moved without
+ * them. The workout keys are the same argument one level up: which workout a block belongs to
+ * is not a value of the block.
+ */
+val AMENDMENT_PROTECTED_KEYS: Set<String> = setOf(
+    "exercise_id", "exercise_uid", "exercise", "exercise_key",
+    "activity", "activity_key",
+    "workout_id", "workout_uid",
+)
 
 /**
  * "A workout has begun". Like [TYPE_SET_CANCEL] this is a SERVICE event and not an activity
@@ -108,6 +173,38 @@ enum class ExerciseForm(val code: Int, val eventType: String, val title: String)
 }
 
 /**
+ * Which side of the body a set was done with, for work trained ONE LIMB AT A TIME.
+ *
+ * ── Why this is worth a field of its own ────────────────────────────────────────
+ * A climber on a fingerboard hangs one arm at a time, and the ASYMMETRY is the thing the
+ * work is for: the weaker hand is what the session is about, and the number that matters is
+ * how far apart the two are. Folding both hands into one history answers the wrong question
+ * — it reports the better hand and hides the gap that the training exists to close.
+ *
+ * So a record is per (exercise, side): the left hand has its own best added weight and the
+ * right hand has its own, and neither can take the other's.
+ *
+ * ── The side is on the SET, the one-sidedness is on the EXERCISE ────────────────
+ * Which hand this particular hang was done with is a fact about the hang. Whether the
+ * exercise is done one hand at a time is a fact about the exercise, and it has to be knowable
+ * BEFORE a set exists — see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
+ *
+ * The codes are the strings stored in the payload; nothing else may be stored there. A value
+ * that is neither is a corrupt row and is refused by [HoldSet], which costs that row (the
+ * readers skip what will not parse — see [formFromEventOrNull]). That is deliberate: quietly
+ * accepting an unknown side would file it with the sets that named no side at all, which is
+ * the one answer that is certainly wrong.
+ */
+enum class HoldSide(val code: String) {
+    LEFT("left"),
+    RIGHT("right");
+
+    companion object {
+        fun fromCode(code: String?): HoldSide? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/**
  * Normalizes an activity name into a dictionary key — a port of `bot/parser.norm_phrase`.
  *
  * The Cyrillic YO -> YE folding is kept for parity with the bot (the same phrase must
@@ -137,6 +234,28 @@ private fun requirePosOrNull(name: String, v: Double?): Double? {
     return v
 }
 
+/**
+ * A load the user actually stated: any non-zero finite number, sign included.
+ *
+ * This is the validator for ADDED WEIGHT and for nothing else. A negative value is
+ * legitimate there and means the opposite of what the field's name suggests — see
+ * [StrengthSet.addedKg] for the sign convention and why the field is not split in two.
+ *
+ * ZERO IS STILL REFUSED, exactly as [requirePosOrNull] refused it. "I added nothing" is
+ * said by leaving the field out, and a stored zero would be a second way of saying the same
+ * thing that every reader would then have to remember to treat as absent.
+ *
+ * The finiteness check is not decoration. `> 0` used to reject a NaN by accident, since
+ * every comparison against one is false; `!= 0.0` accepts it, and a NaN in the journal
+ * poisons every maximum and every sum it reaches.
+ */
+private fun requireNonZeroOrNull(name: String, v: Double?): Double? {
+    if (v == null) return null
+    require(v.isFinite()) { "$name: expected a finite number or null, got $v" }
+    require(v != 0.0) { "$name: expected a non-zero number or null, got $v" }
+    return v
+}
+
 private fun requireKey(name: String, raw: String): String =
     normPhrase(raw) ?: throw IllegalArgumentException("$name: name is empty after normalization ($raw)")
 
@@ -150,6 +269,19 @@ sealed interface ActivityForm {
 
     /** Id of the canonical catalog exercise (§11); null for body weight and legacy records. */
     val exerciseId: Long? get() = null
+
+    /**
+     * IDENTITY of the canonical catalog exercise — the same link as [exerciseId], said in the
+     * form that means something off this phone (schema version 10).
+     *
+     * Null for body weight (which names no exercise at all, by design) and for entries written
+     * before version 10 that the migration could not resolve, which is exactly the set of
+     * entries pointing at a catalog row that no longer exists.
+     *
+     * Never read directly: [exerciseLink] is the one funnel that decides which of the two a
+     * given entry is judged by.
+     */
+    val exerciseUid: String? get() = null
 }
 
 /**
@@ -166,9 +298,64 @@ data class StrengthSet(
     @SerialName("exercise") val exercise: String,
     @SerialName("reps") val reps: Int,
     @SerialName("weight_kg") val weightKg: Double? = null,
+    /**
+     * Weight carried ON TOP of your own body weight — and, when NEGATIVE, weight taken off it.
+     *
+     * ── The sign ───────────────────────────────────────────────────────────────
+     * A minus means the load was REDUCED: a band, a counterweight or an assisted-pull-up
+     * machine holding part of you up. "Pull-ups, -20 kg" is twenty kilograms of help, and it
+     * is an ordinary way to train a pull-up nobody can do yet, not a data error.
+     *
+     * ONE SIGNED FIELD RATHER THAN TWO, and that is the decision worth defending. Assistance
+     * and added weight are the same axis of the same exercise: a lifter works up through
+     * -20, -10, 0 and out the other side to +5, and a separate `assistance_kg` column would
+     * cut that one progression in half — two charts, two records, and a personal best that
+     * resets on the day the band comes off. Anything comparing added weights therefore works
+     * on negatives unchanged: -10 beats -15 because needing less help IS the improvement.
+     *
+     * Zero is not storable (see [requireNonZeroOrNull]): a clean body-weight set says so by
+     * leaving the field out.
+     */
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /**
+     * WHAT YOU WEIGHED when this set was recorded, in kilograms, or null when nothing was
+     * known — a snapshot taken from the last weigh-in on or before [opDate].
+     *
+     * ── Why the set carries the number instead of pointing at the scales ────────
+     * Without it a body-weight set has no volume at all: a week of pull-ups shows up on the
+     * tonnage chart as a week of doing nothing. With it, and with a share stated on the
+     * exercise, the set is worth `share x body weight + added weight` per rep.
+     *
+     * A SNAPSHOT AND NOT A LOOKUP, which is the whole point. Reading the current weight at
+     * chart-draw time would let every new weigh-in rewrite the past: lose three kilograms and
+     * last year's pull-ups get cheaper overnight, on a chart whose whole job is to say
+     * whether last year was harder than this one. What you lifted on a day is what you
+     * weighed on that day, and that is a fact, so it is stored like one.
+     *
+     * Null stays legal and means the honest thing: nobody had stepped on the scales by then.
+     * Such a set contributes nothing to tonnage, exactly as it did before this field existed.
+     */
+    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    /**
+     * Whether this was a WARM-UP set rather than a working one.
+     *
+     * ── What it changes, and what it deliberately does not ──────────────────────
+     * A warm-up is excluded from VOLUME and from RECORDS, and from nothing else. The empty
+     * bar is not competing with the working set for a personal best, and counting it into
+     * the tonnage inflates a week of training with weight that was never the point.
+     *
+     * It stays in the day's feed and it stays in the count of ACTIVE DAYS (see
+     * [xyz.oleolegka.gachimuchi.domain.activeDays]). Warming up IS training — a day spent
+     * ramping up and then failing the working weight is not a day off, and a streak that
+     * breaks over it would be lying about what happened.
+     *
+     * Defaulted to false, so every entry written before this field existed reads as a
+     * working set — which is what it was, since there was no way to say otherwise.
+     */
+    @SerialName("warmup") val warmup: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("exercise_key") val exerciseKey: String = requireKey("exercise", exercise),
@@ -179,7 +366,8 @@ data class StrengthSet(
     init {
         requirePos("reps", reps)
         requirePosOrNull("weight_kg", weightKg)
-        requirePosOrNull("added_kg", addedKg)
+        requirePosOrNull("bodyweight_kg", bodyweightKg)
+        requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require(!(weightKg != null && ownWeight)) {
             "weight_kg and own_weight are incompatible: either an implement or your own body weight"
@@ -207,6 +395,11 @@ data class StrengthSet(
  *
  * [restAfterSec] is the pause BETWEEN sets; [workSec]/[restSec] are the protocol
  * WITHIN a set. Different quantities, independent of each other.
+ *
+ * [addedKg] IS SIGNED, and on a hangboard the negative half of the axis is the half most of
+ * the training happens on: hanging a one-arm lockoff off a band that takes fifteen kilograms
+ * of you is normal work, and it progresses towards zero. The convention and the reasoning are
+ * on [StrengthSet.addedKg], which defines it once for both forms.
  */
 @Serializable
 data class HoldSet(
@@ -218,7 +411,26 @@ data class HoldSet(
     @SerialName("edge_mm") val edgeMm: Double? = null,
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /** What you weighed when this hang was recorded — see [StrengthSet.bodyweightKg]. */
+    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
+    @SerialName("warmup") val warmup: Boolean = false,
+    /**
+     * Which hand (or foot) this set was done with — one of [HoldSide]'s codes, or null for a
+     * set done with both.
+     *
+     * Null is the ordinary answer for two-handed work and the ordinary answer for every set
+     * written before this field existed. On an exercise marked one-sided it is neither: it is
+     * a set that failed to say which hand it was, and the reducers report that rather than
+     * guessing (see [xyz.oleolegka.gachimuchi.domain.holdRecord]).
+     *
+     * A String rather than the enum because the payload is the stored format and it stays
+     * readable by anything that does not know this app's Kotlin; [sideOf] is how the domain
+     * asks the question.
+     */
+    @SerialName("side") val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") val restAfterSec: Double? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
@@ -226,13 +438,20 @@ data class HoldSet(
     override val type: String get() = TYPE_HOLD_SET
     override val key: String get() = activityKey
 
+    /** The side as the domain compares it; null both for "both hands" and for "not said". */
+    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
+
     init {
+        require(side == null || HoldSide.fromCode(side) != null) {
+            "side: expected one of ${HoldSide.entries.joinToString { it.code }} or null, got $side"
+        }
         reps?.let { requirePos("reps", it) }
         requirePosOrNull("hold_sec", holdSec)
         requirePosOrNull("work_sec", workSec)
         requirePosOrNull("rest_sec", restSec)
         requirePosOrNull("edge_mm", edgeMm)
-        requirePosOrNull("added_kg", addedKg)
+        requirePosOrNull("bodyweight_kg", bodyweightKg)
+        requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require((workSec == null) == (restSec == null)) {
             "a work:rest protocol is set as a pair — both work_sec and rest_sec are required"
@@ -249,6 +468,7 @@ data class Duration(
     @SerialName("activity") val activity: String,
     @SerialName("duration_sec") val durationSec: Int,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
 ) : ActivityForm {
@@ -266,6 +486,7 @@ data class Duration(
 data class Tick(
     @SerialName("activity") val activity: String,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
 ) : ActivityForm {
@@ -289,6 +510,7 @@ data class Cardio(
     @SerialName("duration_sec") val durationSec: Int? = null,
     @SerialName("pace_sec_per_km") val paceSecPerKm: Double? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
+    @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
 ) : ActivityForm {
@@ -320,9 +542,71 @@ data class Bodyweight(
     }
 }
 
-/** Set reversal: payload = {"cancels": id}. */
+/**
+ * Set reversal — the journal is append-only, so undoing a set is a new event naming the old
+ * one rather than a delete.
+ *
+ * ── Two fields for one link, and the uid is the real one ────────────────────────
+ * [cancelsUid] is the identity of the event being reversed ([JournalEvent.uid]); [cancels] is
+ * the local row number it used to be said with. Both are written, and the readers believe the
+ * uid — a reversal that travelled here from another journal would otherwise cancel whichever
+ * unrelated row happened to have that number on this phone, which is a set silently
+ * disappearing out of somebody's history.
+ *
+ * BOTH ARE NULLABLE, which is not sloppiness. A payload written before version 9 has only the
+ * number, and one that arrives from a journal with no numbers at all has only the uid; a
+ * reversal with NEITHER names nothing and is dropped by [journalView] rather than
+ * throwing, on the same grounds as [formFromEventOrNull].
+ */
 @Serializable
-data class SetCancel(@SerialName("cancels") val cancels: Long)
+data class SetCancel(
+    @SerialName("cancels") val cancels: Long? = null,
+    @SerialName("cancels_uid") val cancelsUid: String? = null,
+)
+
+/**
+ * Payload of [TYPE_ENTRY_AMENDED]: which event, and the fields that were wrong.
+ *
+ * ── The target is an identity and nothing else ──────────────────────────────────
+ * Unlike [SetCancel] there is no row-number twin here, and that is deliberate rather than an
+ * omission. The number exists on the older event because it predates uids and had to keep
+ * working for rows written before them; nothing writes an amendment except this app, today,
+ * against a row that certainly has an identity. Offering a number as well would only offer a
+ * way to amend the wrong entry on a phone that numbers its journal differently.
+ *
+ * [fields] is a fragment of the target's own payload — the same keys, the same spellings —
+ * carrying only what changed. Keys in [AMENDMENT_PROTECTED_KEYS] are refused; see
+ * [TYPE_ENTRY_AMENDED] for why, and [journalView] for how several of these fold together.
+ */
+@Serializable
+data class EntryAmended(
+    @SerialName("target_uid") val targetUid: String,
+    @SerialName("fields") val fields: JsonObject,
+) {
+    init {
+        require(targetUid.isNotBlank()) { "entry_amended: target_uid must name an event" }
+    }
+
+    /** The patch as it is allowed to be applied — see [AMENDMENT_PROTECTED_KEYS]. */
+    val allowedFields: Map<String, JsonElement>
+        get() = fields.filterKeys { it !in AMENDMENT_PROTECTED_KEYS }
+}
+
+/**
+ * Payload of [TYPE_ENTRY_DELETED]: which event should stop being read.
+ *
+ * By identity only, for the reason spelled out on [EntryAmended]. A deletion naming an event
+ * that is not in this journal is inert rather than an error — the row it meant may simply not
+ * have arrived yet, and a journal is a stream that can be read halfway.
+ */
+@Serializable
+data class EntryDeleted(
+    @SerialName("target_uid") val targetUid: String,
+) {
+    init {
+        require(targetUid.isNotBlank()) { "entry_deleted: target_uid must name an event" }
+    }
+}
 
 /**
  * Payload of [TYPE_WORKOUT_STARTED].
@@ -341,22 +625,53 @@ data class SetCancel(@SerialName("cancels") val cancels: Long)
  * timers live elsewhere (timer/); this is the rule they are expected to honour, written down
  * where the date is defined rather than where it happens to be read.
  *
- * ── slot_id ─────────────────────────────────────────────────────────────────────
- * The planned session this workout was started from ([Slot.id]), when it was started from
- * one, and null when it was not. Beyond saving a name to type, it is the exact answer to
+ * ── the plan it was started from ────────────────────────────────────────────────
+ * The planned session this workout was started from, when it was started from one, and
+ * nothing at all when it was not. Beyond saving a name to type, it is the exact answer to
  * "was the plan kept" — domain/Schedule.kt currently pairs plan with fact HEURISTICALLY, by
  * clock proximity and greedily, which is right most of the time and unfixably wrong when two
  * sessions sit close together on one day. A link the user made themselves needs no guessing.
  *
- * NOTE, no whitewashing: writing this field does not by itself change how the calendar
- * decides anything. domain/Schedule.kt still matches by time and does not look at it yet;
- * switching it over is a separate change with its own verification. Until then the field is
- * recorded and exposed ([Workout.slotId]) and nothing consumes it.
+ * [slotUid] is the identity of the plan row ([xyz.oleolegka.gachimuchi.data.db.SlotEntity.uid])
+ * and [slotId] is the local row number it used to be said with. Both are written and the
+ * readers believe the uid, for the reason spelled out on [SetCancel]: two phones number their
+ * plans independently, so a workout arriving from another journal would otherwise claim
+ * whichever unrelated slot happened to hold that number here. Neither is read directly —
+ * [Workout.slot] is the one funnel that turns the pair into a [SlotLink].
+ *
+ * BOTH ARE NULLABLE. A payload written before schema version 11 has only the number, one that
+ * arrives from a journal with no numbers at all has only the uid, and a workout started
+ * off-plan has neither — which is not a defect but the ordinary case.
+ *
+ * This IS what the calendar decides by now: domain/Schedule.kt closes a planned session with
+ * the workout that names it and consults the clock only for training logged without pressing
+ * start. domain/DayCards.kt reads it as well, to keep a plan and the workout started from it
+ * from appearing as two cards.
+ *
+ * ── the name is a SNAPSHOT, not a lookup ────────────────────────────────────────
+ * [name] is what this workout was called AT THE MOMENT IT WAS STARTED: copied off the plan
+ * when it was started from one, typed in when the user named it themselves, and absent when
+ * nobody named it (the card then shows the time of day, and a workout has never needed a name
+ * to exist — §13).
+ *
+ * It used to be read from the plan live, every time a card was drawn, which meant renaming a
+ * slot renamed every workout ever started from it, back through the whole history. That is
+ * the one thing this journal is not allowed to do: THE PLAN IS EDITABLE AND THE FACTS ARE
+ * NOT, and what a session was called on the day is a fact about that day. The link to the plan
+ * stays, and it is now only a link — it answers "which plan was this", never "what is this
+ * called".
+ *
+ * The cost, stated: a workout started before schema version 12 arrived here from another
+ * journal carries no snapshot, and this app will not invent one for it from the plan. It is
+ * shown by its time instead. The 11 -> 12 migration fills in the snapshot for the rows THIS
+ * phone wrote, which is every row it can honestly say anything about.
  */
 @Serializable
 data class WorkoutStarted(
     @SerialName("op_date") val opDate: String,
     @SerialName("slot_id") val slotId: Long? = null,
+    @SerialName("slot_uid") val slotUid: String? = null,
+    @SerialName("name") val name: String? = null,
 ) {
     init {
         requireIsoDate(opDate)
@@ -366,17 +681,26 @@ data class WorkoutStarted(
 /**
  * Payload of [TYPE_WORKOUT_EXERCISE_ADDED].
  *
- * [workoutId] duplicates the `workout_id` COLUMN this event is written with, and the
- * duplication is on purpose: the column is local (schema version 5) while the payload is the
- * format meant to survive a trip through the bot's journal, which has no such column. Reads
- * take the column and fall back to this field, so a row that arrives without one still lands
- * in the right workout.
+ * ── The workout is named twice, in the payload and in a column ──────────────────
+ * The columns (`workout_id` since schema version 5, `workout_uid` since 9) are how this app
+ * finds the rows of a workout in one query. The payload says the same thing again so that the
+ * event is COMPLETE ON ITS OWN — an exported or merged journal is a stream of events, not a
+ * table carrying this app's columns, and a row arriving without them still has to land in the
+ * right workout.
+ *
+ * [workoutUid] is the identity; [workoutId] is the local row number it replaced and means
+ * nothing off the phone that wrote it. Reads go through
+ * [xyz.oleolegka.gachimuchi.domain.workoutRef], which consults the columns, then the uid here,
+ * then the number — in ONE place, so that no reader gets to pick its own order.
  */
 @Serializable
 data class WorkoutExerciseAdded(
     @SerialName("workout_id") val workoutId: Long,
     @SerialName("exercise_id") val exerciseId: Long,
     @SerialName("rest_sec") val restSec: Int,
+    @SerialName("workout_uid") val workoutUid: String? = null,
+    /** Identity of the exercise being added — the same link as [exerciseId]. */
+    @SerialName("exercise_uid") val exerciseUid: String? = null,
 ) {
     init {
         // zero is a legitimate answer ("go straight into the next set"); a negative one is

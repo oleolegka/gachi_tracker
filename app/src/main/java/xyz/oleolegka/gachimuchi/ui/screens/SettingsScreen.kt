@@ -1,7 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -33,21 +33,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.BuildConfig
+import xyz.oleolegka.gachimuchi.data.DeviceStore
 import xyz.oleolegka.gachimuchi.data.GalleryStore
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.CelebrationPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicturePicker
+import xyz.oleolegka.gachimuchi.ui.components.rememberJournalTransfer
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
- * The settings tab: the celebration pictures.
+ * The settings tab: the celebration pictures, the backup, and at the foot of it the two
+ * things that identify this copy of the app — which installation it is and which build it is.
+ *
+ * The backup is here rather than on a screen of its own because it is read once, decided
+ * once, and then done from memory; and because "this app keeps no other copy of your journal"
+ * belongs next to the id and the version, which is where somebody looks when they are working
+ * out what this installation actually is.
  *
  * It exists as a tab of its own rather than as a section of another screen because the
- * settings that are still to come (and the timer's own, which live on the timer screen
- * next to the thing they configure) need somewhere to land.
+ * settings that are still to come (and the timer's own, which live on the programs tab next
+ * to the thing they configure) need somewhere to land.
  *
  * The timer's settings deliberately stay where they are. They are read while looking at a
  * countdown; these are read once and then rarely again.
@@ -63,12 +74,14 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 fun SettingsScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val gallery = remember(context) { GalleryStore.get(context) }
+    val deviceId = remember(context) { DeviceStore(context).deviceId }
     val pictures by gallery.pictures.collectAsStateWithLifecycle()
     val mode by gallery.mode.collectAsStateWithLifecycle()
     val colors = LocalGachiColors.current
 
     var note by remember { mutableStateOf<String?>(null) }
     val pick = rememberPicturePicker(gallery) { note = it.message() }
+    val journal = rememberJournalTransfer()
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -161,17 +174,123 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 onToggleRecord = { gallery.setForRecords(picture.id, !picture.forRecords) },
             )
         }
+
+        item {
+            Text(
+                "Backup",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = journal.export) { Text("Export the journal") }
+                OutlinedButton(onClick = journal.restore) { Text("Restore") }
+            }
+        }
+
+        item {
+            /*
+             * Said plainly because the situation is: this app has no other copy of anything.
+             * The journal is in one database on one phone, the phone it is built for has no
+             * Google backup, and adb backup has not taken app data since this target SDK. A
+             * user who does not know that has no reason to press the button.
+             */
+            Text(
+                "The journal, the exercises, the plan, the programs and these settings, as one " +
+                    "JSON file. Nothing else keeps a copy of them - not the phone, not a cloud - " +
+                    "so this file is the only thing standing between a lost phone and a lost " +
+                    "history. Keep it somewhere that is not this phone. The celebration pictures " +
+                    "are not in it. Restoring merges a file into what is here and can be done " +
+                    "twice without doubling anything.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
+            )
+        }
+
+        item {
+            Text(
+                "This device",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            /*
+             * Shown rather than kept hidden because it is the thing an exported journal will
+             * be stamped with, and the only way to tell two of this app's files apart once
+             * there are two phones. There is nothing to do with it here on purpose: it is not
+             * editable (an id that can be changed is not an id) and it is not a setting.
+             */
+            Text(
+                deviceId,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        item {
+            Text(
+                "Names this installation, and nothing outside it. It is not tied to the phone " +
+                    "and does not survive the app being removed.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
+            )
+        }
+
+        item {
+            Text(
+                "This build",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            /*
+             * The version, shown because there is nowhere else to read it. The app is not on
+             * a store; updates arrive through Obtainium, which installs whatever the latest
+             * release is without saying afterwards what that was. Both numbers are here
+             * because they answer different questions: the NAME is what a release is called
+             * and what a bug report should quote, the CODE is what the updater compares to
+             * decide whether there is anything to install.
+             */
+            Text(
+                "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
     }
 }
 
+/**
+ * One celebration mode as a row: the button, the name, and what choosing it means.
+ *
+ * ── Selectable, not merely clickable ────────────────────────────────────────────
+ * The whole row is the target and the `RadioButton` inside it takes no click of its own, so
+ * the row has to say what the button would have said. `Modifier.selectable` with
+ * [Role.RadioButton] publishes BOTH the role and the chosen state into semantics; a plain
+ * `clickable` publishes neither, and then which mode is on is only painted. A screen reader
+ * reading these rows would announce three identical buttons and never say which one is
+ * already picked — and a test could not tell either, which is how it stayed that way.
+ */
 @Composable
 private fun ModeRow(selected: Boolean, title: String, hint: String, onSelect: () -> Unit) {
     val colors = LocalGachiColors.current
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // the whole row is the target; the button itself takes no click of its own
         RadioButton(selected = selected, onClick = null)
         Column(Modifier.padding(start = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)

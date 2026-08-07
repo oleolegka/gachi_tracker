@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,14 +15,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.FloorStore
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.bootReference
+import xyz.oleolegka.gachimuchi.domain.dismissLabel
 import xyz.oleolegka.gachimuchi.domain.floorCue
+import xyz.oleolegka.gachimuchi.domain.floorNotificationLine
 import xyz.oleolegka.gachimuchi.domain.floorSummaryText
 import xyz.oleolegka.gachimuchi.domain.releaseFloors
+import xyz.oleolegka.gachimuchi.domain.restsOver
 import xyz.oleolegka.gachimuchi.domain.settleFloors
 import xyz.oleolegka.gachimuchi.domain.startFloor
 import xyz.oleolegka.gachimuchi.domain.withFloor
@@ -58,10 +63,48 @@ import xyz.oleolegka.gachimuchi.domain.withFloor
  *    resume is still worth having — up to the lateness window, past which the domain resolves
  *    it in silence.
  *
- * There is NO foreground service and NO wake lock for floors, unlike the conductor. A rest
- * between sets is minutes long and being told late costs nothing, so the machinery that
- * exists to make a ten-second interval land on the beat would be all cost and no benefit
- * here. That is the same asymmetry the whole feature is built on.
+ * ── The foreground service: shared with the conductor, and why floors get one ───
+ * This used to say that floors have no service, on the grounds that a rest is a "not before"
+ * and can afford to be late. That was true about the SIGNAL and wrong about the MECHANISM.
+ * Without a service, Android freezes the process within about twenty seconds of the screen
+ * going off, which takes wake-up 1 away entirely and leaves the whole feature standing on
+ * wake-up 2 — an exact alarm whose deep-Doze quota is roughly one firing per APP per nine
+ * minutes and is already spoken for by the conductor. A three-minute rest then depends on
+ * winning that lottery. With a service the process stays alive, the coroutine is the first
+ * line again, and the alarm goes back to being the backstop it was described as.
+ *
+ * It is the SAME service the conductor uses ([TimerService]), started and stopped by
+ * [TimerController] and never by this class directly, because a foreground service owns a
+ * notification and two services would fight over one:
+ *
+ *  - Either one alive is enough to keep it up. [needsService] is this half of the answer.
+ *  - When a conductor starts while rests are counting, nothing about the service changes —
+ *    it is already up. The NOTIFICATION changes hands: the conductor's run takes
+ *    `ID_RUNNING` and the floors stop drawing (see [refreshNotification]).
+ *  - When the conductor stops with rests still counting, the service stays up and the floors
+ *    take the notification back in [conductorStopped]. When the LAST rest matures with a run
+ *    still going, nothing happens at all: the service belongs to the run now.
+ *  - When the last of both goes, [TimerController] takes the service down.
+ *
+ * ── No wake lock, and that is a decision rather than an omission ────────────────
+ * The conductor holds a partial wake lock because a seven-second hang is ruined by a CPU
+ * that suspends through it, and because the alarm quota cannot cover intervals that short.
+ * Neither applies here, and the price is not the same either:
+ *
+ *  - A rest is minutes long, and ONE exact `ELAPSED_REALTIME_WAKEUP` alarm covers all the
+ *    floors at once (the domain staggers them behind a single wake moment). That alarm wakes
+ *    the device by itself — that is what the WAKEUP in its name is — so the CPU does not have
+ *    to be held awake for the signal to arrive.
+ *  - The cost is not three minutes of held CPU, it is the WHOLE SESSION: rests run
+ *    back-to-back for an hour and a half, so a lock taken per rest is a lock held nearly
+ *    continuously, with the screen off, for the entire workout. That is a permanent battery
+ *    cost paid for a signal that by definition tolerates being late.
+ *  - What is actually lost without it is precision: a signal may land seconds late when the
+ *    device was suspended at the moment. A "not before" can afford exactly that, and the
+ *    lateness window in domain/Floors.kt is what keeps a very late one from gonging at all.
+ *
+ * So: service yes, wake lock no. If a rest ever needs to land on the beat, it has stopped
+ * being a floor and belongs to the conductor.
  */
 class FloorController internal constructor(
     context: Context,
@@ -78,6 +121,14 @@ class FloorController internal constructor(
     private val settings: StateFlow<TimerSettings>,
     /** How the summary is said out loud, or a no-op. See [conductorStopped]. */
     private val announce: (String) -> Unit,
+    /**
+     * Asks [TimerController] to re-decide whether the one foreground service should be up.
+     *
+     * A callback rather than this class starting the service itself, because the answer is
+     * "a run OR a floor needs it" and only the owner can see both halves. Called at the end
+     * of [advance], so every path that can change [needsService] goes past it.
+     */
+    private val syncService: () -> Unit,
 ) {
 
     private val app = context.applicationContext
@@ -126,6 +177,19 @@ class FloorController internal constructor(
 
     private var loop: Job? = null
 
+    /** Redraws the shade while a rest is counting. See [restartNotifyLoop]. */
+    private var notifyLoop: Job? = null
+
+    /**
+     * When the shade was last actually written to, and what was written.
+     *
+     * The pair is the whole rate limit: nothing is posted twice within [NOTIFY_INTERVAL_MS]
+     * and nothing is posted that says what is already there. Started far enough in the past
+     * that the first post is never throttled.
+     */
+    private var lastNotifyAtMs = -NOTIFY_INTERVAL_MS
+    private var lastNotifyLine: String? = null
+
     init {
         // loaded, but NOT acted on: nothing is settled or armed until TimerController has
         // restored its own run and can say whether a conductor is up. See [takeUp].
@@ -160,18 +224,52 @@ class FloorController internal constructor(
         advance()
     }
 
+    /**
+     * Takes off every rest that is already over, leaving the ones still counting.
+     *
+     * What the button on the notification does, and the only bulk operation offered there:
+     * from a lock screen the useful question is "clear the ones I have dealt with", and
+     * picking one of several by name needs the list, which is in the app.
+     *
+     * A floor that is over is removed rather than marked, so the sentence it could still say
+     * ("has been ready for 2:30") goes with it. That is what dismissing means; the ones still
+     * counting are untouched and keep their alarm.
+     */
+    @Synchronized
+    fun dismissReady() {
+        val now = SystemClock.elapsedRealtime()
+        publish(_floors.value.filter { it.readyAtMs > now })
+        advance()
+    }
+
     /** Takes all of them off — what switching the timer off means for the floors. */
     @Synchronized
     fun clearAll() {
         publish(emptyList())
         _summary.value = null
+        cancelSummaryNotification()
         advance()
     }
 
-    /** The summary was read. */
+    /** The summary was read — on the screen or in the shade, and it goes from both. */
+    @Synchronized
     fun clearSummary() {
         _summary.value = null
+        cancelSummaryNotification()
     }
+
+    /**
+     * Whether the foreground service has to stay up for the rests.
+     *
+     * "At least one rest that has not yet had its moment" — which is exactly the set of
+     * floors that still need a process to be alive at some point in the future. A floor that
+     * has already been dealt with needs nothing: it is a line on a screen, read off disk by
+     * whichever process happens to exist next.
+     *
+     * Read by [TimerController.serviceNeeded], which ORs it with "a run exists".
+     */
+    @Synchronized
+    fun needsService(): Boolean = _floors.value.any { !it.signalled }
 
     /** The backstop alarm fired. */
     @Synchronized
@@ -232,6 +330,19 @@ class FloorController internal constructor(
     fun conductorStarted() {
         if (conductorRunning) return
         conductorRunning = true
+        /*
+         * [lastNotifyLine] means "what we believe is in the shade", and from this moment that
+         * belief is false: the conductor takes ID_RUNNING, and takes it down again when it
+         * stops (TimerNotifications.cancelAll). Left standing, it would let a floor compare its
+         * line after the run against what it posted before, find them equal, and decide there
+         * was nothing to post into a shade that is by then empty.
+         *
+         * Not a complete answer on its own — the rate limit below can still hold the re-post
+         * back for up to a second after a hand-off, and the tick loop is what delivers it. It
+         * is here because a field that means one thing should not quietly start meaning
+         * another.
+         */
+        lastNotifyLine = null
         // takes the floor alarm and the floor loop down: while a conductor runs the domain
         // reports no wake moment at all, and the conductor holds a wake-up of its own
         advance()
@@ -268,6 +379,9 @@ class FloorController internal constructor(
         floorSummaryText(release.ready)?.let { text ->
             _summary.value = text
             announce(text)
+            // and into the shade, because the screen may not be looked at for another set:
+            // this is the one thing about the floors that is news rather than a countdown
+            postSummaryNotification(text)
         }
 
         advance()
@@ -305,6 +419,12 @@ class FloorController internal constructor(
         // 3. and only now the alarm, at a moment the cue computed from that same list
         armAlarm(cue.wakeAtMs)
         restartLoop(cue.wakeAtMs)
+
+        // 4. the shade, then the service. In that order so that a service coming up finds a
+        // notification already drawn, and a service going down takes an emptied one with it.
+        refreshNotification(now)
+        restartNotifyLoop()
+        syncService()
     }
 
     private fun publish(floors: List<RestFloor>) {
@@ -348,6 +468,144 @@ class FloorController internal constructor(
         }
     }
 
+    // --- the shade ----------------------------------------------------------------------
+
+    /**
+     * The notification the rests would show right now, or null when they have nothing to
+     * show or no right to show it.
+     *
+     * Public because [TimerService] asks for it: the service must hand `startForeground` a
+     * notification, and when it is up for the rests rather than for a run this is the one.
+     * Built fresh from the clock every time rather than cached — a cached countdown is a
+     * countdown that is wrong by however long it sat in the cache.
+     */
+    @Synchronized
+    fun currentNotification() = notificationFor(SystemClock.elapsedRealtime())
+
+    private fun notificationFor(now: Long) = when {
+        conductorRunning -> null
+        !needsService() -> null
+        else -> floorNotificationLine(_floors.value, now)?.let { line ->
+            TimerNotifications.floors(
+                context = app,
+                line = line,
+                dismissLabel = dismissLabel(restsOver(_floors.value, now)),
+            )
+        }
+    }
+
+    /**
+     * Draws the rests into the shade, or takes them out of it.
+     *
+     * ── The three rules, in the order they are applied ──────────────────────────
+     * 1. A RUNNING CONDUCTOR OWNS `ID_RUNNING`, so this neither posts nor cancels while one
+     *    is up. It does not merely defer to the run — it does not draw the rests at all, and
+     *    that is a decision worth stating. A second countdown on that notification could only
+     *    be refreshed when the conductor redraws, which is once per STEP, so it would be
+     *    stale by up to the length of a step; and refreshing it oftener would put a
+     *    once-a-second wakeup on the notification the conductor deliberately draws with the
+     *    platform's own chronometer to avoid exactly that. Nothing is lost by waiting: the
+     *    floors are MUTED while a conductor runs, so nothing can happen to them that could be
+     *    acted on, and the moment the run ends [conductorStopped] both redraws this and posts
+     *    the summary of whatever matured in the meantime.
+     * 2. NOTHING LEFT TO COUNT means the notification goes. It is the foreground service's
+     *    notification and the service is coming down; a shade entry outliving the service it
+     *    belongs to is the kind of thing the platform complains about. The honest cost: the
+     *    last rest to mature buzzes and its line disappears in the same second, so "Bench has
+     *    been ready for 2:30" is answered on the screen and not in the shade.
+     * 3. AT MOST ONCE A SECOND, and never to say what is already there. The unchanged-text
+     *    test is the cheaper of the two and comes first; a change that arrives too soon after
+     *    the last one is simply skipped, because [restartNotifyLoop] is coming round again
+     *    within the second anyway.
+     */
+    private fun refreshNotification(now: Long) {
+        if (conductorRunning) return
+        val line = if (needsService()) floorNotificationLine(_floors.value, now) else null
+        if (line == null) {
+            cancelOngoingNotification()
+            return
+        }
+        if (line == lastNotifyLine) return
+        if (now - lastNotifyAtMs < NOTIFY_INTERVAL_MS) return
+        if (!TimerNotifications.canPost(app)) return
+        // the channels are normally created by the service, and the service is normally
+        // started by this same pass — a hair later than this. On a phone where the timer has
+        // never run, the first post would land on a channel that does not exist yet and be
+        // dropped, which self-heals a second later and looks like nothing at all.
+        if (lastNotifyLine == null) TimerNotifications.ensureChannels(app)
+        val posted = runCatching {
+            NotificationManagerCompat.from(app).notify(
+                TimerNotifications.ID_RUNNING,
+                TimerNotifications.floors(
+                    context = app,
+                    line = line,
+                    dismissLabel = dismissLabel(restsOver(_floors.value, now)),
+                ),
+            )
+        }.isSuccess
+        if (!posted) return
+        lastNotifyLine = line
+        lastNotifyAtMs = now
+    }
+
+    private fun cancelOngoingNotification() {
+        if (lastNotifyLine == null) return
+        lastNotifyLine = null
+        runCatching { NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_RUNNING) }
+    }
+
+    private fun postSummaryNotification(text: String) {
+        if (!TimerNotifications.canPost(app)) return
+        // as in [refreshNotification]: the channels belong to the service, and this can be
+        // reached without one having started — a conductor whose foreground start was refused
+        // still ends, and still owes this line
+        TimerNotifications.ensureChannels(app)
+        runCatching {
+            NotificationManagerCompat.from(app)
+                .notify(TimerNotifications.ID_FLOOR_SUMMARY, TimerNotifications.floorSummary(app, text))
+        }
+    }
+
+    private fun cancelSummaryNotification() {
+        runCatching { NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_FLOOR_SUMMARY) }
+    }
+
+    /**
+     * Keeps the shade in step with the clock while a rest is counting.
+     *
+     * This is the ONE thing in the app that redraws on a fixed cadence, and it is here
+     * because it has to be: the line shows several countdowns at once and the platform's
+     * chronometer can only draw one time, so the app writes the digits and must therefore
+     * rewrite them. [NOTIFY_INTERVAL_MS] is the floor on how often, and [refreshNotification]
+     * enforces it independently, so restarting this loop on every state change cannot make
+     * the shade be written to faster.
+     *
+     * It stops itself the moment there is nothing counting or a conductor takes over, so its
+     * lifetime is a rest and not a session. And it holds nothing awake: with no wake lock a
+     * suspended device simply does not run it, which is the correct behaviour rather than a
+     * gap — a notification nobody is looking at does not need to be right to the second, and
+     * the first tick after the screen comes on reads the clock afresh.
+     */
+    private fun restartNotifyLoop() {
+        notifyLoop?.cancel()
+        notifyLoop = null
+        if (conductorRunning || !needsService()) return
+        notifyLoop = scope.launch {
+            while (isActive) {
+                delay(NOTIFY_INTERVAL_MS)
+                if (!notifyTick()) return@launch
+            }
+        }
+    }
+
+    /** One redraw. False when there is no longer any reason to keep redrawing. */
+    @Synchronized
+    private fun notifyTick(): Boolean {
+        if (conductorRunning || !needsService()) return false
+        refreshNotification(SystemClock.elapsedRealtime())
+        return true
+    }
+
     /**
      * The floors' own [PendingIntent] — a DIFFERENT request code and a different action from
      * the conductor's.
@@ -383,20 +641,27 @@ class FloorController internal constructor(
      * claimant on the one the conductor already spends. What that means in practice:
      *
      *  - The conductor is the one that cannot tolerate lateness (its whole job is landing on
-     *    the beat) and it already holds a wake lock and a foreground service while it runs, so
-     *    in the case where the two compete the conductor is not relying on the alarm anyway.
-     *    Floors, meanwhile, hold neither, and a floor arriving nine minutes late is a floor
-     *    that the lateness rule resolves in silence — the rest is simply reported as overdue
-     *    on the screen instead of being announced. Degraded, not broken.
+     *    the beat) and it holds a wake lock and a foreground service while it runs, so in the
+     *    case where the two compete the conductor is not relying on the alarm anyway.
+     *  - Floors now hold the same foreground service (see the top of this file) and no wake
+     *    lock. That is what demotes this alarm to a genuine second line: with the process
+     *    kept alive, the first line is the coroutine above, which is exact and costs nothing.
+     *    It used to be the other way round — no service meant a frozen process, which meant
+     *    this quota-shared alarm was the ONLY line, and a comment here once said that was
+     *    acceptable because a floor tolerates lateness. It tolerates lateness; it does not
+     *    tolerate never arriving, which is what one firing per nine minutes shared with a
+     *    running protocol amounts to.
+     *  - A floor arriving nine minutes late is still resolved in silence by the lateness
+     *    rule — the rest is reported as overdue on the screen instead of announced. Degraded,
+     *    not broken, and now only in the case where the service could not be started at all.
      *  - Several floors do NOT mean several alarms. The domain hands back ONE moment for the
      *    whole set of them, staggering the rest, so a superset with four rests running costs
      *    exactly one alarm at a time.
      *  - The device is only in deep Doze when it has been still and unplugged for a long
      *    while, which is not what a phone in a gym bag between sets is doing.
      *
-     * As with the conductor, this is honestly a SECOND LINE. The first line is the coroutine
-     * above, and it works whenever the process is alive. Falls back to the inexact variant
-     * when the exact-alarm permission is missing rather than throwing.
+     * Falls back to the inexact variant when the exact-alarm permission is missing rather
+     * than throwing.
      */
     private fun armAlarm(triggerAtMs: Long?) {
         val manager = app.getSystemService(AlarmManager::class.java) ?: return
@@ -425,6 +690,16 @@ class FloorController internal constructor(
 
         /** Floor on a sleep, so a wake moment already in the past cannot become a spin. */
         private const val MIN_SLEEP_MS = 4L
+
+        /**
+         * The shortest gap between two writes to the notification shade.
+         *
+         * A second, because the line is a countdown in whole seconds and anything finer would
+         * be the same text posted twice. Every post goes through this, including the ones a
+         * state change asks for, so a burst — three rests started in the same breath — is one
+         * write and not three.
+         */
+        internal const val NOTIFY_INTERVAL_MS = 1_000L
 
         /**
          * How long a resolved floor is kept for its "ready for ..." line before [prune] drops

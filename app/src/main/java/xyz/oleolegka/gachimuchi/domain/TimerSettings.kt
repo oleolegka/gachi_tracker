@@ -73,7 +73,8 @@ data class TimerSettings(
  * ("2:30") rather than as a measurement ("2:27").
  */
 fun lastRestSec(events: List<JournalEvent>, exerciseId: Long): Int? {
-    val entries = readActivities(events).filter { it.form.exerciseId == exerciseId }
+    val entries = readActivities(events)
+        .filter { it.form.exerciseLink()?.matches(ExerciseLink.ofId(exerciseId)) == true }
     if (entries.size < 2) return null
 
     val byDay = entries.groupBy { it.opDate }

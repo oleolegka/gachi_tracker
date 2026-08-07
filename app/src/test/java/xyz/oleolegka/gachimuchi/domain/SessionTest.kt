@@ -96,10 +96,10 @@ class SessionTest {
             ev(StrengthSet(exercise = "Bench press", reps = 5, weightKg = 62.5, exerciseId = 1, opDate = "2026-08-04")),
             ev(StrengthSet(exercise = "Squat", reps = 5, weightKg = 90.0, exerciseId = 7, opDate = "2026-08-05")),
         )
-        val last = lastStrengthSet(events, 1)!!
+        val last = lastStrengthSet(events, ExerciseLink.ofId(1))!!
         assertEquals(62.5, last.weightKg!!, 1e-9) // the newest one, under either word
         assertEquals(5, last.reps)
-        assertNull(lastStrengthSet(events, 999))
+        assertNull(lastStrengthSet(events, ExerciseLink.ofId(999)))
     }
 
     @Test
@@ -111,7 +111,7 @@ class SessionTest {
             payloadJson.encodeToString(SetCancel(typo.id)),
         )
         val events = listOf(good, typo, cancel)
-        assertEquals(60.0, lastStrengthSet(events, 1)!!.weightKg!!, 1e-9)
+        assertEquals(60.0, lastStrengthSet(events, ExerciseLink.ofId(1))!!.weightKg!!, 1e-9)
     }
 
     @Test
@@ -122,7 +122,7 @@ class SessionTest {
             ev(Bodyweight(weightKg = 75.0, opDate = "2026-08-01")),
             ev(Bodyweight(weightKg = 74.2, opDate = "2026-08-05")),
         )
-        assertEquals(600, lastDuration(events, 4)!!.durationSec)
+        assertEquals(600, lastDuration(events, ExerciseLink.ofId(4))!!.durationSec)
         assertEquals(74.2, lastBodyweight(events)!!.weightKg, 1e-9)
     }
 

@@ -15,6 +15,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
@@ -64,7 +65,7 @@ class LoggingFlowTest {
         repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5))
 
         // what the entry card would show next time: the last set, straight from the journal
-        val prefill = lastStrengthSet(repo.allEvents(), bench.id)!!
+        val prefill = lastStrengthSet(repo.allEvents(), ExerciseLink.ofId(bench.id))!!
         assertEquals(62.5, prefill.weightKg!!, 1e-9)
         assertEquals(5, prefill.reps)
 

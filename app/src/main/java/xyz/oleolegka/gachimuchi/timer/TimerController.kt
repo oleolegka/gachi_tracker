@@ -61,7 +61,8 @@ import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
  * 1. A FOREGROUND SERVICE keeps the process from being frozen. Without one, Android
  *    suspends the app within about twenty seconds of the screen going off — that is the
  *    documented, reproducible-on-stock-Pixels failure of the app this feature is modelled
- *    on, which has no service and counts callbacks instead of time.
+ *    on, which has no service and counts callbacks instead of time. There is exactly ONE,
+ *    and the rests between sets now keep it up too: see [serviceNeeded] and [syncService].
  * 2. A PARTIAL WAKE LOCK keeps the CPU from suspending while a run is live. A foreground
  *    service stops the process being killed; it does not stop the device sleeping, and a
  *    Tabata interval is ten seconds long. The lock is taken only while the clock is
@@ -84,9 +85,15 @@ import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
  * because its instructions are orders that are ruined by being late. The rests BETWEEN sets
  * are a different kind of thing — several at once, one per exercise, each merely saying "not
  * before" — and they live in [floors], which this class owns and drives. domain/Floors.kt
- * states the asymmetry in full. The three points where the two meet are all in this file:
- * a run starting mutes the floors, a run ending releases them, and the two must never arm
- * the same alarm.
+ * states the asymmetry in full. The points where the two meet are all in this file: a run
+ * starting mutes the floors, a run ending releases them, the two must never arm the same
+ * alarm, and — since the rests were given the same reliability as the run — they SHARE the
+ * one foreground service and the one notification that comes with it. The conductor wins
+ * both: it takes the notification while it runs, and gives it back when it stops.
+ *
+ * The one thing the rests do NOT share is the wake lock. FloorController says why, at
+ * length: a rest tolerates arriving a second late, and holding the CPU for every rest of a
+ * ninety-minute session is not a second-order cost.
  */
 class TimerController internal constructor(context: Context) {
     /*
@@ -119,6 +126,9 @@ class TimerController internal constructor(context: Context) {
         // said out loud only when announcements are on, and APPENDED rather than flushed, so
         // it queues behind "Done" instead of erasing it. See Speaker.speak.
         announce = { text -> if (store.settings.value.speak) speaker.speak(text, replacing = false) },
+        // the rests can now keep the service up by themselves, but they never start or stop
+        // it: only this class can see both claimants at once. See [serviceNeeded].
+        syncService = { syncService(mayStart = true) },
     )
 
     val settings get() = store.settings
@@ -281,9 +291,10 @@ class TimerController internal constructor(context: Context) {
         releaseWakeLock()
         releaseSignalsAfterTheirTail()
         TimerNotifications.cancelAll(app)
-        app.stopService(Intent(app, TimerService::class.java))
-        // last, so the floors are released against a state where no conductor exists any more
+        // before the service is touched, so the floors are released against a state where no
+        // conductor exists any more AND so that they have said whether they still need it
         floors.conductorStopped()
+        syncService(mayStart = false)
     }
 
     /** Re-reads the clock and redraws, without changing anything. */
@@ -303,8 +314,28 @@ class TimerController internal constructor(context: Context) {
      */
     fun onAlarm() = mutate { snapshot, _ -> snapshot }
 
-    /** The notification the service must show right now, or null when there is no run. */
-    fun currentNotification() = _run.value?.let { notificationFor(it) }
+    /**
+     * The notification the service must show right now, or null when nothing needs showing.
+     *
+     * The run first and the rests second, which is the same precedence the shade follows
+     * while both are alive: one service, one notification, and the conductor wins.
+     */
+    fun currentNotification() =
+        _run.value?.let { notificationFor(it) } ?: floors.currentNotification()
+
+    /**
+     * Whether the one foreground service still has a reason to exist.
+     *
+     * Either claimant is enough. A run needs it so the process is not frozen mid-protocol;
+     * a rest needs it so the process is alive to run its own countdown instead of leaving the
+     * whole feature standing on a Doze-throttled alarm (see the top of FloorController).
+     *
+     * Read by [TimerService] as well as by [syncService], because the service has to be able
+     * to answer the question for itself: it may be started for a run that ends in the gap
+     * before `onStartCommand` runs, and "is anything left" is not the same question as "was
+     * there something when I was started".
+     */
+    internal fun serviceNeeded(): Boolean = _run.value != null || floors.needsService()
 
     // --- the machinery -----------------------------------------------------------------
 
@@ -414,14 +445,20 @@ class TimerController internal constructor(context: Context) {
             loop?.cancel()
             loop = null
             _run.value = null
-            app.stopService(Intent(app, TimerService::class.java))
             /*
              * After [fireFinish], deliberately. That is where "Done" is spoken, and it is
              * spoken with a flush; the floor summary asks to be appended, so putting the
              * release afterwards is what fixes the order instead of leaving it to whichever
              * of the two reaches the engine first.
+             *
+             * And BEFORE the service is taken down, which it did not use to be. The rests can
+             * now be the reason the service is up, and stopping it here only to have the
+             * floors ask for it back a line later would need a foreground start from the
+             * background — refused since Android 12. So the service is asked once, at the end,
+             * when both halves have had their say.
              */
             floors.conductorStopped()
+            syncService(mayStart = false)
             return
         }
 
@@ -431,7 +468,7 @@ class TimerController internal constructor(context: Context) {
         scheduleAlarm(stamped)
         if (phase == RunPhase.RUNNING) acquireWakeLock(stamped) else releaseWakeLock()
         postNotification(stamped)
-        if (startService) startService()
+        syncService(mayStart = startService)
         restartLoop()
     }
 
@@ -607,6 +644,44 @@ class TimerController internal constructor(context: Context) {
     }
 
     // --- Android plumbing --------------------------------------------------------------
+
+    /**
+     * Brings the one foreground service up or takes it down, according to [serviceNeeded].
+     *
+     * ── [mayStart], and why starting is not symmetrical with stopping ───────────
+     * Stopping is always allowed. STARTING one is refused by Android 12 and later when the
+     * app is in the background, and two paths here run in exactly that situation: [restore],
+     * rebuilding a run inside a process an alarm has just resurrected, and any [FloorController]
+     * wake-up that arrives the same way. Those paths pass false — or, in the floors' case,
+     * pass true and are simply refused, which the `runCatching` below swallows. Either way the
+     * countdown keeps working on the alarm; what is lost is the service, which is the thing
+     * that could not have been obtained anyway.
+     *
+     * ── Started unconditionally rather than on a transition ─────────────────────
+     * `startForegroundService` on a service that is already up is one binder call and another
+     * `onStartCommand`, which re-posts the same notification. Tracking "is it up" in a field
+     * would save that and would go stale the first time the platform stopped the service
+     * without telling this class — and a stale "it is up" means a rest counting with no
+     * service at all, which is the failure this whole change exists to remove.
+     *
+     * ── No notification permission means no service, and that is not silent ─────
+     * A foreground service must show a notification. Without POST_NOTIFICATIONS (Android 13+,
+     * asked for once when the timer is switched on — `rememberTimerEnabler`) there is nothing
+     * to show, so none is started. A rest started in that state behaves exactly as rests did
+     * before this change: it counts in the process while the process lives, it is woken by the
+     * exact alarm when it does not, and it may therefore be late or, past the lateness window,
+     * silent. The permission is not asked for again here: the app asks once, at the moment the
+     * timer is switched on, and a second dialog fired by logging a set is how a refusal
+     * becomes permanent.
+     */
+    private fun syncService(mayStart: Boolean) {
+        if (!serviceNeeded()) {
+            runCatching { app.stopService(Intent(app, TimerService::class.java)) }
+            return
+        }
+        if (!mayStart) return
+        startService()
+    }
 
     private fun startService() {
         if (!TimerNotifications.canPost(app)) return

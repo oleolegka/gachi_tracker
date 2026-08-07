@@ -38,9 +38,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,6 +104,14 @@ import java.time.LocalDate
  * takes digits only and puts the colon in as they arrive — "1700" becomes "17:00" while
  * being typed (`formatTimeDigits`).
  *
+ * A field that rewrites itself has to carry its own CARET, which is why the time is the one
+ * field here held as a `TextFieldValue`. The colon is inserted in front of the caret, and a
+ * caret left at the offset the keyboard reported would then sit before the digit it was
+ * typed after: "1", "7", "0" reads "17:0" with the caret at offset 3, and the next digit
+ * lands before the zero — 17:50 for someone who typed 17:05. So the caret is recomputed
+ * from the number of DIGITS in front of it, which the colon does not change
+ * (`caretAfterDigits`). Digit by digit is how a phone is really typed on.
+ *
  * Half a time is not a time: "17:0" on screen means the last digit is still coming, so
  * `parseSlotTime` refuses it, the field turns red and Save stays disabled. The alternative
  * — reading it as 17:00 — would store a time the user did not type whenever they meant
@@ -146,12 +156,21 @@ fun SlotEditorDialog(
     val parsedTime = parseSlotTime(draft.timeText)
     // digits that are not a time yet: saving would drop or invent the minutes
     val timeBroken = draft.timeText.isNotBlank() && parsedTime == null
+    // the time field keeps its own caret (see the header); everything that writes the time
+    // from outside the field — the chips, the clock, Clear — goes through `setTime`
+    var timeField by remember(initial, day) {
+        mutableStateOf(TextFieldValue(draft.timeText, TextRange(draft.timeText.length)))
+    }
+    fun setTime(text: String) {
+        draft = draft.copy(timeText = text)
+        timeField = TextFieldValue(text, TextRange(text.length))
+    }
 
     if (clockOpen) {
         TimePickerSheet(
             initial = parsedTime,
             onPick = {
-                draft = draft.copy(timeText = it)
+                setTime(it)
                 clockOpen = false
             },
             onDismiss = { clockOpen = false },
@@ -211,9 +230,20 @@ fun SlotEditorDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OutlinedTextField(
-                        value = draft.timeText,
-                        // the colon is inserted for the user: it is not on the number keypad
-                        onValueChange = { draft = draft.copy(timeText = formatTimeDigits(it)) },
+                        value = timeField,
+                        // the colon is inserted for the user: it is not on the number keypad,
+                        // and the caret is moved along with it
+                        onValueChange = { typed ->
+                            val formatted = formatTimeDigits(typed.text)
+                            val digitsTyped = typed.text
+                                .take(typed.selection.end)
+                                .count { it.isDigit() }
+                            timeField = TextFieldValue(
+                                text = formatted,
+                                selection = TextRange(caretAfterDigits(formatted, digitsTyped)),
+                            )
+                            draft = draft.copy(timeText = formatted)
+                        },
                         label = { Text("Time (optional)") },
                         placeholder = { Text("18:00") },
                         singleLine = true,
@@ -225,7 +255,7 @@ fun SlotEditorDialog(
                         ),
                     )
                     if (draft.timeText.isNotBlank()) {
-                        TextButton(onClick = { draft = draft.copy(timeText = "") }) { Text("Clear") }
+                        TextButton(onClick = { setTime("") }) { Text("Clear") }
                     }
                 }
 
@@ -241,7 +271,7 @@ fun SlotEditorDialog(
                             text = time,
                             selected = parsedTime == time,
                             accent = colors.accent,
-                            onClick = { draft = draft.copy(timeText = time) },
+                            onClick = { setTime(time) },
                         )
                     }
                     SiblingChip(
@@ -562,6 +592,30 @@ private fun ruleLabel(rule: String): String = when (rule) {
 
 /** Hours a session tends to start at — one tap instead of four digits. */
 private val QUICK_TIMES = listOf("07:00", "09:00", "12:00", "18:00", "20:00")
+
+/**
+ * Where the caret goes in [text] once [digits] digits are behind it.
+ *
+ * The field's contents are rewritten under the caret on every keystroke, so an offset means
+ * nothing across the rewrite — a colon appearing in front of the caret moves everything after
+ * it along by one. What DOES survive is how many digits the user has typed past, because
+ * inserting a separator never changes that count. So the offset is thrown away and rebuilt:
+ * count digits in the new text, stop after the [digits]-th, and sit just behind it.
+ *
+ * Landing just behind the last digit rather than after the separator that may follow it is
+ * what makes deleting work: backspace on "17:0" takes the zero, not the colon.
+ */
+private fun caretAfterDigits(text: String, digits: Int): Int {
+    if (digits <= 0) return 0
+    var seen = 0
+    text.forEachIndexed { index, char ->
+        if (char.isDigit()) {
+            seen++
+            if (seen == digits) return index + 1
+        }
+    }
+    return text.length
+}
 
 /**
  * The Material 3 clock: the third way to a time, for the ones the chips do not cover.

@@ -165,7 +165,7 @@ fun readProgramFile(text: String): ProgramImport {
     if (file.programs.isEmpty()) return ProgramImport.Rejected("The file carries no programs.")
 
     for (program in file.programs) {
-        problemWith(program)?.let { return ProgramImport.Rejected(it) }
+        programProblem(program)?.let { return ProgramImport.Rejected(it) }
     }
     return ProgramImport.Loaded(file.programs.map { it.toProgram() })
 }
@@ -177,8 +177,12 @@ fun readProgramFile(text: String): ProgramImport {
  * did not come from the editor. A number outside them is not "unusual", it is a program
  * that cannot be run: a work step of zero seconds expands to nothing at all, and a repeat
  * count in the thousands expands into a list [flatten] has to truncate.
+ *
+ * Not private, because the journal backup carries programs too (domain/JournalTransfer.kt) and
+ * they arrive from a file for exactly the same reasons. One validator or two is the difference
+ * between one definition of "a program that can be run" and two that drift.
  */
-private fun problemWith(program: PortableProgram): String? {
+internal fun programProblem(program: PortableProgram): String? {
     val name = program.name.trim()
     if (name.isEmpty()) return "A program in the file has no name."
     if (program.prepareSec !in 0..MAX_STEP_SEC) {

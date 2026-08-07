@@ -49,6 +49,26 @@ class NavigationTest {
         )
     }
 
+    /**
+     * The gesture that must NOT stop a set. Backing out of the conductor lands on the card
+     * list of the workout it was started from, which is what makes a superset work: the bench
+     * is logged while the hang is still being called out (§13.3, step 10).
+     */
+    @Test
+    fun `back leaves the conductor and lands on the workout it was started from`() {
+        assertEquals(
+            BackStep.CloseConductor,
+            backStep(false, showingFormDetail = false, logging = true, showingWorkout = false,
+                tab = HomeTab, conducting = true),
+        )
+        // and with the conductor gone, the next press closes the logging screen under it
+        assertEquals(
+            BackStep.CloseLogging,
+            backStep(false, showingFormDetail = false, logging = true, showingWorkout = false,
+                tab = HomeTab, conducting = false),
+        )
+    }
+
     @Test
     fun `back leaves the logging screen for whichever tab opened it`() {
         // logging is reached from a card on a day, which lives on Today and on the calendar
@@ -129,12 +149,12 @@ class NavigationTest {
     @Test
     fun `back always reaches the exit, in a bounded number of presses`() {
         /*
-         * Five is the ceiling over ALL flag combinations: four modes closed one at a time,
-         * then one hop to the home tab. In the app itself at most TWO can be open at once —
-         * logging over a workout, which is the pair "Continue" creates — so the real worst
-         * case is three presses. The walk is over every combination anyway, reachable or
-         * not, because a rule that loops on a state nobody expected to reach is exactly the
-         * kind that ships.
+         * Six is the ceiling over ALL flag combinations: five modes closed one at a time,
+         * then one hop to the home tab. In the app itself at most THREE can be open at once —
+         * the conductor over logging over a workout, which is a hang started from a card
+         * inside a workout that was opened to look at — so the real worst case is four
+         * presses. The walk is over every combination anyway, reachable or not, because a
+         * rule that loops on a state nobody expected to reach is exactly the kind that ships.
          */
         forEveryState { state ->
             var current = state
@@ -142,12 +162,15 @@ class NavigationTest {
             while (current.back() != BackStep.LeaveApp) {
                 current = current.after(current.back())!!
                 presses++
-                assertTrue("back loops from $state", presses <= 5)
+                assertTrue("back loops from $state", presses <= 6)
             }
             assertEquals("back must end at the bare home tab, from $state", home(), current)
             // the combinations the app can actually produce, and from each of them the exit
             // is never more than the open modes plus a tab away
-            val modes = listOf(state.editingProgram, state.showingFormDetail, state.logging, state.showingWorkout)
+            val modes = listOf(
+                state.editingProgram, state.showingFormDetail, state.conducting,
+                state.logging, state.showingWorkout,
+            )
             if (modes.count { it } <= 1) {
                 assertTrue("$state should exit within two presses, took $presses", presses <= 2)
             }
@@ -170,17 +193,25 @@ class NavigationTest {
         val logging: Boolean,
         val showingWorkout: Boolean,
         val tab: Tab,
+        val conducting: Boolean = false,
     )
 
     private fun home() = NavState(false, false, false, false, HomeTab)
 
     private fun NavState.back() =
-        backStep(editingProgram, showingFormDetail, logging, showingWorkout, tab)
+        backStep(editingProgram, showingFormDetail, logging, showingWorkout, tab, conducting)
 
-    /** The state the app is left in after [step] is carried out — mirrors the handler. */
+    /**
+     * The state the app is left in after [step] is carried out — mirrors the handler.
+     *
+     * Closing the conductor clears only the flag that says it is on screen. THE RUN IS NOT
+     * TOUCHED, here or in the app: this is the model of navigation, and a protocol-led set is
+     * not part of navigation — it keeps counting whichever screen is in front of it.
+     */
     private fun NavState.after(step: BackStep): NavState? = when (step) {
         BackStep.CloseEditor -> copy(editingProgram = false)
         BackStep.CloseFormDetail -> copy(showingFormDetail = false)
+        BackStep.CloseConductor -> copy(conducting = false)
         BackStep.CloseLogging -> copy(logging = false)
         BackStep.CloseWorkout -> copy(showingWorkout = false)
         is BackStep.SwitchTab -> copy(tab = step.tab)
@@ -193,15 +224,17 @@ class NavigationTest {
             for (detail in listOf(false, true)) {
                 for (log in listOf(false, true)) {
                     for (workout in listOf(false, true)) {
-                        for (tab in Tab.entries) {
-                            check(NavState(editor, detail, log, workout, tab))
-                            seen++
+                        for (conducting in listOf(false, true)) {
+                            for (tab in Tab.entries) {
+                                check(NavState(editor, detail, log, workout, tab, conducting))
+                                seen++
+                            }
                         }
                     }
                 }
             }
         }
-        assertEquals(2 * 2 * 2 * 2 * Tab.entries.size, seen)
+        assertEquals(2 * 2 * 2 * 2 * 2 * Tab.entries.size, seen)
     }
 
     @Test
@@ -211,6 +244,7 @@ class NavigationTest {
         val all = listOf(
             BackStep.CloseEditor,
             BackStep.CloseFormDetail,
+            BackStep.CloseConductor,
             BackStep.CloseLogging,
             BackStep.CloseWorkout,
             BackStep.SwitchTab(HomeTab),

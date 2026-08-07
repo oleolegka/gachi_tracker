@@ -38,9 +38,6 @@ interface ExerciseDao {
     @Insert
     suspend fun insert(exercise: ExerciseEntity): Long
 
-    @Update
-    suspend fun update(exercise: ExerciseEntity)
-
     @Delete
     suspend fun delete(exercise: ExerciseEntity)
 
@@ -52,6 +49,54 @@ interface ExerciseDao {
 
     @Query("SELECT * FROM exercises WHERE id = :id")
     suspend fun byId(id: Long): ExerciseEntity?
+
+    /**
+     * The row of one identity, or null — the lookup that decides whether logging a new
+     * exercise creates a row or finds one (schema version 15).
+     *
+     * A HIDDEN ROW IS FOUND like any other, and that is not an oversight. The identity is
+     * unique in the schema, so a second row claiming it cannot exist; if this skipped hidden
+     * rows the insert that followed would fail on the constraint. What happens next — the row
+     * comes back into the list — is decided by the repository, where it can be explained.
+     */
+    @Query("SELECT * FROM exercises WHERE space_id = :spaceId AND identity_key = :key")
+    suspend fun byIdentityKey(key: String, spaceId: Long = LOCAL_SPACE_ID): ExerciseEntity?
+
+    /**
+     * Corrects what an exercise IS: its name, its edge and its work:rest protocol, and with
+     * them the key those three and the form are folded into.
+     *
+     * ── Why this is one statement and Room's `@Update` is gone ─────────────────
+     * The whole-entity update used to exist here and was called from nowhere, which is how an
+     * exercise created with a typo stayed wrong forever. Bringing it into use as it was would
+     * have been worse than leaving it unused: a caller holding a stale entity would write back
+     * `default_rest_sec`, `one_sided`, `hidden` and the rest from whatever it happened to be
+     * holding, and — since `identity_key` is a constructor default — would silently recompute
+     * the key from the values in ITS copy. So the edit is a column list: the four things the
+     * editor owns, plus the key, in one write that cannot leave them disagreeing.
+     *
+     * Returns the number of rows touched, so a caller can tell "saved" from "that exercise is
+     * gone". A key that is already taken raises a constraint failure rather than merging two
+     * exercises; the repository turns that into a sentence.
+     */
+    @Query(
+        "UPDATE exercises SET name = :name, edge_mm = :edgeMm, protocol_work_sec = :workSec, " +
+            "protocol_rest_sec = :restSec, identity_key = :identityKey " +
+            "WHERE space_id = :spaceId AND id = :id"
+    )
+    suspend fun editIdentity(
+        id: Long,
+        name: String,
+        edgeMm: Double?,
+        workSec: Double?,
+        restSec: Double?,
+        identityKey: String,
+        spaceId: Long = LOCAL_SPACE_ID,
+    ): Int
+
+    /** Keeps an exercise out of the pickers, or brings it back — see [ExerciseEntity.hidden]. */
+    @Query("UPDATE exercises SET hidden = :hidden WHERE space_id = :spaceId AND id = :id")
+    suspend fun setHidden(id: Long, hidden: Boolean, spaceId: Long = LOCAL_SPACE_ID)
 
     /**
      * Remembers the rest last chosen for an exercise.
@@ -68,6 +113,24 @@ interface ExerciseDao {
     /** Same, for "run this by its protocol". Null puts the row back to inferring it. */
     @Query("UPDATE exercises SET led_by_protocol = :led WHERE space_id = :spaceId AND id = :id")
     suspend fun setLedByProtocol(id: Long, led: Boolean?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Same, for "this one is trained one limb at a time".
+     *
+     * Turning it ON re-reads the whole history of the exercise: sets logged before it named
+     * no side, and they become a defect the records report rather than hide (see
+     * [xyz.oleolegka.gachimuchi.domain.holdRecord]). Nothing is rewritten to make that go
+     * away — the old sets genuinely do not say which hand did them.
+     */
+    @Query("UPDATE exercises SET one_sided = :oneSided WHERE space_id = :spaceId AND id = :id")
+    suspend fun setOneSided(id: Long, oneSided: Boolean, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Same, for what share of body weight the exercise lifts. Null puts it back to "nobody
+     * has said", which is not the same as zero — see [ExerciseEntity.bodyweightShare].
+     */
+    @Query("UPDATE exercises SET bodyweight_share = :share WHERE space_id = :spaceId AND id = :id")
+    suspend fun setBodyweightShare(id: Long, share: Double?, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 /**

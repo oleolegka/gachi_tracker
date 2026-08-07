@@ -8,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import xyz.oleolegka.gachimuchi.MainActivity
 import xyz.oleolegka.gachimuchi.R
 
 /**
@@ -38,6 +39,39 @@ class WindowChromeTest {
             // defaults chosen so that a theme which simply forgot to say anything fails
             assertFalse("windowActionBar must be off", attrs.getBoolean(0, true))
             assertTrue("windowNoTitle must be on", attrs.getBoolean(1, false))
+        } finally {
+            attrs.recycle()
+        }
+    }
+
+    /**
+     * The other half of the same defect, which the test above cannot see.
+     *
+     * A theme with the bar switched off is worth nothing if the window the app is actually
+     * drawn into is a different one. The activity's theme is resolved the way the platform
+     * resolves it — off the manifest entry, through the application's default — so both ways
+     * of losing it are covered: an activity pointed at some other style, and an application
+     * whose default theme changed under an activity that never named one.
+     */
+    @Test
+    fun `the window the app really opens in is the one without the bar`() {
+        val activity = context.packageManager.getActivityInfo(
+            android.content.ComponentName(context, MainActivity::class.java), 0,
+        )
+        val themeRes = activity.themeResource.takeIf { it != 0 }
+            ?: activity.applicationInfo.theme
+        assertTrue("MainActivity must resolve to a theme at all", themeRes != 0)
+
+        val theme = context.resources.newTheme()
+        theme.applyStyle(themeRes, true)
+        val attrs = theme.obtainStyledAttributes(
+            intArrayOf(android.R.attr.windowActionBar, android.R.attr.windowNoTitle)
+        )
+        try {
+            // the bar took a strip off the top of every screen and clipped the first card of
+            // the timer tab, whose list starts flush against the top of the content area
+            assertFalse("the activity's own window must have no action bar", attrs.getBoolean(0, true))
+            assertTrue("the activity's own window must have no title", attrs.getBoolean(1, false))
         } finally {
             attrs.recycle()
         }

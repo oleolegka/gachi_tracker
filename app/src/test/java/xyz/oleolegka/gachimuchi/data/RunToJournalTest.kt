@@ -14,6 +14,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.ProgramImport
 import xyz.oleolegka.gachimuchi.domain.buildSession
@@ -101,7 +102,7 @@ class RunToJournalTest {
         holdSetsFromRun(exercise, "2026-08-01", sets, addedKg = 6.0).forEach { repo.record(it) }
         holdSetsFromRun(exercise, day, sets, addedKg = 9.0).forEach { repo.record(it) }
 
-        val record = holdRecord(readActivities(repo.allEvents()), exercise.id)!!
+        val record = holdRecord(readActivities(repo.allEvents()), ExerciseLink.ofId(exercise.id)).single()
         assertEquals(9.0, record.value, 1e-9)
         assertEquals(day, record.opDate)
     }

@@ -176,7 +176,34 @@ private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, today: LocalDat
     return parts.joinToString(" - ")
 }
 
-/** Catalog row -> what the dashboard needs; an unreadable form code drops out of the feed. */
+/**
+ * Catalog row -> what the dashboard needs; an unreadable form code drops out of the feed.
+ *
+ * ── Every column the analytics can use, or they silently do nothing ─────────────
+ * This mapping used to carry the id, the name and the form, and drop the rest. The three it
+ * dropped are not decoration:
+ *
+ *  - [ExerciseEntity.uid] is how an entry names its exercise off this phone. Without it the
+ *    link fell back to the local row number for everything, which is the fallback meant for
+ *    entries too old to carry an identity — see [ExerciseLink.matches].
+ *  - [ExerciseEntity.oneSided] is what splits a record per hand. Dropped, `recordsOf` took its
+ *    default and reported one record for both hands: the better one, hiding the gap the
+ *    training exists to close.
+ *  - [ExerciseEntity.bodyweightShare] is what gives a pull-up any tonnage at all. Dropped,
+ *    `volumeSeries` took its default and a week of pull-ups drew as a week of doing nothing.
+ *
+ * All three arrived with columns of their own and defaults that preserve the old behaviour,
+ * which is exactly why leaving them out compiled, ran, and quietly answered the old question.
+ */
 fun ExerciseEntity.toCatalog(): CatalogExercise? =
     runCatching { ExerciseForm.fromCode(form) }.getOrNull()
-        ?.let { CatalogExercise(id, name, it) }
+        ?.let {
+            CatalogExercise(
+                id = id,
+                name = name,
+                form = it,
+                uid = uid,
+                oneSided = oneSided,
+                bodyweightShare = bodyweightShare,
+            )
+        }

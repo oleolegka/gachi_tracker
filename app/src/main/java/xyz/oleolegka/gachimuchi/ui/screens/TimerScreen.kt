@@ -58,12 +58,25 @@ import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
- * The timer tab: what is running, what can be run, and what the timer is allowed to do.
+ * The programs tab: the LIBRARY of programs — what is kept, how it is filed, how it goes in
+ * and out of a file — plus what is running and what the timer is allowed to do.
  *
- * One scrolling screen rather than a section with its own navigation. There are only
- * three things here and they are read in this order — the live run first, because when
- * anything is running that is the only thing that matters; then the programs; then the
- * settings, which are visited once and then never again.
+ * ── A store, not a starting line ────────────────────────────────────────────────
+ * A protocol is started from the exercise card inside the workout being done, on the day it
+ * is trained, because that is where the app knows what the run should be logged against.
+ * This tab used to be called Timer and read like the place a session begins, which sent
+ * people here to start training and left them looking at a list of everything they own.
+ * So the tab, the heading and the empty state all say the same thing now: this is where
+ * programs are written, filed, sent and fetched.
+ *
+ * The Run button on each card stays, and it is not a contradiction: running a program
+ * straight from the library is the right thing for the one that belongs to no exercise —
+ * a Tabata, a warm-up — and for trying out something just edited.
+ *
+ * One scrolling screen rather than a section with its own navigation. There are only three
+ * things here and they are read in this order — the live run first, because when anything is
+ * running that is the only thing that matters; then the programs; then the settings, which
+ * are visited once and then never again.
  */
 @Composable
 fun TimerScreen(
@@ -118,11 +131,18 @@ fun TimerScreen(
         state.run?.let { item { RunPanel(state, actions) } }
 
         item {
-            Text(
-                "Programs",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 8.dp),
-            )
+            Column(Modifier.padding(top = 8.dp)) {
+                Text("Your programs", style = MaterialTheme.typography.titleMedium)
+                // says what the tab is FOR, because the answer is not "start training here"
+                Text(
+                    "Kept here, filed under your own headings, and sent to or read from a " +
+                        "file. A session is started from the exercise it belongs to, in the " +
+                        "workout you are doing.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
 
         if (programs.isEmpty()) {
@@ -135,10 +155,11 @@ fun TimerScreen(
                  * in — so it says what a program is and what the buttons below will do.
                  */
                 EmptyState(
-                    title = "No programs yet",
+                    title = "The library is empty",
                     hint = "A program is a sequence of timed efforts and rests - hangboard " +
-                        "repeaters, a Tabata, a circuit. Build one with \"New program\", or " +
-                        "read one in from a file someone sent you.",
+                        "repeaters, a Tabata, a circuit. This is where they are kept, so " +
+                        "there is nothing to reach for yet: build one with \"New program\", " +
+                        "or read one in from a file someone sent you.",
                 )
             }
         }
@@ -214,9 +235,16 @@ fun TimerScreen(
     }
 }
 
-/** The live run, in the size you can read from the floor. */
+/**
+ * The live run, in the size you can read from the floor.
+ *
+ * Shared with [ConductorScreen] rather than private, because a protocol-led set started from
+ * an exercise card and one started from this tab are the same run being read in the same
+ * position — arms out, a metre or two from the phone. Two copies of this panel would be two
+ * places for the step name and the time left to start disagreeing.
+ */
 @Composable
-private fun RunPanel(state: TimerUiState, actions: TimerActions) {
+internal fun RunPanel(state: TimerUiState, actions: TimerActions) {
     val colors = LocalGachiColors.current
     val snapshot = state.run ?: return
     val phase = snapshot.state.phase()

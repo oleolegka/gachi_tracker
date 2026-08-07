@@ -65,10 +65,28 @@ class RunLoggingChainTest {
     private lateinit var programs: ProgramRepository
     private val controllers = mutableListOf<TimerController>()
 
+    /**
+     * Runs whatever is handed to it ON THE CALLING THREAD, immediately.
+     *
+     * This is what takes the wall clock out of this file. Room's suspending DAO methods hop onto
+     * its own executors and resume back on the caller's dispatcher, so a `viewModelScope`
+     * coroutine that writes a set genuinely leaves the main thread and comes back — which used
+     * to be waited out by sleeping and re-checking for up to five seconds. With the executors
+     * running inline the whole hop happens inside the call, and [settle] finishes the job with
+     * no clock involved at all.
+     *
+     * It is safe here for the reason `allowMainThreadQueries` is: this is an in-memory database
+     * with a handful of rows in it, and nothing in the test is waiting on a query.
+     */
+    private val inline = java.util.concurrent.Executor { it.run() }
+
     @Before
     fun setUp() {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
-            .allowMainThreadQueries().build()
+            .allowMainThreadQueries()
+            .setQueryExecutor(inline)
+            .setTransactionExecutor(inline)
+            .build()
         repo = ActivityRepository(db)
         programs = ProgramRepository(db)
     }
@@ -96,22 +114,23 @@ class RunLoggingChainTest {
     }
 
     /**
-     * Waits for work the ViewModel launched to finish.
+     * Runs the work the ViewModel launched, to completion.
      *
-     * Idling the main looper is not enough on its own: a `viewModelScope` coroutine that
-     * touches Room suspends onto Room's own executor and resumes there, so the test has to
-     * pump the looper AND give that executor real time. Failing the wait is treated as a
-     * test failure rather than a silent pass, because "the coroutine never finished" is one
-     * of the failure modes being hunted here.
+     * ── Why this is not a wait any more ─────────────────────────────────────────
+     * It used to poll: idle the looper, check a condition, sleep five milliseconds, give up
+     * after five seconds. That is a race dressed as an assertion — it passed on an idle machine
+     * and failed on a busy one (three parallel builds was enough), and a failure meant nothing,
+     * because "the coroutine never ran" and "the coroutine had not run YET" produced the same
+     * red. A test nobody can read is worse than no test.
+     *
+     * Now there is nothing to wait for. `viewModelScope` dispatches on the main looper, which
+     * Robolectric leaves paused, and Room's executors run inline ([inline]), so every hop the
+     * work makes is either on this thread already or is a message in the looper's queue.
+     * Draining that queue is the whole of it, and it is DETERMINISTIC: after this call the work
+     * has either finished or was never started, and the assertion that follows says which.
      */
-    private fun waitFor(what: String, until: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline) {
-            shadowOf(Looper.getMainLooper()).idle()
-            if (until()) return
-            Thread.sleep(5)
-        }
-        throw AssertionError("timed out waiting for $what")
+    private fun settle() {
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     // --- the path the user takes ------------------------------------------------------------
@@ -262,7 +281,8 @@ class RunLoggingChainTest {
 
         // 1. the one-tap program from a catalog exercise
         viewModel.startProgramForExercise(exercise)
-        waitFor("the one-tap program to start") { timer.run.value != null }
+        settle()
+        assertNotNull("the one-tap program never started", timer.run.value)
         assertEquals(RunOrigin.EXERCISE, timer.run.value!!.origin)
         assertEquals(exercise.id, timer.run.value!!.exerciseId)
 
@@ -313,7 +333,7 @@ class RunLoggingChainTest {
             holdSetOf(exercise, LocalDate.now().toString(), reps = 6, holdSec = 7.0),
             attachToWorkout = false,
         )
-        waitFor("the floor to start") { timer.floors.floors.value.isNotEmpty() }
+        settle()
 
         val first = timer.floors.floors.value.single()
         assertEquals(exercise.id, first.exerciseId)
@@ -326,11 +346,13 @@ class RunLoggingChainTest {
             holdSetOf(exercise, LocalDate.now().toString(), reps = 6, holdSec = 7.0),
             attachToWorkout = false,
         )
-        waitFor("the floor to be restarted") {
-            timer.floors.floors.value.singleOrNull()?.readyAtMs?.let { it > first.readyAtMs } == true
-        }
+        settle()
 
         assertEquals("one exercise, one floor", 1, timer.floors.floors.value.size)
+        assertTrue(
+            "the second set must push the rest out rather than leave the first one running",
+            timer.floors.floors.value.single().readyAtMs > first.readyAtMs,
+        )
     }
 
     @Test
@@ -350,7 +372,8 @@ class RunLoggingChainTest {
         assertNotNull("the offer must reach the layer the dialog reads", outcome)
 
         viewModel.logRunSets(exercise, outcome!!.sets, addedKg = 5.0)
-        waitFor("the write to land") { viewModel.logReceipt.value != null }
+        settle()
+        assertNotNull("the write never landed", viewModel.logReceipt.value)
 
         // 1. it is in the journal
         val session = buildSession(repo.allEvents(), outcome.opDate)
@@ -373,9 +396,8 @@ class RunLoggingChainTest {
         // 5. and can take it straight back
         viewModel.undoRunSets()
         assertNull(viewModel.logReceipt.value)
-        waitFor("the undo to land") {
-            buildSessionSetCount(outcome.opDate) == 0
-        }
+        settle()
+        assertEquals("the undo never landed", 0, buildSessionSetCount(outcome.opDate))
     }
 
     @Test

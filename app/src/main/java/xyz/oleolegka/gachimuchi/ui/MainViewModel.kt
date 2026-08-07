@@ -40,16 +40,19 @@ import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
 import xyz.oleolegka.gachimuchi.domain.dayWatchDelayMs
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
-import xyz.oleolegka.gachimuchi.domain.holdSetsByExerciseId
+import xyz.oleolegka.gachimuchi.domain.exerciseLink
+import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
+import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
-import xyz.oleolegka.gachimuchi.domain.strengthSetsByExerciseId
+import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
@@ -78,6 +81,16 @@ data class UiState(
 
     /** The catalog row as the domain sees it — what the entry card builds its forms from. */
     fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.toRef()
+
+    /**
+     * How the journal names an exercise the screen is holding a number for.
+     *
+     * The screens navigate by local row number, and the journal is keyed by identity — see
+     * [ExerciseLink]. This is the one place that bridges the two, so no screen invents its own
+     * bridge. An exercise no longer in the catalog falls back to the number, which still finds
+     * every entry written before it was deleted.
+     */
+    fun linkOf(id: Long): ExerciseLink = refById(id)?.link ?: ExerciseLink.ofId(id)
 }
 
 /**
@@ -172,13 +185,13 @@ class MainViewModel(
      * The duration is resolved AFTER the write, so the gap that has just been measured (the
      * pause before this very set) is part of what the offer is based on.
      */
-    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true) {
+    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true, intoWorkoutId: Long? = null) {
         viewModelScope.launch {
             val worthAPicture = celebratedByPicture(form)
             // BEFORE the write, or the set would be compared against itself and no set
             // would ever be a record
             val record = if (worthAPicture) recordBrokenBy(form) else null
-            repo.record(form, attachToWorkout = attachToWorkout)
+            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
             if (worthAPicture) {
                 _celebrations.tryEmit(
                     CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
@@ -201,10 +214,20 @@ class MainViewModel(
              */
             val exerciseId = form.exerciseId
             if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
+                val exercise = repo.exercise(exerciseId)
+                /*
+                 * THE REST THAT WAS CHOSEN, and only failing that the one that was measured —
+                 * which is what [restHintSec] resolves and what [resolveRestSec] on its own
+                 * does not. The difference became visible the moment a workout could be asked
+                 * which rest an exercise gets: the card would say "rest 3:00" because that is
+                 * what was agreed to, and the bar underneath would count the median gap
+                 * between the last few sets instead. A timer disagreeing with the number
+                 * printed above it is worse than no timer, because it is believed.
+                 */
                 timer.floors.start(
                     exerciseId = exerciseId,
-                    exerciseName = repo.exercise(exerciseId)?.name ?: "Rest",
-                    orderedMs = resolveRestSec(settings, repo.allEvents(), exerciseId) * 1000L,
+                    exerciseName = exercise?.name ?: "Rest",
+                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.toRef()) * 1000L,
                 )
             }
         }
@@ -217,11 +240,46 @@ class MainViewModel(
      * the thing it just created and it has no other way to name it — the id IS the id of the
      * event the repository just wrote.
      *
-     * [slotId] is the plan it was started from, when it was started from one. The exercises
-     * ON that slot are NOT copied in yet; see the note at the call site in ui/GachiApp.kt.
+     * [slotId] is the plan it was started from, when it was started from one — and when it is
+     * one, that plan's exercises are COPIED into the workout before the caller is told about
+     * it, so the screen it opens is already the list of what the session is meant to be
+     * (§13.7). Copied and not referenced: the plan is editable and the facts are not.
+     *
+     * The copy happens between the start and [then] rather than after it, so the screen never
+     * draws a workout that is about to gain three cards on the next frame.
      */
     fun startWorkout(day: LocalDate, slotId: Long? = null, then: (Long) -> Unit) {
-        viewModelScope.launch { then(repo.startWorkout(day.toString(), slotId)) }
+        viewModelScope.launch {
+            val id = repo.startWorkout(day.toString(), slotId)
+            if (slotId != null) repo.copyPlannedExercises(id, slotId, timer.settings.value)
+            then(id)
+        }
+    }
+
+    /**
+     * Puts an exercise into a workout at a chosen rest — and, called again for one already
+     * there, changes that rest.
+     *
+     * ONE METHOD FOR BOTH, because the journal has one event for both: adding an exercise
+     * twice does not duplicate it, the last rest wins, and the order it was added in is kept
+     * (see `buildWorkout`). The repository also writes the rest onto the catalog row, so the
+     * choice made here is what the NEXT workout will be offered — the two writes are two
+     * different facts and neither can be derived from the other; see
+     * [ActivityRepository.addExerciseToWorkout].
+     */
+    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
+        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
+    }
+
+    /**
+     * Says a workout is over.
+     *
+     * It is not an undo and not a lock: the workout keeps everything it has, can be opened
+     * again, and a set added afterwards goes into it and moves its end time. What it changes
+     * is that this workout stops being the one sets land in by default.
+     */
+    fun finishWorkout(workoutId: Long) {
+        viewModelScope.launch { repo.finishWorkout(workoutId) }
     }
 
     // --- celebration -------------------------------------------------------------------
@@ -245,13 +303,13 @@ class MainViewModel(
      * the overlay and the feed cannot disagree about what was a record.
      */
     private suspend fun recordBrokenBy(form: ActivityForm): RecordHit? {
-        val exerciseId = form.exerciseId ?: return null
+        val exercise = form.exerciseLink() ?: return null
         val events = repo.allEvents()
         return when (form) {
             is StrengthSet ->
-                evaluateStrengthRecord(strengthSetsByExerciseId(events, exerciseId), form.weightKg, form.reps)
+                evaluateStrengthRecord(strengthSetsOfExercise(events, exercise), form.weightKg, form.reps)
 
-            is HoldSet -> evaluateHoldRecord(holdSetsByExerciseId(events, exerciseId), form)
+            is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
             else -> null
         }
     }
@@ -262,9 +320,41 @@ class MainViewModel(
     }
 
     /**
+     * Corrects an entry already in the journal, from the whole form the editor is holding.
+     *
+     * ANY entry, not only the last one — which is the difference from [undoSet], and the reason
+     * this exists. Nothing is rewritten: the repository appends an amendment naming the target
+     * and `domain/Amendments.kt` folds the two into what the readers see.
+     *
+     * The exercise carried by [updated] is IGNORED by the repository rather than applied (see
+     * `amendEntry`), so a correction can never move a set to another exercise. The editor does
+     * not offer it either — this is the belt to that dialog's braces, not the only guard.
+     */
+    fun amendEntry(eventId: Long, updated: ActivityForm) {
+        viewModelScope.launch { repo.amendEntry(eventId, updated) }
+    }
+
+    /**
+     * Removes ANY entry from every reading of the journal — not only the newest, which is all
+     * [undoSet] could ever reach.
+     *
+     * The row stays in the table; this appends a deletion naming it. So it is reversible in
+     * principle (deleting the deletion brings it back), and nothing about the append-only
+     * guarantee is given up to get a delete button.
+     */
+    fun deleteEntry(eventId: Long) {
+        viewModelScope.launch { repo.deleteEntry(eventId) }
+    }
+
+    /**
      * Creates a catalog exercise and immediately points the entry card at it. For holds,
      * edge and protocol are part of the identity (§12-A) and are stored on the exercise
      * rather than asked for on every set.
+     *
+     * [then] receives the new row's id. It exists because creating an exercise mid-workout is
+     * never the last step — the workout then asks what rest it should get, and that question
+     * cannot be put until the row it is about exists. A caller that only needs the exercise to
+     * become the active one leaves it out and reads [activeExerciseId] as before.
      */
     fun createExercise(
         name: String,
@@ -272,9 +362,12 @@ class MainViewModel(
         edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
+        then: ((Long) -> Unit)? = null,
     ) {
         viewModelScope.launch {
-            _activeExerciseId.value = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            val id = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            _activeExerciseId.value = id
+            then?.invoke(id)
         }
     }
 
@@ -348,16 +441,36 @@ class MainViewModel(
     fun dismissFloor(exerciseId: Long) = timer.floors.dismiss(exerciseId)
 
     /**
+     * The plate answered on the way INTO the set that is running, or null when none was.
+     *
+     * ── Why it is held here and not in the run ──────────────────────────────────
+     * It is the answer to a question the USER was asked, and its only job is to be the number
+     * the offer at the end arrives prefilled with. Putting it in [RunSnapshot] would mean a
+     * schema change to the stored run for a value nothing about the running of the set uses.
+     *
+     * The cost, stated: this does NOT survive the process. A set conducted while the app is
+     * killed and rebuilt from the alarm comes back with the offer prefilled from the last
+     * logged set instead of from the answer given at the start — the behaviour before the
+     * question existed, so nothing is worse than it was, but the answer is quietly lost.
+     */
+    private val _entryAddedKg = MutableStateFlow<Double?>(null)
+    val entryAddedKg: StateFlow<Double?> = _entryAddedKg.asStateFlow()
+
+    /**
      * The one-tap program for a hangboard exercise: its work:rest protocol is already on
      * the catalog row, the rep count comes from the last set of it that was logged, the set
      * count from the settings, and the pause between sets from what was actually rested.
-     * Nothing is asked, because nothing is unknown.
+     *
+     * [addedKg] is the one thing that can be asked first, and only when there is a reason to
+     * (§13.5) — the caller decides that, because the caller is the one that would be putting
+     * the extra screen in front of the user.
      */
-    fun startProgramForExercise(exercise: ExerciseRef) {
+    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null) {
+        _entryAddedKg.value = addedKg
         viewModelScope.launch {
             val events = repo.allEvents()
             val settings = timerSettings.value
-            val reps = lastHoldSet(events, exercise.id)?.reps ?: DEFAULT_HOLD_REPS
+            val reps = lastHoldSet(events, exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
                 exercise = exercise,
                 reps = reps,
@@ -378,11 +491,16 @@ class MainViewModel(
      * program a run that belonged to nothing and therefore offered nothing, however many
      * sets it had just counted.
      */
-    fun runProgram(program: WorkoutProgram) = timer.start(
-        program = program,
-        exerciseId = program.exerciseId,
-        origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
-    )
+    fun runProgram(program: WorkoutProgram): Unit {
+        // nobody was asked about a plate for this one, and the previous answer belongs to a
+        // run that is now over
+        _entryAddedKg.value = null
+        timer.start(
+            program = program,
+            exerciseId = program.exerciseId,
+            origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
+        )
+    }
 
     fun pauseTimer() = timer.pause()
     fun resumeTimer() = timer.resume()
@@ -416,7 +534,10 @@ class MainViewModel(
     val runOutcome: StateFlow<RunOutcome?> = timer.outcome
 
     /** "Not this time": the offer goes away and the journal is untouched. */
-    fun dismissRunOutcome() = timer.clearOutcome()
+    fun dismissRunOutcome() {
+        _entryAddedKg.value = null
+        timer.clearOutcome()
+    }
 
     /**
      * Writes the confirmed sets, one journal event per set, through the same repository and
@@ -436,6 +557,9 @@ class MainViewModel(
      */
     fun logRunSets(exercise: ExerciseRef, sets: List<CompletedSet>, addedKg: Double? = null) {
         val outcome = timer.outcome.value
+        // the question has been answered for good: whatever the user typed into the offer is
+        // the weight now, and the entry answer must not prefill the NEXT run
+        _entryAddedKg.value = null
         viewModelScope.launch {
             val day = outcome?.opDate?.takeIf { it.isNotBlank() } ?: LocalDate.now().toString()
             val written = ArrayList<Long>()

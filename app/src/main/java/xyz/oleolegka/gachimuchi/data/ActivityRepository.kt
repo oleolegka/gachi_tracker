@@ -3,30 +3,47 @@ package xyz.oleolegka.gachimuchi.data
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.JsonObject
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
+import xyz.oleolegka.gachimuchi.domain.AMENDMENT_PROTECTED_KEYS
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
+import xyz.oleolegka.gachimuchi.domain.EntryAmended
+import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
+import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.formFromEvent
+import xyz.oleolegka.gachimuchi.domain.toJsonObject
 import xyz.oleolegka.gachimuchi.domain.Workout
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
-import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.bodyweightAt
+import xyz.oleolegka.gachimuchi.domain.ExerciseIdentity
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
+import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
-import xyz.oleolegka.gachimuchi.domain.openWorkoutId
+import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.payloadJson
+import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.toSlot as draftToSlot
 import java.time.LocalDate
@@ -42,6 +59,40 @@ class ActivityRepository(private val db: AppDatabase) {
 
     /** Log time (ts) — second precision, same as on the server (`db._now`). */
     private fun now(): String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+
+    /**
+     * A journal row, stamped with everything the schema wants to know about WHEN it was written
+     * and WHICH DAY it is about.
+     *
+     * ONE FACTORY FOR EVERY APPEND, on the same grounds [record] gives for attaching the
+     * workout here rather than at the call sites: there are seven places in this class that
+     * write to the journal, and a row that arrived with its time columns half filled in would be
+     * a row nothing could sort — found years later, on the one device holding the history.
+     *
+     * The day is read back out of the payload rather than passed in, so the column cannot
+     * disagree with the JSON beside it. One consequence worth naming: an AMENDMENT names no day
+     * of its own (its payload is a target and a patch), so it gets a null `op_date` even when the
+     * patch inside it moves an entry to another day — see [EventEntity.opDate], which is where
+     * the readers are told not to trust the column across a correction.
+     */
+    private fun event(
+        type: String,
+        payload: String,
+        workoutId: Long? = null,
+        workoutUid: String? = null,
+    ): EventEntity {
+        val written = WriteTime.now()
+        return EventEntity(
+            ts = written.local,
+            type = type,
+            payload = payload,
+            workoutId = workoutId,
+            workoutUid = workoutUid,
+            opDate = opDateOfPayload(payload),
+            tsUtc = written.utc,
+            tzOffsetMin = written.offsetMin,
+        )
+    }
 
     val events: Flow<List<JournalEvent>> =
         db.events().observeAll().map { rows -> rows.map { it.toJournalEvent() } }
@@ -89,13 +140,41 @@ class ActivityRepository(private val db: AppDatabase) {
      * is no longer something a caller can choose: [LOCAL_AUTHOR_ID] is the only value, and
      * the column survives only because the server schema has it (see Entities.kt).
      */
-    suspend fun record(form: ActivityForm, attachToWorkout: Boolean = true): Long =
-        db.events().insert(
-            EventEntity(
-                ts = now(), type = form.type, payload = form.toPayload(),
-                workoutId = if (attachToWorkout) currentWorkoutId() else null,
+    suspend fun record(
+        form: ActivityForm,
+        attachToWorkout: Boolean = true,
+        /**
+         * File it under THIS workout, whatever is open.
+         *
+         * The screen that is drawing a workout knows which one it is drawing, and that is a
+         * better answer than folding the journal for "the open one" — they differ exactly
+         * when a FINISHED workout is opened to add the set that was forgotten in the changing
+         * room (§13, finishing is a status and not a lock). Without this that set would land
+         * in whatever happened to be open instead, which is either another workout or nothing.
+         */
+        intoWorkoutId: Long? = null,
+    ): Long {
+        // one read, shared by both consumers, and skipped entirely when neither wants it —
+        // a named workout is looked up by id and needs no fold
+        val needsEvents = form.wantsBodyweightSnapshot || (attachToWorkout && intoWorkoutId == null)
+        val events = if (needsEvents) allEvents() else emptyList()
+        val workout: JournalEvent? = when {
+            intoWorkoutId != null -> db.events().byId(intoWorkoutId)?.toJournalEvent()
+            attachToWorkout -> openWorkoutRow(events)
+            else -> null
+        }
+        // the body-weight snapshot is stamped HERE for the same reason the workout link is:
+        // one method sees every write, and a screen that forgot would log a set with no
+        // volume at all. See [withBodyweightSnapshot].
+        val stamped = form.withBodyweightSnapshot { day -> bodyweightAt(events, day) }
+        return db.events().insert(
+            event(
+                type = stamped.type, payload = stamped.toPayload(),
+                // both links, and the uid is the one the reducers believe: see EventEntity
+                workoutId = workout?.id, workoutUid = workout?.uid,
             )
         )
+    }
 
     // --- workouts (domain/Workout.kt folds them back out) ---
 
@@ -103,9 +182,29 @@ class ActivityRepository(private val db: AppDatabase) {
     private fun today(): String = LocalDate.now().toString()
 
     /** The workout in progress, or null — see [openWorkout] for what "in progress" means. */
-    suspend fun currentWorkoutId(): Long? = openWorkoutId(allEvents(), today())
+    suspend fun currentWorkoutId(): Long? = openWorkoutRow(allEvents())?.id
 
-    suspend fun currentWorkout(): Workout? = openWorkout(allEvents(), today())
+    suspend fun currentWorkout(): Workout? = openWorkout(allEvents())
+
+    /**
+     * Writes "that workout is over".
+     *
+     * No time is recorded — the end is read off the last set (see [Workout.endTs]) — and
+     * nothing is locked: the workout can still be opened and written into afterwards, which is
+     * how the set forgotten in the changing room gets in.
+     */
+    suspend fun finishWorkout(workoutId: Long): Long {
+        val uid = db.events().byId(workoutId)?.uid
+        return db.events().insert(
+            event(
+                type = TYPE_WORKOUT_FINISHED,
+                payload = payloadJson.encodeToString(WorkoutFinished(workoutId, uid)),
+                // the link in the column as well as the payload, so one query finds every row
+                // of a workout whatever its type — same as the "exercise added" event
+                workoutId = workoutId, workoutUid = uid,
+            )
+        )
+    }
 
     /**
      * Opens a workout and returns its id, which IS the id of the event just written.
@@ -115,14 +214,43 @@ class ActivityRepository(private val db: AppDatabase) {
      * [WorkoutStarted].
      *
      * [slotId] records which planned session this was started from, when the user picked one.
+     * The plan's identity is written beside its number, and the readers believe the identity —
+     * see [WorkoutStarted]. A number naming a slot this database does not hold writes no uid,
+     * which is the honest answer rather than an invented one.
+     *
+     * [name] is what to call this workout, and it is written into the event as a SNAPSHOT. A
+     * caller that passes none and names a plan gets the plan's name as it reads RIGHT NOW —
+     * copied once, here, so that editing the plan next month leaves this workout alone. A
+     * workout with neither is nameless, which is a state the screens are built for.
      */
-    suspend fun startWorkout(opDate: String = today(), slotId: Long? = null): Long =
-        db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_WORKOUT_STARTED,
-                payload = payloadJson.encodeToString(WorkoutStarted(opDate = opDate, slotId = slotId)),
+    suspend fun startWorkout(
+        opDate: String = today(),
+        slotId: Long? = null,
+        name: String? = null,
+    ): Long {
+        /*
+         * THE FORGOTTEN ONE IS CLOSED ON THE WAY PAST, silently. Nobody presses "finish"
+         * reliably, and the alternative to closing it here is two workouts open at once —
+         * after which "the one in progress" has to guess, which is what the midnight rule
+         * used to do and what §13 replaced. Silent because there is nothing to decide: the
+         * user has just said, by starting this one, that the previous one is over.
+         */
+        openWorkoutRow(allEvents())?.let { finishWorkout(it.id) }
+        val slot = slotId?.let { db.slots().byId(it) }
+        return db.events().insert(
+            event(
+                type = TYPE_WORKOUT_STARTED,
+                payload = payloadJson.encodeToString(
+                    WorkoutStarted(
+                        opDate = opDate,
+                        slotId = slotId,
+                        slotUid = slot?.uid,
+                        name = (name ?: slot?.name)?.trim()?.takeIf { it.isNotEmpty() },
+                    ),
+                ),
             )
         )
+    }
 
     /**
      * Puts an exercise into a workout with a chosen rest, before any set of it exists.
@@ -138,17 +266,66 @@ class ActivityRepository(private val db: AppDatabase) {
      * [WorkoutExerciseAdded] for why the payload carries it too.
      */
     suspend fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int): Long {
+        val workoutUid = db.events().byId(workoutId)?.uid
+        val exerciseUid = db.exercises().byId(exerciseId)?.uid
         val id = db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_WORKOUT_EXERCISE_ADDED,
+            event(
+                type = TYPE_WORKOUT_EXERCISE_ADDED,
                 payload = payloadJson.encodeToString(
-                    WorkoutExerciseAdded(workoutId = workoutId, exerciseId = exerciseId, restSec = restSec)
+                    WorkoutExerciseAdded(
+                        workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
+                        workoutUid = workoutUid, exerciseUid = exerciseUid,
+                    )
                 ),
                 workoutId = workoutId,
+                workoutUid = workoutUid,
             )
         )
         setDefaultRest(exerciseId, restSec)
         return id
+    }
+
+    /**
+     * Copies a plan's composition into a workout, in order, and hands back the rows written.
+     *
+     * ── A COPY, never a reference (§13.7) ───────────────────────────────────────
+     * The plan is editable and the facts are not. Rewriting a slot next month must not
+     * rewrite what a workout done in August consisted of, so the exercises are written INTO
+     * the workout as ordinary "exercise added" events — the same events the user's own taps
+     * produce, indistinguishable afterwards, which is also why nothing downstream had to
+     * learn about plans.
+     *
+     * ── Which rest wins ─────────────────────────────────────────────────────────
+     * The one ON THE PLAN when the plan names one, because a rest written next to an exercise
+     * in a planned session is a statement about THAT session. Failing that, [restHintSec]
+     * answers in its usual order: what the user last chose for the exercise, then what the
+     * journal says they actually rested, then the configured default. §13.8 left this open;
+     * this is the answer, and it is the only order in which the more specific statement wins.
+     *
+     * ── Two things it deliberately does anyway ──────────────────────────────────
+     * A planned exercise that is no longer in the catalog is still added: the workout should
+     * consist of what was planned, and a card for an exercise this phone cannot build a form
+     * for is already a state the screen handles. And [addExerciseToWorkout] writes the rest
+     * onto the catalog row as well, so a rest that came off the PLAN becomes the exercise's
+     * remembered answer — which is right when the plan is where the user last thought about
+     * it, and is a side effect worth knowing about either way.
+     *
+     * Reads the slot's rows directly rather than through `plannedExercises` over the whole
+     * plan: same list, one query, and this path only ever holds an id.
+     */
+    suspend fun copyPlannedExercises(
+        workoutId: Long,
+        slotId: Long,
+        settings: TimerSettings,
+    ): List<Long> {
+        val planned = slotExercises(slotId)
+        if (planned.isEmpty()) return emptyList()
+        val events = allEvents()
+        return planned.map { entry ->
+            val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
+                ?: restHintSec(settings, events, exercise(entry.exerciseId)?.toRef())
+            addExerciseToWorkout(workoutId, entry.exerciseId, rest)
+        }
     }
 
     /** Remembers the rest chosen for an exercise — see [ExerciseDao.setDefaultRest]. */
@@ -159,17 +336,131 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun setLedByProtocol(exerciseId: Long, ledByProtocol: Boolean?) =
         db.exercises().setLedByProtocol(exerciseId, ledByProtocol)
 
+    /** "This one is done one hand at a time" — see [ExerciseDao.setOneSided]. */
+    suspend fun setOneSided(exerciseId: Long, oneSided: Boolean) =
+        db.exercises().setOneSided(exerciseId, oneSided)
+
+    /** What share of body weight this exercise lifts — see [ExerciseDao.setBodyweightShare]. */
+    suspend fun setBodyweightShare(exerciseId: Long, share: Double?) =
+        db.exercises().setBodyweightShare(exerciseId, share)
+
     /**
      * Cancels a set: the journal is append-only, so a REVERSING event is written while
      * the set itself stays in the history (the reducers exclude it).
+     *
+     * KEPT AS IT WAS, still writing the old event type, even though [deleteEntry] says the same
+     * thing about any event and is what new callers should use. Two reasons: every journal in
+     * existence is full of `set_cancel` and the readers have to understand it regardless, and a
+     * method that quietly started writing a different event type would make the rows this app
+     * wrote before and after the change distinguishable for no benefit to anyone.
      */
     suspend fun cancelSet(eventId: Long): Long =
         db.events().insert(
-            EventEntity(
-                ts = now(), type = TYPE_SET_CANCEL,
-                payload = payloadJson.encodeToString(SetCancel(eventId)),
+            event(
+                type = TYPE_SET_CANCEL,
+                // both links: the uid is what the reducers read, the number is what a build
+                // older than schema version 9 would look for
+                payload = payloadJson.encodeToString(
+                    SetCancel(cancels = eventId, cancelsUid = db.events().byId(eventId)?.uid)
+                ),
             )
         )
+
+    // --- correcting and removing what was written (domain/Amendments.kt folds it) ---
+
+    /**
+     * Removes ANY event from every reading of the journal — a set, a workout started by
+     * mistake, an exercise added to the wrong one, or an earlier deletion.
+     *
+     * Nothing is deleted from the table: this appends an event naming the one to stop reading,
+     * and [journalView] is what turns the pair into an answer. Deleting a deletion is therefore
+     * how something comes back, and it needs no special method — this one, pointed at the
+     * deletion's own row.
+     *
+     * Returns the id of the event written, or null when [eventId] names no row here. Null
+     * rather than a throw because the only way to reach this with a stale id is a screen that
+     * was drawn before somebody removed the row, and a tap arriving one recomposition late
+     * should do nothing rather than crash.
+     */
+    suspend fun deleteEntry(eventId: Long): Long? {
+        val uid = db.events().byId(eventId)?.uid ?: return null
+        return db.events().insert(
+            event(
+                type = TYPE_ENTRY_DELETED,
+                payload = payloadJson.encodeToString(EntryDeleted(targetUid = uid)),
+            )
+        )
+    }
+
+    /**
+     * Corrects the values of an event already written: [fields] is a fragment of its payload
+     * carrying only what changed.
+     *
+     * ── What it refuses, and why refusing is the point ──────────────────────────
+     * Two checks, and both throw rather than writing something the readers would have to make
+     * the best of:
+     *
+     *  - a field in [AMENDMENT_PROTECTED_KEYS] — moving a set to another exercise is a deletion
+     *    and a new entry, never a correction (see [TYPE_ENTRY_AMENDED]);
+     *  - a patch that leaves the payload UNREADABLE. The merged result is parsed here, before
+     *    anything is written, exactly as the readers will parse it. Without this a correction
+     *    of "6" to "0" reps would be accepted, and the entry would then vanish from every
+     *    screen — a deletion the user never asked for, arriving disguised as an edit. Service
+     *    events ([TYPE_WORKOUT_STARTED], [TYPE_WORKOUT_EXERCISE_ADDED]) are checked the same
+     *    way against their own payload classes.
+     *
+     * Returns the id of the amendment, or null when [eventId] names no row (see [deleteEntry]).
+     */
+    suspend fun amendEntry(eventId: Long, fields: JsonObject): Long? {
+        val target = db.events().byId(eventId) ?: return null
+        val refused = fields.keys.filter { it in AMENDMENT_PROTECTED_KEYS }
+        require(refused.isEmpty()) {
+            "an amendment may not change which exercise or workout an entry belongs to: $refused"
+        }
+        require(fields.isNotEmpty()) { "an amendment with no fields corrects nothing" }
+        // parsed exactly as a reader would, so a patch that would make the entry unreadable
+        // fails here instead of making it disappear later
+        checkAmendedPayload(target.type, target.payload, fields)
+        return db.events().insert(
+            event(
+                type = TYPE_ENTRY_AMENDED,
+                payload = payloadJson.encodeToString(
+                    EntryAmended(targetUid = target.uid, fields = fields)
+                ),
+            )
+        )
+    }
+
+    /**
+     * Corrects an activity entry from the whole form the editor is holding.
+     *
+     * The convenience the screens will actually use: an edit dialog has a filled-in form, not a
+     * diff. The protected keys are STRIPPED rather than refused here — the form necessarily
+     * carries the exercise it belongs to, and making every caller remove it by hand would be a
+     * rule enforced by remembering it. What that means in one sentence: the values and the date
+     * of [updated] are applied, and the exercise it names is ignored.
+     */
+    suspend fun amendEntry(eventId: Long, updated: ActivityForm): Long? {
+        val fields = JsonObject(updated.toJsonObject().filterKeys { it !in AMENDMENT_PROTECTED_KEYS })
+        return amendEntry(eventId, fields)
+    }
+
+    /**
+     * Throws unless the target's payload survives the patch. Sets are checked through
+     * [formFromEvent], which is the reader; the two service events have no entry there and are
+     * checked against the classes their own readers use.
+     */
+    private fun checkAmendedPayload(type: String, payload: String, fields: JsonObject) {
+        val base = payloadJson.parseToJsonElement(payload) as? JsonObject
+            ?: throw IllegalArgumentException("event $type has no readable payload to amend")
+        val merged = JsonObject(LinkedHashMap(base).apply { putAll(fields) })
+        val text = payloadJson.encodeToString(JsonObject.serializer(), merged)
+        when (type) {
+            TYPE_WORKOUT_STARTED -> payloadJson.decodeFromString<WorkoutStarted>(text)
+            TYPE_WORKOUT_EXERCISE_ADDED -> payloadJson.decodeFromString<WorkoutExerciseAdded>(text)
+            else -> formFromEvent(type, text)
+        }
+    }
 
     // --- exercise catalog (§11) ---
 
@@ -178,20 +469,32 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun exercise(id: Long): ExerciseEntity? = db.exercises().byId(id)
 
     /**
-     * Creates an exercise. Deduplication by NORMALIZED name is advisory, same as on the
-     * server (there is no UNIQUE index): if an exercise with that name already exists,
-     * its id is returned.
+     * The exercise with this IDENTITY, creating it if there is none: name, form, edge and
+     * work:rest protocol together (see [ExerciseIdentity]), not the name on its own.
+     *
+     * ── What this used to do, and what it cost ─────────────────────────────────
+     * It looked for a row with the same normalized NAME and returned it, dropping the edge
+     * and the protocol it had been handed without a word. §12-A says those are part of what a
+     * hangboard exercise IS, so adding hangs on a 15 mm edge while 20 mm hangs existed handed
+     * back the 20 mm row: two exercises became one, every set went into one history, and
+     * nothing anywhere said so. The only thing that ever prevented it was the user's habit of
+     * typing the edge into the name.
+     *
+     * Now a different edge, a different protocol or a different form is a DIFFERENT EXERCISE
+     * and gets a row of its own — which is also what the UNIQUE index added in schema version
+     * 15 enforces, so this lookup and the constraint cannot disagree.
      *
      * ── What a found row does and does not pick up ──────────────────────────────
-     * Name, form, edge and protocol of an existing row are NEVER touched. Those four are the
-     * exercise's IDENTITY (§12-A puts edge and protocol in it), and quietly rewriting them
-     * from whatever a caller passed would move an exercise's history onto a different
-     * exercise — the failure this whole catalog exists to prevent.
+     * Nothing about its identity, because a row can only be found by matching it exactly.
      *
-     * [defaultRestSec] is the one exception, and only when it is given. It is a PREFERENCE,
-     * not identity: "I want two and a half minutes between these" is a statement about the
-     * next set, it replaces the previous answer to the same question by design, and it
-     * carries no history that a rewrite could strand.
+     * [defaultRestSec] is written when it is given, because it is a PREFERENCE: "I want two
+     * and a half minutes between these" replaces the previous answer to the same question by
+     * design and strands no history.
+     *
+     * A HIDDEN row that is found comes back into the pickers. Hiding says "do not offer me
+     * this any more"; typing its name and logging a set says the opposite, and leaving it
+     * hidden would mean an exercise that is being trained and cannot be found in the list to
+     * train it again.
      */
     suspend fun ensureExercise(
         name: String,
@@ -201,9 +504,10 @@ class ActivityRepository(private val db: AppDatabase) {
         restSec: Double? = null,
         defaultRestSec: Int? = null,
     ): Long {
-        val want = normPhrase(name)
-        db.exercises().all().firstOrNull { normPhrase(it.name) == want }?.let { found ->
+        val key = exerciseIdentityKey(name, form.code, edgeMm, workSec, restSec)
+        db.exercises().byIdentityKey(key)?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
+            if (found.hidden) setHidden(found.id, false)
             return found.id
         }
         return db.exercises().insert(
@@ -214,6 +518,80 @@ class ActivityRepository(private val db: AppDatabase) {
             )
         )
     }
+
+    /**
+     * Corrects what an exercise is: the name it was given, the edge it is done on, the
+     * protocol it is run at. The form is deliberately absent — see below.
+     *
+     * ── What this does to the history, said out loud ───────────────────────────
+     * Nothing is rewritten, and the sets do not move. Every set names its exercise by uid, so
+     * they all stay with this row and its records, charts and totals are computed over the
+     * same sets as before.
+     *
+     * What DOES change is what those sets mean. A hangboard set carries a SNAPSHOT of the edge
+     * and protocol it was performed at (see HoldSet), so after correcting an edge from 20 to 15
+     * the row says 15 mm while sets recorded before the correction still say 20. That is the
+     * honest record of a typo being fixed: the sets were performed on whatever the user
+     * actually used, and the app was never told. It is also the record of a genuine mistake if
+     * the edit is wrong — an exercise really trained on 20 mm, relabelled 15, now has a history
+     * that claims a harder edge than was ever hung on.
+     *
+     * The app cannot tell those two apart, so it does neither automatically. THIS EDIT IS FOR
+     * CORRECTING WHAT THE CATALOG SAYS, not for recording a change of training. An exercise
+     * that has genuinely moved to a different edge is a different exercise under §12-A and
+     * should be created as one; it will then have its own history from that day, which is what
+     * actually happened.
+     *
+     * ── Why the form cannot be changed ─────────────────────────────────────────
+     * The form decides the SHAPE of the payload a set is written in. Changing it would leave
+     * every set already logged in the old shape, read by a screen expecting the new one — a
+     * strength history that the hold reducers cannot read, in the one place where being able
+     * to read the history is the whole product. Getting the form wrong means creating the
+     * exercise again and hiding the mistake.
+     *
+     * Returns what happened, because the identity is unique in the schema and "there is
+     * already an exercise like that" is a normal answer the user has to be given rather than
+     * a crash.
+     *
+     * NONE OF THE THREE NUMBERS HAS A DEFAULT, deliberately. Null here means "this exercise
+     * has no edge / no protocol", not "leave whatever is stored alone", and a default would
+     * make forgetting an argument the way to silently strip a hangboard exercise of the two
+     * values that decide which sets are its own.
+     */
+    suspend fun editExercise(
+        id: Long,
+        name: String,
+        edgeMm: Double?,
+        workSec: Double?,
+        restSec: Double?,
+    ): ExerciseEdit {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return ExerciseEdit.Blank
+        val stored = db.exercises().byId(id) ?: return ExerciseEdit.Gone
+        val key = exerciseIdentityKey(trimmed, stored.form, edgeMm, workSec, restSec)
+        // asked before it is attempted, so the ordinary collision is an answer rather than a
+        // caught exception; the constraint is still there underneath as the thing that makes
+        // the answer true
+        db.exercises().byIdentityKey(key)?.let { clash ->
+            if (clash.id != id) return ExerciseEdit.Taken(clash.name)
+        }
+        val touched = db.exercises().editIdentity(
+            id = id, name = trimmed, edgeMm = edgeMm, workSec = workSec, restSec = restSec,
+            identityKey = key,
+        )
+        return if (touched == 0) ExerciseEdit.Gone else ExerciseEdit.Saved
+    }
+
+    /**
+     * Keeps an exercise out of the pickers, or brings it back.
+     *
+     * NOT a delete, and there is no delete to offer instead — see [ExerciseEntity.hidden]. A
+     * hidden exercise keeps every set it ever had, goes on counting in the totals it always
+     * counted in, and stays reachable from the overview, which is where it is brought back
+     * from.
+     */
+    suspend fun setHidden(exerciseId: Long, hidden: Boolean) =
+        db.exercises().setHidden(exerciseId, hidden)
 
     // --- calendar slots (§12-B) ---
 
@@ -321,6 +699,7 @@ class ActivityRepository(private val db: AppDatabase) {
  */
 fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
     id = id,
+    uid = uid,
     name = name,
     form = runCatching { ExerciseForm.fromCode(form) }.getOrDefault(ExerciseForm.TICK),
     edgeMm = edgeMm,
@@ -328,19 +707,42 @@ fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
     restSec = protocolRestSec,
     defaultRestSec = defaultRestSec,
     ledByProtocolFlag = ledByProtocol,
+    oneSided = oneSided,
 )
 
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,
-    workoutId = workoutId,
+    workoutId = workoutId, uid = uid, workoutUid = workoutUid,
+    opDate = opDate, tsUtc = tsUtc, tzOffsetMin = tzOffsetMin,
 )
 
 fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
     id = id, name = name, atTime = atTime, repeatRule = repeatRule, anchorDate = anchorDate,
-    exercises = exercises,
+    exercises = exercises, uid = uid,
 )
 
 fun SlotExerciseEntity.toPlanned() = PlannedExercise(exerciseId = exerciseId, restSec = restSec)
+
+/**
+ * What came of correcting an exercise — see [ActivityRepository.editExercise].
+ *
+ * A result rather than an exception or a bare Boolean, because two of these four are things
+ * the person typing has to be TOLD, in words that name the exercise they collided with. A
+ * Boolean would have made "there is already one of those" and "somebody deleted it while the
+ * dialog was open" the same answer, and the right thing to say about them is not the same.
+ */
+sealed interface ExerciseEdit {
+    data object Saved : ExerciseEdit
+
+    /** A name of nothing but spaces. Refused here as well as on screen; see [saveSlot]. */
+    data object Blank : ExerciseEdit
+
+    /** The row is not there any more — nothing was written. */
+    data object Gone : ExerciseEdit
+
+    /** Another exercise already has this identity. [name] is what it is called. */
+    data class Taken(val name: String) : ExerciseEdit
+}
 
 /**
  * Slot rows plus their composition rows -> the plan as the domain sees it.

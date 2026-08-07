@@ -14,10 +14,12 @@ import java.util.Locale
  * any month is computed from a handful of slots, and editing a slot changes all its
  * future occurrences at once.
  *
- * STATUS IS PER SLOT, and it is decided BY TIME. The model still has no stored link from
- * an event to a slot, so the link is inferred — see [matchDay] for the exact rule. Two
- * slots on the same day can end up in different states: the morning gym session done, the
- * evening hangboard still planned.
+ * STATUS IS PER SLOT, and it is decided TWO WAYS. A workout started from a planned session
+ * says which one in its own start event, and such a slot is closed by that workout and by
+ * nothing else. Everything logged WITHOUT pressing start names no plan, and for that the old
+ * inference by clock time remains — see [matchDay], which writes out both rules and the places
+ * they disagree. Two slots on the same day can end up in different states: the morning gym
+ * session done, the evening hangboard still planned.
  *
  * WHAT THE RULES DELIBERATELY LACK: UNTIL, EXDATE/RDATE, intervals other than 1, and
  * several weekdays in one slot — "Gym on Mon/Thu" is TWO weekly slots.
@@ -83,7 +85,36 @@ data class Slot(
     val repeatRule: String,
     val anchorDate: String,
     val exercises: List<PlannedExercise> = emptyList(),
-)
+    /**
+     * Identity of the plan row ([xyz.oleolegka.gachimuchi.data.db.SlotEntity.uid]), or null for
+     * a slot built by hand in a test rather than read out of the database.
+     *
+     * A workout started from this slot records it, so that "which plan was this" keeps its
+     * answer in a journal that has left the phone it was written on.
+     */
+    val uid: String? = null,
+) {
+    /** How a workout names the plan it was started from — see [SlotLink]. */
+    val link: SlotLink get() = SlotLink(uid, id)
+}
+
+/**
+ * Which planned session a workout was started from — the identity where the start event has
+ * one, and the local row number where it is old enough not to.
+ *
+ * Same shape and same rule as [ExerciseLink]: identities decide whenever both sides can speak
+ * them, and a number is consulted only when one of the two cannot. Two phones number their
+ * plans independently, so a number alone would let a merged journal claim a workout was
+ * started from somebody else's Tuesday.
+ *
+ * Null is not represented here: a workout started off-plan has no [SlotLink] at all.
+ */
+data class SlotLink(val uid: String?, val id: Long?) {
+
+    /** Whether two references name the same planned session. */
+    fun matches(other: SlotLink): Boolean =
+        if (uid != null && other.uid != null) uid == other.uid else id != null && id == other.id
+}
 
 /**
  * What is planned in one slot, for a caller that holds the plan and a slot id rather than
@@ -166,7 +197,26 @@ data class DayStatus(
  * time it was trained. Such an entry still counts as a fact for its day, it just cannot
  * be attributed to a slot by time.
  */
-data class ActivityStamp(val id: Long, val day: String, val minuteOfDay: Int?)
+data class ActivityStamp(
+    val id: Long,
+    val day: String,
+    val minuteOfDay: Int?,
+    /**
+     * The planned session the workout this entry was recorded during was STARTED FROM, or null
+     * when it was recorded outside a workout or in one started off-plan.
+     *
+     * A STATEMENT RATHER THAN A GUESS — the button that started the workout was on that slot's
+     * own card — and [matchDay] treats it as one, ignoring the clock entirely for such an entry.
+     *
+     * It rides on the ENTRY and not on the workout because the calendar sees nothing but
+     * entries, and that has a consequence worth stating: a workout that was started from a slot
+     * and then had nothing logged into it produces no stamp at all, so it closes nothing and the
+     * slot stays outstanding. That is the right answer — a session started and abandoned is not
+     * a session that was done — and it is why the day screen still hides such a plan by its own
+     * rule (see domain/DayCards.kt) rather than through this one.
+     */
+    val slot: SlotLink? = null,
+)
 
 /** "HH:MM" -> minutes since midnight; null for null or unparsable input. */
 fun parseMinuteOfDay(at: String?): Int? {
@@ -183,18 +233,33 @@ fun parseMinuteOfDay(at: String?): Int? {
  * Journal events turned into calendar facts over the inclusive [dateFrom]..[dateTo]
  * range. Body weight is excluded through [FACT_TYPES] — stepping on the scales is not
  * training.
+ *
+ * This is also where an entry picks up the plan it was recorded against
+ * ([ActivityStamp.slot]): the link lives on the workout's start event, not on the entry, so
+ * it has to be carried across here — the calendar never sees a [Workout].
  */
 fun activityStamps(
     events: List<JournalEvent>,
     dateFrom: String,
     dateTo: String,
     types: Collection<String> = FACT_TYPES,
-): List<ActivityStamp> = readActivities(events, types, dateFrom, dateTo).map { ev ->
-    // ts is "YYYY-MM-DDTHH:MM:SS" (data/ActivityRepository.now); only a timestamp from the
-    // SAME day as the entry tells us anything about when the training took place
-    val sameDay = ev.ts.length >= 16 && ev.ts.startsWith(ev.opDate + "T")
-    val minute = if (sameDay) parseMinuteOfDay(ev.ts.substring(11, 16)) else null
-    ActivityStamp(id = ev.id, day = ev.opDate, minuteOfDay = minute)
+): List<ActivityStamp> {
+    // resolved once for the whole range: doing it per entry would walk the journal again for
+    // every set in it, and a month of the calendar asks for a lot of sets
+    val startedFromAPlan = workoutStarts(events).mapNotNull { (row, started) ->
+        started?.slotLink()?.let { row to it }
+    }
+    return readActivities(events, types, dateFrom, dateTo).map { ev ->
+        // ts is "YYYY-MM-DDTHH:MM:SS" (data/ActivityRepository.now); only a timestamp from the
+        // SAME day as the entry tells us anything about when the training took place
+        val sameDay = ev.ts.length >= 16 && ev.ts.startsWith(ev.opDate + "T")
+        val minute = if (sameDay) parseMinuteOfDay(ev.ts.substring(11, 16)) else null
+        val ref = ev.workout
+        val slot = if (ref == null) null else {
+            startedFromAPlan.firstOrNull { (start, _) -> ref.matches(start) }?.second
+        }
+        ActivityStamp(id = ev.id, day = ev.opDate, minuteOfDay = minute, slot = slot)
+    }
 }
 
 /**
@@ -254,8 +319,16 @@ internal fun windowClosesAt(occ: SlotOccurrence): LocalDateTime {
  * Which activity closes which slot on ONE day. Returns slot index -> activity id;
  * a slot missing from the map was not closed.
  *
- * THE RULE, in full (it has to be predictable, so it is written out rather than tuned):
+ * [acts] must arrive in the day's stable order (see [planVsFact]) — both halves of the rule
+ * below break ties by it, so a different order would be a different verdict.
  *
+ * ── The statement, which is asked first ─────────────────────────────────────────
+ * 0. An entry recorded during a workout that was STARTED FROM a slot ([ActivityStamp.slot])
+ *    closes THAT slot and no other one. These pairs are made before anything else and the
+ *    clock is not consulted for them at all. An entry that names a plan is then FINISHED
+ *    WITH, whether it closed anything or not: it never falls through to the guess below.
+ *
+ * ── The guess, for everything that named no plan ────────────────────────────────
  * 1. Each activity closes AT MOST ONE slot, and each slot needs its own activity — two
  *    slots and one workout means one of them stays open.
  * 2. A slot can only be closed once its window has OPENED ([windowOpensAt]). A slot whose
@@ -271,6 +344,34 @@ internal fun windowClosesAt(occ: SlotOccurrence): LocalDateTime {
  *    (earliest slot first).
  * 5. Whatever is left over stays unmatched: such an activity is UNPLANNED training, and
  *    such a slot is missed once its window has closed.
+ *
+ * ── Where the statement and the guess disagree ──────────────────────────────────
+ * The guess has one defect that cannot be tuned away: it never looks at WHAT was trained, so
+ * a set of push-ups closes a planned gym session as well as the gym session would. Rule 0 is
+ * the fix, and it changes three verdicts.
+ *
+ * **A workout started from a slot but recorded far from its time.** The old rule left the
+ * slot missed and the sets unplanned; now the slot is done. Rule 2 does not apply to it
+ * either — sets logged at noon close a session planned for eight in the evening if that is
+ * the session they were started from. Rule 2 exists to stop an UNRELATED entry claiming a
+ * session that has not happened yet, and nothing here is unrelated: somebody pressed start on
+ * that card. The plan was answered early rather than not at all.
+ *
+ * **Two workouts started from the same slot.** One slot is one session, so the FIRST entry in
+ * the day's order closes it and everything the other workout recorded stays unmatched —
+ * unplanned training on a day that also had a plan. Deliberately not "both close it" (nothing
+ * downstream can hold two activities against one slot) and deliberately not "the second one
+ * goes to the guess" (see below).
+ *
+ * **A workout naming a slot that is not on the day** — the slot was deleted, its rule was
+ * edited so this date is no longer one of its occurrences, or the journal was merged in from a
+ * phone whose plans this one does not have. There is nothing to close: those entries stay
+ * unmatched and any OTHER slot on the day stays open, exactly as if that training had not
+ * happened. They are not handed back to the guess, and that is the whole point of the change —
+ * a workout that says "this was Tuesday's gym" must not be allowed to close Tuesday's
+ * hangboard instead just because the two times are close. The cost is real and is the same one
+ * [deletionWarning] already promises out loud: removing a plan un-plans the days it sat on, so
+ * a day that read as done can go back to reading as merely trained.
  */
 internal fun matchDay(
     occs: List<SlotOccurrence>,
@@ -278,15 +379,28 @@ internal fun matchDay(
     now: LocalDateTime,
 ): Map<Int, Long> {
     if (occs.isEmpty() || acts.isEmpty()) return emptyMap()
+
+    val taken = HashMap<Int, Long>()
+    // Rule 0. A slot occurs at most once in a day, so "the first occurrence that matches" is
+    // the only one; the second entry naming an already-closed slot closes nothing.
+    for (act in acts) {
+        val link = act.slot ?: continue
+        val occIdx = occs.indexOfFirst { it.slot.link.matches(link) }
+        if (occIdx >= 0 && occIdx !in taken) taken[occIdx] = act.id
+    }
+
     // tier 0 = matched by time, tier 1 = fallback; inside a tier the closest pair wins,
     // then the earlier slot, then the earlier activity
     data class Candidate(val tier: Int, val cost: Int, val occIdx: Int, val actIdx: Int)
 
     val candidates = ArrayList<Candidate>()
     occs.forEachIndexed { occIdx, occ ->
+        if (occIdx in taken) return@forEachIndexed
         if (now.isBefore(windowOpensAt(occ))) return@forEachIndexed
         val slotMinute = occ.minuteOfDay
         acts.forEachIndexed { actIdx, act ->
+            // an entry that named its plan was dealt with above and is out of the guess
+            if (act.slot != null) return@forEachIndexed
             val actMinute = act.minuteOfDay
             if (slotMinute != null && actMinute != null) {
                 val delta = actMinute - slotMinute
@@ -298,7 +412,6 @@ internal fun matchDay(
         }
     }
     candidates.sortWith(compareBy({ it.tier }, { it.cost }, { it.occIdx }, { it.actIdx }))
-    val taken = HashMap<Int, Long>()
     val usedActs = HashSet<Int>()
     for (c in candidates) {
         if (c.occIdx in taken || c.actIdx in usedActs) continue

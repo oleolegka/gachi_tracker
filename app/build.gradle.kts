@@ -58,6 +58,13 @@ android {
 
     buildFeatures {
         compose = true
+        /*
+         * BuildConfig is generated for one reason: the settings tab shows the version that
+         * is installed. Updates arrive through Obtainium rather than a store, so there is
+         * no listing anywhere saying what is on the phone, and a bug report about a version
+         * nobody can name is a bug report about nothing.
+         */
+        buildConfig = true
     }
 
     testOptions {
@@ -76,6 +83,16 @@ tasks.withType<Test>().configureEach {
         systemProperty("robolectric.offline", "true")
         systemProperty("robolectric.dependency.dir", dir)
     }
+
+    /*
+     * Gradle gives a test JVM 512 MB by default, which is plenty for the reducer tests and
+     * not enough for the screen tests: laying out text under Robolectric goes through
+     * ShadowLineBreaker, which registers every native object it fakes in a registry that is
+     * never swept, so a few dozen composed screens exhaust the heap and the tests start
+     * failing with OutOfMemoryError in whatever ran last — a failure that says nothing
+     * whatever about the code under test.
+     */
+    maxHeapSize = "2g"
 }
 
 dependencies {
@@ -108,7 +125,26 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    // Room and the seed are verified by running them on the JVM (Robolectric); no emulator needed
+    // Room and the screens are verified by running them on the JVM (Robolectric); no emulator needed
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+
+    /*
+     * Compose screens are tested on the JVM as well: `createComposeRule` under the
+     * Robolectric runner, so `./gradlew test` covers them and there is no second command
+     * and no device. The BOM has to be repeated on the test classpath — a platform applies
+     * to one configuration only, and without it ui-test-junit4 would arrive versionless.
+     */
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+
+    /*
+     * `createComposeRule` launches a ComponentActivity, which has to be DECLARED in the
+     * manifest Robolectric reads — and that is the app's own debug manifest, not the test
+     * one. This artifact is nothing but that declaration, which is why it is
+     * debugImplementation (as Google documents it) rather than testImplementation: on the
+     * test configuration the activity would never reach the merged manifest and every
+     * screen test would die with "unable to resolve activity".
+     */
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

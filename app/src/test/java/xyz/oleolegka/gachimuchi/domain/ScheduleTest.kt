@@ -23,6 +23,15 @@ class ScheduleTest {
     /** An entry backfilled later: it counts for its day, but its clock time says nothing. */
     private fun backfilled(id: Long, day: LocalDate) = ActivityStamp(id, day.toString(), null)
 
+    /**
+     * An entry recorded during a workout that was STARTED FROM the plan card of [slotId].
+     *
+     * By number rather than by identity, because [slot] above builds slots with no uid — which
+     * is the case [SlotLink.matches] falls back to the number for.
+     */
+    private fun fromPlan(id: Long, day: LocalDate, at: String, slotId: Long) =
+        ActivityStamp(id, day.toString(), parseMinuteOfDay(at), SlotLink(null, slotId))
+
     private fun at(day: LocalDate, time: String): LocalDateTime =
         day.atStartOfDay().plusMinutes(parseMinuteOfDay(time)!!.toLong())
 
@@ -198,6 +207,104 @@ class ScheduleTest {
         assertEquals(DayState.MISS, day.state)
     }
 
+    // --- the plan a workout was started from beats the clock ---
+    //
+    // Every test here would come out differently under the old rule, which is the point of
+    // having them: they are the places the guess and the statement disagree (matchDay).
+
+    @Test
+    fun `a workout started from a plan closes it however far from its time it was recorded`() {
+        val slots = listOf(slot(1, "Gym", REPEAT_NONE, monday, "18:00"))
+        // six hours early: nowhere near the window the guess would have accepted
+        val day = planVsFact(
+            slots, listOf(fromPlan(1, monday, "12:00", slotId = 1)), monday, monday,
+            at(monday, "23:00"),
+        ).single()
+
+        assertEquals(listOf(SlotState.DONE), day.slots.map { it.state })
+        assertEquals(1L, day.slots.single().closedByActivityId)
+        assertEquals(0, day.unmatchedActivities)
+    }
+
+    @Test
+    fun `a workout started from a plan closes it before its time has even come`() {
+        // the guard from the reported bug (a slot whose window has not opened cannot be done)
+        // does not apply to an entry that names its plan: nobody guessed, the button was on it
+        val slots = listOf(slot(1, "Bouldering gym", REPEAT_NONE, monday, "20:00"))
+        val day = planVsFact(
+            slots, listOf(fromPlan(1, monday, "09:30", slotId = 1)), monday, monday,
+            at(monday, "10:00"),
+        ).single()
+
+        assertEquals(listOf(SlotState.DONE), day.slots.map { it.state })
+        assertEquals(DayState.DONE, day.state)
+    }
+
+    @Test
+    fun `two workouts started from one plan close it once, the second is unplanned`() {
+        val slots = listOf(slot(1, "Gym", REPEAT_NONE, monday, "18:00"))
+        val acts = listOf(fromPlan(2, monday, "18:05", slotId = 1), fromPlan(1, monday, "08:00", slotId = 1))
+        val day = planVsFact(slots, acts, monday, monday, at(monday, "23:00")).single()
+
+        // the day's order decides, not the journal order the list was written in: 08:00 first
+        assertEquals(listOf(SlotState.DONE), day.slots.map { it.state })
+        assertEquals(setOf(1L), day.closedByActivityIds)
+        assertEquals(1, day.unmatchedActivities)
+    }
+
+    @Test
+    fun `an entry naming a plan that is not on the day closes nothing at all`() {
+        // slot 9 was deleted, or its rule moved off this date; slot 1 is right there and near
+        // in time, and the old rule would have closed it — a workout must not drift like that
+        val slots = listOf(slot(1, "Hangboard", REPEAT_NONE, monday, "18:00"))
+        val day = planVsFact(
+            slots, listOf(fromPlan(1, monday, "18:05", slotId = 9)), monday, monday,
+            at(monday, "23:00"),
+        ).single()
+
+        assertEquals(listOf(SlotState.MISS), day.slots.map { it.state })
+        assertEquals(1, day.unmatchedActivities)
+        assertEquals(DayState.MISS, day.state)
+    }
+
+    @Test
+    fun `a named plan is closed by its own workout while the guess handles the rest`() {
+        val slots = listOf(
+            slot(1, "Gym", REPEAT_NONE, monday, "08:00"),
+            slot(2, "Hangboard", REPEAT_NONE, monday, "20:00"),
+        )
+        // the hangboard session was started from its card but done in the morning; the loose
+        // 08:20 entry is the only thing left for the gym slot, and it still gets it
+        val acts = listOf(fromPlan(1, monday, "07:50", slotId = 2), act(2, monday, "08:20"))
+        val day = planVsFact(slots, acts, monday, monday, at(monday, "23:00")).single()
+
+        assertEquals(listOf(SlotState.DONE, SlotState.DONE), day.slots.map { it.state })
+        assertEquals(2L, day.slots[0].closedByActivityId)
+        assertEquals(1L, day.slots[1].closedByActivityId)
+    }
+
+    @Test
+    fun `an entry naming a plan is not offered to the guess even when it closes nothing`() {
+        val slots = listOf(slot(1, "Gym", REPEAT_NONE, monday, "18:00"))
+        // both entries name slot 9, which is not here; slot 1 stays open rather than being
+        // closed by whichever of them happens to sit nearest to it
+        val acts = listOf(fromPlan(1, monday, "18:05", slotId = 9), fromPlan(2, monday, "18:20", slotId = 9))
+        val day = planVsFact(slots, acts, monday, monday, at(monday, "23:00")).single()
+
+        assertEquals(listOf(SlotState.MISS), day.slots.map { it.state })
+        assertEquals(2, day.unmatchedActivities)
+    }
+
+    @Test
+    fun `an entry recorded during a workout started off-plan is still matched by time`() {
+        // the guess is not gone, it is only narrowed: a workout with no slot link behaves
+        // exactly as everything did before
+        val slots = listOf(slot(1, "Gym", REPEAT_NONE, monday, "18:00"))
+        val day = planVsFact(slots, listOf(act(1, monday, "18:10")), monday, monday, at(monday, "23:00")).single()
+
+        assertEquals(listOf(SlotState.DONE), day.slots.map { it.state })
+    }
+
     // --- slots without a time ---
 
     @Test
@@ -330,6 +437,44 @@ class ScheduleTest {
             )
         )
         assertNull(activityStamps(events, "2026-08-01", "2026-08-31").single().minuteOfDay)
+    }
+
+    @Test
+    fun `an entry carries the plan the workout it was recorded in was started from`() {
+        val start = JournalEvent(
+            id = 1, ts = "2026-08-03T18:00:00", spaceId = 1, authorId = 1,
+            type = TYPE_WORKOUT_STARTED,
+            payload = """{"op_date":"2026-08-03","slot_id":4,"slot_uid":"slot-4"}""",
+        )
+        val events = listOf(
+            start,
+            JournalEvent(
+                id = 2, ts = "2026-08-03T18:20:00", spaceId = 1, authorId = 1,
+                type = TYPE_TICK, payload = """{"activity":"gym","op_date":"2026-08-03"}""",
+                workoutUid = start.uid,
+            ),
+        )
+        assertEquals(
+            SlotLink("slot-4", 4),
+            activityStamps(events, "2026-08-01", "2026-08-31").single().slot,
+        )
+    }
+
+    @Test
+    fun `an entry from a workout started off-plan names no plan`() {
+        val start = JournalEvent(
+            id = 1, ts = "2026-08-03T18:00:00", spaceId = 1, authorId = 1,
+            type = TYPE_WORKOUT_STARTED, payload = """{"op_date":"2026-08-03"}""",
+        )
+        val events = listOf(
+            start,
+            JournalEvent(
+                id = 2, ts = "2026-08-03T18:20:00", spaceId = 1, authorId = 1,
+                type = TYPE_TICK, payload = """{"activity":"gym","op_date":"2026-08-03"}""",
+                workoutUid = start.uid,
+            ),
+        )
+        assertNull(activityStamps(events, "2026-08-01", "2026-08-31").single().slot)
     }
 
     @Test

@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,6 +48,7 @@ import xyz.oleolegka.gachimuchi.domain.volumeSeries
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.BarChart
 import xyz.oleolegka.gachimuchi.ui.components.EmptyState
+import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.IdentityChip
 import xyz.oleolegka.gachimuchi.ui.components.LineChart
@@ -92,10 +96,12 @@ fun FormDetailScreen(
 ) {
     var currentId by remember(exerciseId) { mutableStateOf(exerciseId) }
     var period by remember(exerciseId) { mutableStateOf(Period.MONTH) }
+    var menuOpen by remember(exerciseId) { mutableStateOf(false) }
 
     val entity = state.exerciseById(currentId)
     val form = state.formOf(currentId)
     val colors = LocalGachiColors.current
+    val editor = rememberExerciseEditor()
 
     if (entity == null || form == null) {
         // the exercise vanished from under the screen (a wipe, a reseed): say so and go back
@@ -106,9 +112,22 @@ fun FormDetailScreen(
     }
 
     val activities = remember(state.events) { readActivities(state.events) }
-    val trendAll = remember(activities, currentId, form) { trendSeries(activities, currentId, form) }
-    val volumeAll = remember(activities, currentId, form) { volumeSeries(activities, currentId, form) }
-    val records = remember(activities, currentId, form) { recordsOf(activities, currentId, form) }
+    // the screen navigates by row number; the journal is keyed by identity (see ExerciseLink)
+    val link = remember(state.exercises, currentId) { state.linkOf(currentId) }
+    val trendAll = remember(activities, link, form) { trendSeries(activities, link, form) }
+    /*
+     * The two catalog columns are passed rather than left to their defaults, and the defaults
+     * are the whole hazard: both are the pre-column answer, so omitting them compiles and
+     * quietly draws the old chart. Without the share a pull-up is worth no tonnage at all and
+     * a week of them looks like a week off; without the flag the records block shows one best
+     * for both hands, which is the better hand wearing the exercise's name.
+     */
+    val volumeAll = remember(activities, link, form, entity.bodyweightShare) {
+        volumeSeries(activities, link, form, entity.bodyweightShare)
+    }
+    val records = remember(activities, link, form, entity.oneSided) {
+        recordsOf(activities, link, form, entity.oneSided)
+    }
 
     val siblings = remember(state.exercises, currentId, form) {
         if (form != ExerciseForm.HOLD) emptyList()
@@ -134,6 +153,37 @@ fun FormDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    /*
+                     * The catalog is editable HERE and nowhere else, because this is the screen
+                     * that shows an exercise as a thing in its own right — its name, its edge,
+                     * its protocol, its history — and therefore the screen somebody is looking
+                     * at when they notice one of those is wrong. The picker is for choosing,
+                     * and a menu of corrections in a list you are trying to get out of quickly
+                     * is a menu in the way.
+                     */
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Edit exercise") },
+                            onClick = {
+                                menuOpen = false
+                                editor.edit(entity)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (entity.hidden) "Show in the picker" else "Hide from the picker")
+                            },
+                            onClick = {
+                                menuOpen = false
+                                editor.toggleHidden(entity)
+                            },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

@@ -3,6 +3,8 @@ package xyz.oleolegka.gachimuchi.data.db
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.newUid
 
 /**
  * Local storage schema — a mirror of the server one (`bot/db.py`), so that future sync
@@ -17,6 +19,17 @@ import androidx.room.PrimaryKey
  * The catalog [ExerciseEntity], the slots [SlotEntity] and the composition of a slot
  * [SlotExerciseEntity] are NOT part of the journal: they are editable reference data and the
  * plan (§12-B explicitly allows editing the plan).
+ *
+ * ── Every stored row carries a `uid`, and the numeric `id` is local plumbing ─────
+ * `id` is an autoincrement: a count of how many rows THIS phone has written. It is fine as
+ * a row address inside one database and useless as an identity anywhere else, because a
+ * second device hands out the same numbers to entirely different training. `uid` (schema
+ * version 8, a UUIDv7 — see [newUid]) is the identity that travels: it is what a merge of
+ * two journals matches on, and what an exported file refers to.
+ *
+ * The rule that follows: anything one row says about another row is said in uids. The
+ * numeric columns that predate version 8 are kept alongside for as long as there are
+ * readers on them, and they are the thing to remove, never the thing to add to.
  *
  * `space_id` (the profile) is present everywhere, exactly as on the server:
  * multi-tenancy is preserved in the schema even though the app has exactly one profile
@@ -36,7 +49,11 @@ const val LOCAL_AUTHOR_ID = 1L
 
 @Entity(
     tableName = "events",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "op_date"]),
+    ],
 )
 data class EventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -67,6 +84,80 @@ data class EventEntity(
      * sides and has nothing to stay compatible with.
      */
     @androidx.room.ColumnInfo(name = "workout_id") val workoutId: Long? = null,
+    /** Stable identity of this event across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
+    /**
+     * The same link as [workoutId], said in the identity that travels (schema version 9):
+     * the `uid` of the `workout_started` event that opened the workout this row was recorded
+     * during, or null for "recorded outside any workout".
+     *
+     * BOTH COLUMNS ARE WRITTEN, and the uid is the one the readers believe. The numeric one
+     * stays for rows that predate version 9 — the 8 -> 9 migration fills the uid in for every
+     * one it can resolve, and a row pointing at a workout that is no longer in the journal
+     * keeps its dangling number and nothing else, which is the honest record of what it says.
+     *
+     * There is still deliberately no foreign key, for the reason [workoutId] gives.
+     */
+    @androidx.room.ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
+    /**
+     * The day the entry in this row belongs to (ISO "YYYY-MM-DD"), or null for a row that is
+     * about no training day at all (schema version 16).
+     *
+     * ── The same value the payload carries, and why it is out here as well ──────
+     * `op_date` has lived inside the JSON since the beginning (domain/Forms.kt explains why it
+     * is a different fact from [ts]) and it stays there, because the payload is the EXCHANGE
+     * format shared with the bot and must remain complete on its own. What it could not be
+     * inside the JSON is INDEXED: "the sets of this week" meant reading every payload in the
+     * journal and parsing it to find out whether it was wanted.
+     *
+     * NULL IS A REAL ANSWER, not a gap. A reversal, a correction and a "workout finished" are
+     * about an event, not about a day of training, and giving them the day they were written on
+     * would put them in date ranges they have no business in.
+     *
+     * ── It is what this ROW says, which an amendment can outlive ────────────────
+     * A [xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED] event may move an entry to another
+     * day ("I logged this on Tuesday but did it on Monday"), and the journal is append-only, so
+     * this column on the original row is NOT rewritten — it goes on saying what that row said
+     * when it was written, and the amendment carries the corrected day in its own copy of this
+     * column. The reducers therefore take the amended day as the truth and use the column only
+     * where nothing has been amended; see [xyz.oleolegka.gachimuchi.domain.readActivities].
+     */
+    @androidx.room.ColumnInfo(name = "op_date") val opDate: String? = null,
+    /**
+     * The INSTANT this row was written, in UTC, second precision ("2026-08-06T07:00:00Z"), or
+     * null for a row whose local time could not be read (schema version 16).
+     *
+     * ── What was wrong with [ts] alone ─────────────────────────────────────────
+     * `ts` is a local wall clock with no zone and no offset: "2026-08-06T10:00:00" is a Moscow
+     * morning and a Bangkok afternoon and the row does not say which. That was survivable while
+     * every row was written in one place, and it stops being survivable the moment a journal
+     * travels — two sessions logged either side of a flight sort by the clock on the wall rather
+     * than by which happened first, and the gap between them is off by the difference.
+     *
+     * `ts` IS KEPT, unchanged, and is still what the screens show. It is the reading the user
+     * actually had in front of them, and a set logged at seven in the evening in Bangkok should
+     * go on saying seven in the evening. This column is the same moment said absolutely, so that
+     * ordering and arithmetic have something to be right about.
+     *
+     * Null only for a row whose `ts` will not parse — which no row this app wrote can be, and
+     * which a merged or hand-edited journal can.
+     */
+    @androidx.room.ColumnInfo(name = "ts_utc") val tsUtc: String? = null,
+    /**
+     * How far [ts] is from [tsUtc], in minutes east of UTC (Moscow is 180), or null alongside a
+     * null [tsUtc] (schema version 16).
+     *
+     * Not redundant with the other two, which is the usual objection. It is what makes the local
+     * reading reconstructible from the instant without guessing a zone, and it is the only thing
+     * in the row that answers "where was I when I logged this" — a question a training journal
+     * that has been carried abroad can actually be asked.
+     *
+     * Minutes rather than hours because zones exist that are not on the hour, and an offset
+     * rather than a zone id because the offset is the fact that was true at that moment: a zone
+     * id is a rule that gets amended by governments, and re-reading an old row through today's
+     * rules would silently move it.
+     */
+    @androidx.room.ColumnInfo(name = "tz_offset_min") val tzOffsetMin: Int? = null,
 )
 
 /**
@@ -79,10 +170,22 @@ data class EventEntity(
  * That refactor has not been done on the server yet (it is waiting for the design to
  * settle), so the schema here is DELIBERATELY ahead — when sync arrives, the server
  * will have to add these fields, otherwise identity will drift apart.
+ *
+ * ── The identity is a constraint now, not a convention (schema version 15) ──────
+ * §12-A was a rule written in documentation and obeyed by the readers, while the writer —
+ * the one place that creates rows — looked an exercise up by NAME and handed back whatever
+ * it found. Hangs on a 15 mm edge added while 20 mm hangs existed became 20 mm hangs, and
+ * two histories merged for good, silently. [identityKey] closes it in the schema itself:
+ * the four values that make an exercise what it is are folded into one string and carry a
+ * UNIQUE index, so a second row of one identity is not something a bug can create.
  */
 @Entity(
     tableName = "exercises",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "identity_key"], unique = true),
+    ],
 )
 data class ExerciseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -124,6 +227,96 @@ data class ExerciseEntity(
      * everywhere else rather than freezing today's guess into every existing row.
      */
     @androidx.room.ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    /** Stable identity of this exercise across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
+    /**
+     * Whether this exercise is trained ONE LIMB AT A TIME (schema version 13): a one-arm
+     * hang, a pistol squat, a single-leg deadlift.
+     *
+     * ── Why the flag is here and the side is on the set ─────────────────────────
+     * Which hand a particular hang used is a fact about that hang
+     * ([xyz.oleolegka.gachimuchi.domain.HoldSet.side]). Whether the exercise is done one hand
+     * at a time is a fact about the exercise, and it has to be answerable BEFORE any set
+     * exists — the entry card has to know to ask which hand, and the timer has to know to
+     * announce the change of hands between sets. Neither can wait for a set to be logged.
+     *
+     * It is also what makes a MISSING side a defect rather than a shrug: on an exercise
+     * marked one-sided, a set that named no hand is a hole in the data, and the reducers say
+     * so out loud instead of filing it as "both"
+     * (see [xyz.oleolegka.gachimuchi.domain.holdRecord]).
+     *
+     * NOT NULL with false as the answer for every row that predates it, which is the true
+     * one: nothing in the catalog was one-sided before there was a way to say so. It is
+     * non-null rather than a `Boolean?` because, unlike [ledByProtocol], there is no third
+     * state to represent — an exercise either is trained one limb at a time or it is not, and
+     * a null would be a second spelling of false that every reader would have to remember.
+     * The price is paid in the migration, which rebuilds the table rather than adding a
+     * column with a DEFAULT a fresh install would not have (see MIGRATION_12_13).
+     */
+    @androidx.room.ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
+    /**
+     * What share of your body weight this exercise lifts (schema version 14): 1.0 for a
+     * pull-up, around 0.65 for a push-up, null for "nobody has said".
+     *
+     * ── What it is for ─────────────────────────────────────────────────────────
+     * Body-weight sets used to be worth ZERO on the tonnage chart, so a week of pull-ups
+     * looked like a week of doing nothing. With this and the weight recorded on the set
+     * itself ([xyz.oleolegka.gachimuchi.domain.StrengthSet.bodyweightKg]) a set is worth
+     * `share x body weight + added weight` per rep.
+     *
+     * ── Why null is a real answer and not a zero ────────────────────────────────
+     * Null means the volume of those sets is UNKNOWN, not that it is nothing, and the charts
+     * behave for such an exercise exactly as they did before this column existed — which is
+     * the point: a catalog nobody has filled in must not have its history redrawn. A default
+     * of, say, 1.0 would have been a guess applied silently to every push-up ever logged.
+     *
+     * The number is a rough share of a whole body and cannot exceed it: a value outside
+     * (0, 1] is treated as absent rather than used
+     * (see [xyz.oleolegka.gachimuchi.domain.usableShare]), on the same grounds as a
+     * non-positive edge on this row.
+     */
+    @androidx.room.ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
+    /**
+     * Whether this exercise is kept out of the pickers (schema version 15).
+     *
+     * ── Hidden, and deliberately not deleted ───────────────────────────────────
+     * The journal outlives the catalog. Every set ever logged names its exercise by uid, and
+     * deleting the row would leave years of sets pointing at nothing — the history would still
+     * list them, and they would belong to no exercise, have no records and appear on no chart.
+     * That is a worse outcome than the problem being solved, which is only that a list has
+     * something in it nobody trains any more.
+     *
+     * So hiding is a PRESENTATION choice and nothing else. A hidden exercise keeps its sets,
+     * its records and its charts; it is absent from the list you pick from when logging, and
+     * from nowhere else. It is not part of [identityKey] for the same reason: hiding an
+     * exercise must not make room for a second row claiming to be it.
+     *
+     * NOT NULL with false for every row that predates it, on the same grounds as [oneSided].
+     */
+    val hidden: Boolean = false,
+    /**
+     * The exercise's identity as one string — see
+     * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity] (schema version 15).
+     *
+     * ── Derived state, and how it is kept from drifting ────────────────────────
+     * This is not an independent fact: it is [name], [form], [edgeMm], [protocolWorkSec] and
+     * [protocolRestSec] folded together, and a row whose key disagrees with its own columns
+     * would be invisible to the lookup that prevents duplicates. Two things hold it in place.
+     *
+     * It is a CONSTRUCTOR DEFAULT computed from the parameters above it, so there is no way to
+     * build the entity without it and no call site that has to remember — every insert in the
+     * app, the backup restore included, gets a correct key for free.
+     *
+     * And the only statement that may change an identity ([ExerciseDao.editIdentity]) writes
+     * the new key in the same UPDATE as the values it was computed from. There is deliberately
+     * no other way to touch those four columns: Room's whole-entity `@Update` is gone from the
+     * DAO precisely because it would let a caller rewrite the name and leave the key behind.
+     *
+     * Last in the parameter list because a Kotlin default may only refer to parameters
+     * declared before it.
+     */
+    @androidx.room.ColumnInfo(name = "identity_key")
+    val identityKey: String = exerciseIdentityKey(name, form, edgeMm, protocolWorkSec, protocolRestSec),
 )
 
 /**
@@ -143,7 +336,10 @@ data class ExerciseEntity(
  */
 @Entity(
     tableName = "programs",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
 )
 data class ProgramEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -169,6 +365,8 @@ data class ProgramEntity(
      * in domain/Program.kt for why that trade was made.
      */
     val category: String = "",
+    /** Stable identity of this program across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
 
 /**
@@ -227,7 +425,10 @@ data class ProgramBlockEntity(
 /** A master slot of the planning calendar (§12-B). Occurrences are computed, not stored. */
 @Entity(
     tableName = "slots",
-    indices = [Index(value = ["space_id", "id"])],
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
 )
 data class SlotEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -238,6 +439,8 @@ data class SlotEntity(
     @androidx.room.ColumnInfo(name = "repeat_rule") val repeatRule: String,
     @androidx.room.ColumnInfo(name = "anchor_date") val anchorDate: String,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
+    /** Stable identity of this slot across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
 
 /**
@@ -263,7 +466,10 @@ data class SlotEntity(
  */
 @Entity(
     tableName = "slot_exercises",
-    indices = [Index(value = ["slot_id"])],
+    indices = [
+        Index(value = ["slot_id"]),
+        Index(value = ["uid"], unique = true),
+    ],
     foreignKeys = [
         androidx.room.ForeignKey(
             entity = SlotEntity::class,
@@ -280,4 +486,6 @@ data class SlotExerciseEntity(
     val position: Int,
     /** Rest between sets of this exercise IN THIS SESSION, or null for "the usual one". */
     @androidx.room.ColumnInfo(name = "rest_sec") val restSec: Int? = null,
+    /** Stable identity of this planned line across devices and exports — see [newUid]. */
+    val uid: String = newUid(),
 )
