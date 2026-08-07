@@ -46,6 +46,40 @@ const val TYPE_BODYWEIGHT = "bodyweight"
  */
 const val TYPE_SET_CANCEL = "set_cancel"
 
+/**
+ * "A workout has begun". Like [TYPE_SET_CANCEL] this is a SERVICE event and not an activity
+ * form: it records no training, so it is absent from [ACTIVITY_TYPES] and every reducer that
+ * folds sets ignores it.
+ *
+ * THE EVENT'S OWN ID IS THE WORKOUT. There is no `workouts` table and no separate identifier
+ * to keep in step with the journal — a workout is a point in an append-only log, and
+ * everything else about it (which exercises, in which order, with which sets) is derived from
+ * the rows that point back at that id. The same reasoning the journal itself rests on: state
+ * that is derived cannot drift out of sync with the events it was derived from.
+ *
+ * There is deliberately NO closing event. A workout is over when the next one starts or when
+ * the day ends, and asking a person mid-gym to press "finish" reliably is asking for a
+ * journal full of workouts that were never closed. The cost is stated in
+ * [xyz.oleolegka.gachimuchi.domain.openWorkout], which has to define "the one in progress"
+ * without being told.
+ */
+const val TYPE_WORKOUT_STARTED = "workout_started"
+
+/**
+ * "This exercise is part of that workout, and this is the rest I want between its sets."
+ *
+ * Exists so that an exercise can be IN a workout before it has a single set — the user adds
+ * three exercises when they walk in, and the screen has to show three empty blocks. A set is
+ * the only other evidence that an exercise belongs to a workout, and waiting for one would
+ * mean the list cannot be built in advance, which is the whole feature.
+ *
+ * Also the record of the chosen rest. That is not the same fact as the pause the timestamps
+ * later reveal (see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.defaultRestSec]): this
+ * is what was decided, at the moment it was decided, and it stays true even for a workout
+ * where every rest ran long.
+ */
+const val TYPE_WORKOUT_EXERCISE_ADDED = "workout_exercise_added"
+
 /** All domain activity types — the default read filter (service events are skipped). */
 val ACTIVITY_TYPES = listOf(
     TYPE_STRENGTH_SET, TYPE_HOLD_SET, TYPE_DURATION, TYPE_TICK, TYPE_CARDIO, TYPE_BODYWEIGHT,
@@ -289,6 +323,67 @@ data class Bodyweight(
 /** Set reversal: payload = {"cancels": id}. */
 @Serializable
 data class SetCancel(@SerialName("cancels") val cancels: Long)
+
+/**
+ * Payload of [TYPE_WORKOUT_STARTED].
+ *
+ * ── Why op_date is here and not read off the event's `ts` ───────────────────────
+ * The two are different facts, exactly as they are for every activity form: `ts` is when the
+ * row was written, [opDate] is the day the training belongs to. They diverge whenever a
+ * workout is entered AFTER THE FACT, and that is not an edge case here — the history that
+ * predates this app is going to be typed in by hand, one past day at a time. Such a workout
+ * has to know its own day from the moment it is created, before it contains a single set,
+ * because an empty workout has nothing else to be dated by.
+ *
+ * A BACKDATED WORKOUT IS SILENT. Nothing in it starts a countdown — no rest timer, no
+ * interval run, no alarm. A rest that finished a fortnight ago is not something to wait out,
+ * and a timer going off while somebody types up old notes on the sofa is pure noise. The
+ * timers live elsewhere (timer/); this is the rule they are expected to honour, written down
+ * where the date is defined rather than where it happens to be read.
+ *
+ * ── slot_id ─────────────────────────────────────────────────────────────────────
+ * The planned session this workout was started from ([Slot.id]), when it was started from
+ * one, and null when it was not. Beyond saving a name to type, it is the exact answer to
+ * "was the plan kept" — domain/Schedule.kt currently pairs plan with fact HEURISTICALLY, by
+ * clock proximity and greedily, which is right most of the time and unfixably wrong when two
+ * sessions sit close together on one day. A link the user made themselves needs no guessing.
+ *
+ * NOTE, no whitewashing: writing this field does not by itself change how the calendar
+ * decides anything. domain/Schedule.kt still matches by time and does not look at it yet;
+ * switching it over is a separate change with its own verification. Until then the field is
+ * recorded and exposed ([Workout.slotId]) and nothing consumes it.
+ */
+@Serializable
+data class WorkoutStarted(
+    @SerialName("op_date") val opDate: String,
+    @SerialName("slot_id") val slotId: Long? = null,
+) {
+    init {
+        requireIsoDate(opDate)
+    }
+}
+
+/**
+ * Payload of [TYPE_WORKOUT_EXERCISE_ADDED].
+ *
+ * [workoutId] duplicates the `workout_id` COLUMN this event is written with, and the
+ * duplication is on purpose: the column is local (schema version 5) while the payload is the
+ * format meant to survive a trip through the bot's journal, which has no such column. Reads
+ * take the column and fall back to this field, so a row that arrives without one still lands
+ * in the right workout.
+ */
+@Serializable
+data class WorkoutExerciseAdded(
+    @SerialName("workout_id") val workoutId: Long,
+    @SerialName("exercise_id") val exerciseId: Long,
+    @SerialName("rest_sec") val restSec: Int,
+) {
+    init {
+        // zero is a legitimate answer ("go straight into the next set"); a negative one is
+        // a corrupt row, and the readers skip rows that will not parse rather than throwing
+        require(restSec >= 0) { "rest_sec: expected a non-negative number of seconds, got $restSec" }
+    }
+}
 
 internal fun requireIsoDate(d: String): String {
     val ok = Regex("""^\d{4}-\d{2}-\d{2}$""").matches(d)

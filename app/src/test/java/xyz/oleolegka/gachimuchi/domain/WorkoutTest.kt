@@ -1,0 +1,376 @@
+package xyz.oleolegka.gachimuchi.domain
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The workout folded out of the journal: which one is open, what is in it, in what order,
+ * with which rest — and, just as importantly, what happens to everything recorded WITHOUT
+ * one, since the app has to keep working for somebody who never presses "start".
+ *
+ * Pure reducers, so all of it runs on the JVM with no Room and no device.
+ */
+class WorkoutTest {
+
+    private var nextId = 1L
+
+    private fun row(type: String, payload: String, ts: String, workoutId: Long? = null) =
+        JournalEvent(nextId++, ts, 1, 1, type, payload, workoutId)
+
+    private fun started(opDate: String, ts: String = "${opDate}T09:00:00", slotId: Long? = null) =
+        row(TYPE_WORKOUT_STARTED, payloadJson.encodeToString(WorkoutStarted(opDate, slotId)), ts)
+
+    private fun added(workoutId: Long, exerciseId: Long, restSec: Int, ts: String = "2026-08-07T09:01:00") =
+        row(
+            TYPE_WORKOUT_EXERCISE_ADDED,
+            payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exerciseId, restSec)),
+            ts,
+            workoutId,
+        )
+
+    private fun set(
+        exercise: ExerciseRef,
+        opDate: String,
+        workoutId: Long? = null,
+        ts: String = "${opDate}T09:10:00",
+        reps: Int = 5,
+        weightKg: Double = 60.0,
+    ) = strengthSetOf(exercise, opDate, reps = reps, weightKg = weightKg)
+        .let { row(it.type, it.toPayload(), ts, workoutId) }
+
+    private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
+    private val squat = ExerciseRef(2, "Squat", ExerciseForm.STRENGTH)
+    private val hangs = ExerciseRef(3, "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+
+    private val today = "2026-08-07"
+
+    // --- which workout is open -------------------------------------------------------
+
+    @Test
+    fun `there is no open workout until one is started`() {
+        val events = listOf(set(bench, today))
+        assertNull(openWorkout(events, today))
+        assertNull(openWorkoutId(events, today))
+    }
+
+    @Test
+    fun `the open workout is the one started today, and its id is the event's own id`() {
+        val start = started(today)
+        val events = listOf(start)
+
+        assertEquals(start.id, openWorkoutId(events, today))
+        assertEquals(start.id, openWorkout(events, today)!!.id)
+    }
+
+    @Test
+    fun `yesterday's workout is not open today`() {
+        val events = listOf(started("2026-08-06"))
+        assertNull(openWorkoutId(events, today))
+        // and it is still perfectly findable as history
+        assertEquals(1, workoutsOn(events, "2026-08-06").size)
+    }
+
+    @Test
+    fun `starting a second workout on the same day makes the later one the open one`() {
+        val morning = started(today, ts = "${today}T08:00:00")
+        val evening = started(today, ts = "${today}T19:00:00")
+        val events = listOf(morning, evening)
+
+        assertEquals(evening.id, openWorkoutId(events, today))
+        // both are on the day: two separate workouts is the thing a Session could not express
+        assertEquals(listOf(morning.id, evening.id), workoutsOn(events, today).map { it.id })
+    }
+
+    /**
+     * The one that makes typing up old training possible: a workout dated to last month is
+     * still the one being worked on right now, because openness is measured against the
+     * WRITE time and the day comes from op_date.
+     */
+    @Test
+    fun `a backdated workout started today is the open one, and keeps its own date`() {
+        val start = started("2026-06-01", ts = "${today}T21:00:00")
+        val events = listOf(start)
+
+        assertEquals(start.id, openWorkoutId(events, today))
+        val workout = openWorkout(events, today)!!
+        assertEquals("2026-06-01", workout.opDate)
+        assertTrue("nothing in a workout from June may count anything down", workout.isBackdated(today))
+        assertEquals(emptyList<Workout>(), workoutsOn(events, today))
+        assertEquals(1, workoutsOn(events, "2026-06-01").size)
+    }
+
+    @Test
+    fun `a workout of today is not backdated`() {
+        val events = listOf(started(today))
+        assertFalse(openWorkout(events, today)!!.isBackdated(today))
+    }
+
+    @Test
+    fun `the slot a workout was started from is carried through, and null when there was none`() {
+        val fromPlan = started(today, ts = "${today}T08:00:00", slotId = 42L)
+        val offPlan = started(today, ts = "${today}T19:00:00")
+
+        assertEquals(42L, buildWorkout(listOf(fromPlan), fromPlan.id)!!.slotId)
+        assertNull(buildWorkout(listOf(offPlan), offPlan.id)!!.slotId)
+    }
+
+    @Test
+    fun `an unreadable start event still opens a workout rather than orphaning its sets`() {
+        val broken = row(TYPE_WORKOUT_STARTED, "{ this is not json", "${today}T09:00:00")
+        val events = listOf(broken, set(bench, today, workoutId = broken.id))
+
+        val workout = openWorkout(events, today)
+        assertNotNull("losing the start event must not lose the training", workout)
+        // it degrades to the write day and to "no slot", which is what an older row meant
+        assertEquals(today, workout!!.opDate)
+        assertNull(workout.slotId)
+        assertEquals(1, workout.exercises.single().sets.size)
+    }
+
+    // --- what is in a workout --------------------------------------------------------
+
+    @Test
+    fun `an exercise added before any set is in the workout, empty and with its rest`() {
+        val start = started(today)
+        val events = listOf(start, added(start.id, bench.id, restSec = 150))
+
+        val workout = buildWorkout(events, start.id)!!
+        assertTrue("the whole point: three empty blocks when you walk in", workout.isEmpty.not())
+        val only = workout.exercises.single()
+        assertEquals(bench.id, only.exerciseId)
+        assertEquals(150, only.restSec)
+        assertTrue(only.isEmpty)
+        assertEquals(0, workout.setCount)
+    }
+
+    @Test
+    fun `exercises keep the order they were added in, not the order they were trained in`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 150),
+            added(start.id, squat.id, restSec = 210),
+            added(start.id, hangs.id, restSec = 180),
+            // trained out of order: squat first
+            set(squat, today, workoutId = start.id, ts = "${today}T09:20:00"),
+            set(bench, today, workoutId = start.id, ts = "${today}T09:30:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(listOf(bench.id, squat.id, hangs.id), workout.exercises.map { it.exerciseId })
+        assertEquals(listOf(150, 210, 180), workout.exercises.map { it.restSec })
+        assertEquals(listOf(1, 1, 0), workout.exercises.map { it.sets.size })
+        assertEquals(2, workout.setCount)
+    }
+
+    @Test
+    fun `an exercise that was never added appears anyway, on its first set`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 150),
+            set(squat, today, workoutId = start.id, ts = "${today}T09:20:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(listOf(bench.id, squat.id), workout.exercises.map { it.exerciseId })
+        // nobody chose a rest for it, and null says exactly that rather than inventing one
+        assertNull(workout.exercises.last().restSec)
+    }
+
+    @Test
+    fun `adding an exercise again changes its rest without moving it in the list`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 150),
+            added(start.id, squat.id, restSec = 210),
+            // changed your mind about the bench: in an append-only journal you say it again
+            added(start.id, bench.id, restSec = 240, ts = "${today}T09:40:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(listOf(bench.id, squat.id), workout.exercises.map { it.exerciseId })
+        assertEquals(240, workout.exercises.first().restSec)
+    }
+
+    @Test
+    fun `sets are collected in the order recorded, and a cancelled one is gone`() {
+        val start = started(today)
+        val first = set(bench, today, workoutId = start.id, ts = "${today}T09:10:00", weightKg = 60.0)
+        val mistake = set(bench, today, workoutId = start.id, ts = "${today}T09:14:00", weightKg = 600.0)
+        val third = set(bench, today, workoutId = start.id, ts = "${today}T09:18:00", weightKg = 62.5)
+        val cancel = row(
+            TYPE_SET_CANCEL,
+            payloadJson.encodeToString(SetCancel(mistake.id)),
+            "${today}T09:15:00",
+            start.id,
+        )
+        val events = listOf(start, first, mistake, third, cancel)
+
+        val sets = buildWorkout(events, start.id)!!.exercises.single().sets
+        assertEquals(listOf(60.0, 62.5), sets.map { (it.form as StrengthSet).weightKg })
+    }
+
+    @Test
+    fun `a weigh-in recorded during a workout is kept rather than dropped for having no exercise`() {
+        val start = started(today)
+        val weigh = bodyweightOf(today, weightKg = 74.2)
+            .let { row(it.type, it.toPayload(), "${today}T09:05:00", start.id) }
+        val events = listOf(start, weigh, set(bench, today, workoutId = start.id))
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(1, workout.exercises.size)
+        assertEquals(1, workout.entriesWithoutExercise.size)
+        assertEquals(2, workout.setCount)
+    }
+
+    @Test
+    fun `sets of another workout on the same day stay in their own`() {
+        val morning = started(today, ts = "${today}T08:00:00")
+        val evening = started(today, ts = "${today}T19:00:00")
+        val events = listOf(
+            morning,
+            set(bench, today, workoutId = morning.id, ts = "${today}T08:10:00"),
+            evening,
+            set(squat, today, workoutId = evening.id, ts = "${today}T19:10:00"),
+            set(squat, today, workoutId = evening.id, ts = "${today}T19:14:00"),
+        )
+
+        assertEquals(1, buildWorkout(events, morning.id)!!.setCount)
+        assertEquals(2, buildWorkout(events, evening.id)!!.setCount)
+        assertEquals(listOf(bench.id), buildWorkout(events, morning.id)!!.exercises.map { it.exerciseId })
+    }
+
+    @Test
+    fun `an id that names no start event is not a workout`() {
+        val start = started(today)
+        assertNull(buildWorkout(listOf(start), 999L))
+        // and a set's id is not a workout id either, however tempting the type is
+        val aSet = set(bench, today)
+        assertNull(buildWorkout(listOf(start, aSet), aSet.id))
+    }
+
+    // --- sets recorded outside any workout -------------------------------------------
+
+    @Test
+    fun `sets logged without a workout are still there and are not claimed by one`() {
+        val start = started(today)
+        val events = listOf(
+            set(bench, today, ts = "${today}T07:00:00"),
+            start,
+            set(squat, today, workoutId = start.id, ts = "${today}T09:10:00"),
+        )
+
+        val loose = setsOutsideWorkouts(events, today)
+        assertEquals(1, loose.size)
+        assertEquals(bench.id, loose.single().form.exerciseId)
+        assertEquals(1, buildWorkout(events, start.id)!!.setCount)
+    }
+
+    @Test
+    fun `a set pointing at a workout this journal does not have is shown, not lost`() {
+        // a dangling link: a journal merged from elsewhere, or a start event that never came
+        val events = listOf(set(bench, today, workoutId = 777L))
+        assertEquals(1, setsOutsideWorkouts(events, today).size)
+    }
+
+    @Test
+    fun `only the asked-for day is returned, and cancelled sets are not`() {
+        val yesterday = "2026-08-06"
+        val mistake = set(bench, today, ts = "${today}T09:14:00")
+        val events = listOf(
+            set(bench, yesterday),
+            mistake,
+            row(TYPE_SET_CANCEL, payloadJson.encodeToString(SetCancel(mistake.id)), "${today}T09:15:00"),
+            set(squat, today, ts = "${today}T09:20:00"),
+        )
+
+        val loose = setsOutsideWorkouts(events, today)
+        assertEquals(listOf(squat.id), loose.map { it.form.exerciseId })
+    }
+
+    // --- the rest offered for an exercise --------------------------------------------
+
+    private val settings = TimerSettings(defaultRestSec = 120)
+
+    @Test
+    fun `with nothing known at all the offer is the configured default`() {
+        assertEquals(120, restHintSec(settings, emptyList(), bench))
+        assertEquals(120, restHintSec(settings, emptyList(), null))
+    }
+
+    @Test
+    fun `what the user chose for the exercise beats what the journal measured`() {
+        // a day with two sets four minutes apart: the journal would derive 240
+        val events = listOf(
+            set(bench, today, ts = "${today}T09:00:00"),
+            set(bench, today, ts = "${today}T09:04:00"),
+        )
+        assertEquals(240, resolveRestSec(settings, events, bench.id))
+
+        val chosen = bench.copy(defaultRestSec = 150)
+        assertEquals(150, restHintSec(settings, events, chosen))
+    }
+
+    @Test
+    fun `with nothing chosen the offer falls back to what the journal says was done`() {
+        val events = listOf(
+            set(bench, today, ts = "${today}T09:00:00"),
+            set(bench, today, ts = "${today}T09:04:00"),
+        )
+        assertEquals(240, restHintSec(settings, events, bench))
+    }
+
+    @Test
+    fun `a stored zero means nothing was chosen, not a rest of zero seconds`() {
+        // nothing can count down for zero seconds, so honouring it would hand the timer a
+        // duration it cannot run
+        assertEquals(120, restHintSec(settings, emptyList(), bench.copy(defaultRestSec = 0)))
+    }
+
+    // --- whether the exercise is run by its protocol ----------------------------------
+
+    @Test
+    fun `with nothing said, having a work rest protocol is what decides`() {
+        assertTrue(ledByProtocol(hangs))
+        assertFalse(ledByProtocol(bench))
+    }
+
+    @Test
+    fun `the flag overrides the protocol in both directions`() {
+        // the case this column exists for: a maximum-weight hang carries a protocol because
+        // §12-A makes it part of hangboard identity, and is still trained like a lift
+        assertFalse(ledByProtocol(hangs.copy(ledByProtocolFlag = false)))
+        assertTrue(ledByProtocol(bench.copy(ledByProtocolFlag = true)))
+    }
+
+    @Test
+    fun `a protocol of zero is no protocol, and does not lead anything`() {
+        assertFalse(ledByProtocol(hangs.copy(workSec = 0.0, restSec = 0.0)))
+    }
+
+    // --- the new events stay out of the way of everything else ------------------------
+
+    @Test
+    fun `workout events are not activities and no reducer counts them`() {
+        val start = started(today)
+        val events = listOf(start, added(start.id, bench.id, 150), set(bench, today, workoutId = start.id))
+
+        assertEquals(1, readActivities(events).size)
+        assertEquals(setOf(today), activeDays(events, today, today))
+        // a workout with no sets is not a training day, whatever the journal has in it
+        assertEquals(emptySet<String>(), activeDays(listOf(started(today), added(1L, bench.id, 150)), today, today))
+    }
+
+    @Test
+    fun `the workout link travels from the journal row through to the parsed activity`() {
+        val start = started(today)
+        val events = listOf(start, set(bench, today, workoutId = start.id))
+        assertEquals(start.id, readActivities(events).single().workoutId)
+    }
+}

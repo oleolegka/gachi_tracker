@@ -33,7 +33,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -157,7 +157,38 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        /**
+         * Version 4 -> 5: the workout. One column on the journal saying which workout a row
+         * was recorded during, and two on the catalog remembering how the user wants an
+         * exercise handled.
+         *
+         * Purely additive and ALL THREE ARE NULLABLE WITH NO DEFAULT, which is the decision
+         * worth spelling out. Every row already on the phone comes through as "recorded
+         * outside any workout" and "nothing has been said about the rest" — and both of those
+         * are true statements about those rows, not placeholders. The alternative, stamping
+         * existing sets into an invented workout, would have manufactured history: the app
+         * had no workouts when they were written, so no such workout ever happened.
+         *
+         * Nullable also keeps the property the journal is built on ([EventEntity.workoutId]):
+         * a set can always be recorded without a workout being open. A NOT NULL column with a
+         * sentinel default would have made "no workout" a special id that every reader has to
+         * remember to exclude.
+         *
+         * `led_by_protocol` is INTEGER because SQLite has no boolean; Room reads a nullable
+         * INTEGER back as a `Boolean?`, so null survives the round trip as null rather than
+         * collapsing into false — which it must, since null means "infer it" and false means
+         * "the user said no".
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `workout_id` INTEGER")
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `default_rest_sec` INTEGER")
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `led_by_protocol` INTEGER")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> =
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

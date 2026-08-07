@@ -31,6 +31,15 @@ data class ExerciseRef(
     val edgeMm: Double? = null,
     val workSec: Double? = null,
     val restSec: Double? = null,
+    /**
+     * The rest the user last chose for this exercise, and whether its sets are run by the
+     * protocol — the two catalog columns added in schema version 5. Both are nullable and
+     * both mean "nothing has been said", which is why they are read through
+     * [restHintSec] and [ledByProtocol] in domain/Workout.kt rather than used directly:
+     * the answer for a null is derived, not assumed.
+     */
+    val defaultRestSec: Int? = null,
+    val ledByProtocolFlag: Boolean? = null,
 ) {
     /**
      * A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists),

@@ -57,6 +57,28 @@ data class EventEntity(
     @androidx.room.ColumnInfo(name = "author_id") val authorId: Long = LOCAL_AUTHOR_ID,
     val type: String,
     val payload: String,
+    /**
+     * The workout this row was recorded during (schema version 5): the id of the
+     * `workout_started` event that opened it. Null means "recorded outside any workout".
+     *
+     * NULL HAS TO STAY LEGAL, and that is the whole point of the column being nullable
+     * rather than defaulted. The app is used standing in a gym with one hand: opening it
+     * and writing a set has to work without pressing "start" first, otherwise the button
+     * becomes a toll gate in front of the only thing the app is for. Every row already in
+     * the journal reads as unattached too, which is what it was.
+     *
+     * There is deliberately NO foreign key to `events`. The journal is append-only and a
+     * dangling id simply reads as "that workout is not in this journal" — which is the
+     * honest answer once rows start arriving from the bot, where the id space is its own.
+     *
+     * A column and not a payload field, unlike everything else about an event. The payload
+     * schema is the EXCHANGE format shared with the Python bot (see domain/Forms.kt), and
+     * the bot has no notion of a workout yet; putting the link there would have meant
+     * changing six payload shapes it already reads. The service event that adds an exercise
+     * to a workout does carry the id in its payload, because that event is new on both
+     * sides and has nothing to stay compatible with.
+     */
+    @androidx.room.ColumnInfo(name = "workout_id") val workoutId: Long? = null,
 )
 
 /**
@@ -86,6 +108,36 @@ data class ExerciseEntity(
     @androidx.room.ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
     /** Created by the demo seed and removable with it — see [COLUMN_SEEDED]. */
     @androidx.room.ColumnInfo(name = COLUMN_SEEDED) val seeded: Boolean = false,
+    /**
+     * The rest between sets last chosen for this exercise, in seconds (schema version 5),
+     * or null while nothing has been chosen yet.
+     *
+     * A REMEMBERED DECISION, not a measurement, and that is why it is a column rather than
+     * something derived. `lastRestSec` (domain/TimerSettings.kt) already reads the pause out
+     * of the journal timestamps, but it answers "how long did you actually stand around last
+     * time", which includes the queue for the rack and the conversation. What the user picks
+     * when adding the exercise to a workout is a different fact — the rest they MEANT — and
+     * it has to survive a session in which they never got that pause right.
+     *
+     * The derived number stays as the fallback for an exercise this has never been set on,
+     * so nothing regresses for a catalog that predates the column.
+     */
+    @androidx.room.ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    /**
+     * Whether a set of this exercise is RUN BY ITS PROTOCOL (true) or is simply followed by
+     * a rest countdown (false), or null for "decide from whether a protocol exists" (schema
+     * version 5).
+     *
+     * The null is the interesting value. Having a work:rest protocol is what the app used to
+     * infer this from, and for repeaters that inference is right. It is wrong for a maximum
+     * added-weight hang: the row carries a protocol because §12-A makes protocol part of
+     * hangboard identity, but the exercise is trained like a strength lift — one effort, then
+     * a long pause — and a timer that starts calling out 7:3 intervals during it is noise.
+     *
+     * So the column overrides the inference where the user has said so, and stays null
+     * everywhere else rather than freezing today's guess into every existing row.
+     */
+    @androidx.room.ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
 )
 
 /**

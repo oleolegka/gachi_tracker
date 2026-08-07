@@ -19,6 +19,13 @@ data class JournalEvent(
     val authorId: Long,
     val type: String,
     val payload: String,
+    /**
+     * The workout this row was recorded during, or null — see
+     * [xyz.oleolegka.gachimuchi.data.db.EventEntity.workoutId]. Defaulted so that the many
+     * places which build an event by hand (tests, fixtures) keep meaning "no workout", which
+     * is what they meant before workouts existed.
+     */
+    val workoutId: Long? = null,
 )
 
 /** A parsed domain event: the raw journal row plus its typed form. */
@@ -30,6 +37,8 @@ data class ActivityEvent(
     val opDate: String,
     val key: String?,
     val form: ActivityForm,
+    /** Carried through from the journal row so that a workout can be folded out of these. */
+    val workoutId: Long? = null,
 )
 
 /**
@@ -79,7 +88,7 @@ fun readActivities(
         out.add(
             ActivityEvent(
                 id = row.id, ts = row.ts, authorId = row.authorId, type = row.type,
-                opDate = form.opDate, key = form.key, form = form,
+                opDate = form.opDate, key = form.key, form = form, workoutId = row.workoutId,
             )
         )
     }
