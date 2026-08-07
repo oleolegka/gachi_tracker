@@ -55,6 +55,16 @@ sealed interface BackStep {
     /** Leave the form detail screen, back to the tab it was opened from (Overview). */
     data object CloseFormDetail : BackStep
 
+    /**
+     * Leave the conductor, back to the workout it was started from.
+     *
+     * IT DOES NOT STOP THE SET. Back has never meant "abandon what you were doing" anywhere
+     * else in this app, and here it specifically must not: leaving the screen to log a set of
+     * something else while a hang is being called out is the superset this whole model was
+     * rebuilt for (§13.3, step 10). Stopping is a button inside the screen.
+     */
+    data object CloseConductor : BackStep
+
     /** Leave the logging screen, back to whatever it was opened over. */
     data object CloseLogging : BackStep
 
@@ -98,9 +108,18 @@ fun backStep(
     logging: Boolean,
     showingWorkout: Boolean,
     tab: Tab,
+    /**
+     * A protocol-led set has the screen. Defaulted because it is the one mode reachable from
+     * exactly one place (a card inside a workout), so most callers have nothing to say about
+     * it — and the default is the state the app is in whenever nothing is being conducted.
+     */
+    conducting: Boolean = false,
 ): BackStep = when {
     editingProgram -> BackStep.CloseEditor
     showingFormDetail -> BackStep.CloseFormDetail
+    // above logging, because it is drawn over it: the conductor is entered from a card in
+    // the workout and leaving it lands back on that card list
+    conducting -> BackStep.CloseConductor
     logging -> BackStep.CloseLogging
     showingWorkout -> BackStep.CloseWorkout
     tab != HomeTab -> BackStep.SwitchTab(HomeTab)

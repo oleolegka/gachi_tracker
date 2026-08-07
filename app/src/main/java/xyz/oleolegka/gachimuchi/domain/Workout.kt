@@ -1,5 +1,8 @@
 package xyz.oleolegka.gachimuchi.domain
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
 /**
  * The workout as an explicit thing: a point in the journal you can add exercises to before
  * you have done any of them.
@@ -17,11 +20,62 @@ package xyz.oleolegka.gachimuchi.domain
  * Room, all testable on the JVM. A workout is not a row that has to be kept in step with the
  * sets recorded into it — it is folded out of them on demand, so it cannot disagree with them.
  *
- * ── What a workout does NOT have ────────────────────────────────────────────────
- * A finish event. See [TYPE_WORKOUT_STARTED]; the price of that decision is paid here, in
- * [openWorkout], which has to work out which workout is in progress without ever being told
- * that one ended.
+ * ── A workout is closed by a button, and the clock has nothing to do with it ────
+ * It used to end at midnight, because there was no finish event and something had to define
+ * "the one in progress". That rule was wrong in the direction that costs training: an evening
+ * session that runs to three in the morning is one session, and midnight would split it in
+ * two with the last sets in the wrong half. So there is a finish event now
+ * ([TYPE_WORKOUT_FINISHED]), and what closes a workout is exactly two things — pressing the
+ * button, and starting the next one, which closes a forgotten one on the way past.
+ *
+ * NOTE, no whitewashing: the comment on [TYPE_WORKOUT_STARTED] in domain/Forms.kt still says
+ * there is deliberately no closing event. It is out of date as of this change and could not
+ * be corrected here — that file belongs to another change in flight.
+ *
+ * The cost of dropping the midnight rule, stated plainly: a workout nobody finished stays
+ * open indefinitely. A set logged next Tuesday with no workout started is filed under last
+ * Thursday's, and — because the end time is read off the last set (see [Workout.endTs]) —
+ * that workout's end time moves to next Tuesday with it. Midnight used to cap the damage at
+ * one day. What replaces it is the button and the "start closes the previous" rule, both of
+ * which are actions the user takes rather than a clock guessing on their behalf (§13.8).
  */
+
+/**
+ * "That workout is over."
+ *
+ * A SERVICE event, like [TYPE_SET_CANCEL] and [TYPE_WORKOUT_STARTED]: it records no training,
+ * so it is absent from [ACTIVITY_TYPES] and every reducer that folds sets ignores it.
+ *
+ * ── It is a status and not a lock ───────────────────────────────────────────────
+ * A finished workout can still be opened and written into — the forgotten last set typed in
+ * on the way to the car is the case, and refusing it would send that set into the next
+ * workout or into no workout at all. Nothing here re-opens: the workout stays finished and
+ * its end time simply moves, because the end time is READ OFF THE LAST SET
+ * ([Workout.endTs]) rather than stamped by this event.
+ *
+ * ── Which is why this event carries no time ─────────────────────────────────────
+ * The obvious payload would be "ended at HH:MM", and it would be wrong twice over: it would
+ * be the moment the button was pressed (in the changing room, ten minutes after the last
+ * set) and it would then have to be corrected every time a set was added afterwards — an
+ * update, in a journal that has none. The last set is a fact already in the journal, and a
+ * workout with no sets at all has its own start time, which is the honest answer for a
+ * session that recorded nothing.
+ */
+const val TYPE_WORKOUT_FINISHED = "workout_finished"
+
+/**
+ * Payload of [TYPE_WORKOUT_FINISHED] — the workout being closed, said twice.
+ *
+ * The columns are how this app finds it; the payload says it again so the event is complete
+ * on its own in an exported or merged journal, for the reason spelled out on
+ * [WorkoutExerciseAdded]. [workoutUid] is the identity and [workoutId] is the local row
+ * number, which means nothing off the phone that wrote it.
+ */
+@Serializable
+data class WorkoutFinished(
+    @SerialName("workout_id") val workoutId: Long,
+    @SerialName("workout_uid") val workoutUid: String? = null,
+)
 
 /** One exercise inside a workout, with the rest chosen for it and the sets it collected. */
 data class WorkoutExercise(
@@ -94,6 +148,13 @@ data class Workout(
      * existing: the row would belong to a workout, and the workout would not show it.
      */
     val entriesWithoutExercise: List<ActivityEvent>,
+    /**
+     * Somebody said this workout was over — by the button, or by starting the next one.
+     *
+     * A STATUS AND NOT A LOCK: a finished workout can still be opened and written into, and
+     * doing so does not re-open it. See [TYPE_WORKOUT_FINISHED].
+     */
+    val finished: Boolean = false,
 ) {
     /**
      * The plan's local row number, for the screens that still navigate the plan by one.
@@ -105,6 +166,26 @@ data class Workout(
     val slotId: Long? get() = slot?.id
 
     val setCount: Int = exercises.sumOf { it.sets.size } + entriesWithoutExercise.size
+
+    /**
+     * When the training stopped: the write time of the LAST row recorded into it, or the
+     * workout's own start when it recorded nothing.
+     *
+     * ── Derived, because a stamped moment would be wrong from the second it was written ──
+     * The alternative is to record "ended at" on the finish event, and that moment is the one
+     * the button was pressed — in the changing room, after the phone came back out of a
+     * pocket. Worse, it would go stale: a forgotten set typed in afterwards is training that
+     * happened before the end, and in an append-only journal there is nothing to update. This
+     * is folded out of the sets instead, so adding one moves the end and no correction is
+     * needed anywhere.
+     *
+     * The largest id and not the latest timestamp, because ids increase with WRITING order
+     * and that is what "the last thing recorded" means. For a workout typed up after the fact
+     * the two are the same question anyway; for one where the phone's clock moved they are
+     * not, and journal order is the reading that cannot be argued with.
+     */
+    val endTs: String =
+        (exercises.flatMap { it.sets } + entriesWithoutExercise).maxByOrNull { it.id }?.ts ?: ts
 
     /** Nothing has been added and nothing recorded — the state right after "start". */
     val isEmpty: Boolean get() = exercises.isEmpty() && entriesWithoutExercise.isEmpty()
@@ -130,14 +211,16 @@ data class Workout(
  * that matters — so the ordering here decides which link a row is judged by, once and for all
  * readers, instead of each reader picking for itself.
  *
- * The payload is consulted at all for [TYPE_WORKOUT_EXERCISE_ADDED] specifically: that event
- * states its workout in its own payload as well as in the column, so that a row arriving from
- * another journal (which has this app's columns nowhere) still lands in the right workout.
+ * The payload is consulted at all for the two SERVICE events that belong to a workout without
+ * recording any training — "exercise added" and "finished". Each states its workout in its own
+ * payload as well as in the column, so that a row arriving from another journal (which has
+ * this app's columns nowhere) still lands in the right workout.
  */
 fun JournalEvent.workoutRef(): WorkoutRef? {
     val added = workoutExerciseAddedOrNull()
-    val uid = workoutUid ?: added?.workoutUid
-    val id = workoutId ?: added?.workoutId
+    val done = workoutFinishedOrNull()
+    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid
+    val id = workoutId ?: added?.workoutId ?: done?.workoutId
     return if (uid == null && id == null) null else WorkoutRef(uid, id)
 }
 
@@ -147,6 +230,14 @@ fun JournalEvent.workoutExerciseAddedOrNull(): WorkoutExerciseAdded? =
         null
     } else {
         runCatching { payloadJson.decodeFromString<WorkoutExerciseAdded>(payload) }.getOrNull()
+    }
+
+/** Payload of a "workout finished" row, or null for any other row and for an unreadable one. */
+fun JournalEvent.workoutFinishedOrNull(): WorkoutFinished? =
+    if (type != TYPE_WORKOUT_FINISHED) {
+        null
+    } else {
+        runCatching { payloadJson.decodeFromString<WorkoutFinished>(payload) }.getOrNull()
     }
 
 /**
@@ -177,25 +268,26 @@ private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
 /**
  * The workout in progress, or null when there is none.
  *
- * DEFINED AS: the last workout STARTED TODAY, where "today" is measured against the event's
- * write time [JournalEvent.ts] and not against its op_date. That distinction is the whole
- * trick that lets old training be typed in — a workout dated to last month is still the one
- * you are working on right now, for as long as the session you are typing it in lasts.
+ * DEFINED AS: the workout started LAST, unless it has been finished. Two rules and no clock —
+ * which is the whole of the change from what this used to be.
  *
- * Two consequences, stated rather than hidden, since there is no finish event to lean on:
+ * ── Why the last one, rather than "the last one not finished" ───────────────────
+ * Because starting a workout finishes the one before it (ActivityRepository.startWorkout), so
+ * an earlier workout still standing open is a journal that has been merged or hand-edited
+ * rather than one this app wrote. Reaching past the newest start to find an older open
+ * workout would file today's sets into last week's session — a worse answer than "nothing is
+ * open", which at least leaves the set unattached and visible on its day.
  *
- *  - A workout stops being open at MIDNIGHT. A session that runs past it leaves the last
- *    sets unattached (they still record perfectly well — that is what nullable
- *    `workout_id` buys) or attached to a workout started after midnight.
- *  - Sets recorded LATER THE SAME DAY without pressing start again are filed under the
- *    morning's workout. The alternative — a timeout after which a workout is assumed over —
- *    would guess, and guessing wrongly here splits one workout into two in the history.
- *
- * Both are the cost of not asking a person mid-gym to press "finish". The button that would
- * fix them is the one nobody presses reliably.
+ * ── The two consequences, stated rather than hidden ─────────────────────────────
+ *  - A workout NOBODY FINISHED stays open indefinitely. Sets logged days later with no
+ *    workout started land in it, and its end time ([Workout.endTs]) follows them. Midnight
+ *    used to cap that at a day; it also used to split a session that ran past three in the
+ *    morning, which is the training this app is actually used for.
+ *  - Sets recorded later the same day without pressing start again are still filed under the
+ *    morning's workout — unchanged, and still preferable to a timeout that guesses.
  */
-fun openWorkout(events: List<JournalEvent>, today: String): Workout? =
-    openWorkoutRow(events, today)?.let { buildWorkout(events, it.id) }
+fun openWorkout(events: List<JournalEvent>): Workout? =
+    openWorkoutRow(events)?.let { buildWorkout(events, it.id) }
 
 /**
  * The start event of [openWorkout] — what the repository stamps onto the rows it appends.
@@ -204,8 +296,12 @@ fun openWorkout(events: List<JournalEvent>, today: String): Workout? =
  * the number only alongside it; handing back one of the two would put the choice of which
  * link to write at the call site.
  */
-fun openWorkoutRow(events: List<JournalEvent>, today: String): JournalEvent? =
-    workoutStarts(events).lastOrNull { (row, _) -> row.writeDay() == today }?.first
+fun openWorkoutRow(events: List<JournalEvent>): JournalEvent? =
+    workoutStarts(events).lastOrNull()?.first?.takeIf { !isFinished(events, it) }
+
+/** Whether any row in [events] closes the workout started by [startRow]. */
+private fun isFinished(events: List<JournalEvent>, startRow: JournalEvent): Boolean =
+    events.any { it.type == TYPE_WORKOUT_FINISHED && it.workoutRef()?.matches(startRow) == true }
 
 /**
  * Folds one workout out of the journal, or null when [workoutId] names no start event here.
@@ -244,6 +340,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val links = LinkedHashMap<String, ExerciseLink>()
     val rests = HashMap<String, Int>()
     val unkeyed = ArrayList<ActivityEvent>()
+    var finished = false
 
     fun remember(link: ExerciseLink): String {
         val key = link.key
@@ -254,6 +351,12 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
 
     for (row in events) {
         if (row.workoutRef()?.matches(startRow) != true) continue
+        if (row.type == TYPE_WORKOUT_FINISHED) {
+            // sets recorded AFTER this one are still folded in below: finishing is a status,
+            // not a lock, and the forgotten set typed up afterwards belongs here
+            finished = true
+            continue
+        }
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
             rests[remember(ExerciseLink(added.exerciseUid, added.exerciseId))] = added.restSec
@@ -277,6 +380,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             WorkoutExercise(links.getValue(key), rests[key], ofExercise)
         },
         entriesWithoutExercise = unkeyed,
+        finished = finished,
     )
 }
 

@@ -235,9 +235,16 @@ fun TimerScreen(
     }
 }
 
-/** The live run, in the size you can read from the floor. */
+/**
+ * The live run, in the size you can read from the floor.
+ *
+ * Shared with [ConductorScreen] rather than private, because a protocol-led set started from
+ * an exercise card and one started from this tab are the same run being read in the same
+ * position — arms out, a metre or two from the phone. Two copies of this panel would be two
+ * places for the step name and the time left to start disagreeing.
+ */
 @Composable
-private fun RunPanel(state: TimerUiState, actions: TimerActions) {
+internal fun RunPanel(state: TimerUiState, actions: TimerActions) {
     val colors = LocalGachiColors.current
     val snapshot = state.run ?: return
     val phase = snapshot.state.phase()

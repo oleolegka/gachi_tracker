@@ -13,15 +13,19 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.Workout
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightAt
 import xyz.oleolegka.gachimuchi.domain.normPhrase
@@ -30,6 +34,7 @@ import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.payloadJson
+import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.toSlot as draftToSlot
 import java.time.LocalDate
@@ -92,10 +97,29 @@ class ActivityRepository(private val db: AppDatabase) {
      * is no longer something a caller can choose: [LOCAL_AUTHOR_ID] is the only value, and
      * the column survives only because the server schema has it (see Entities.kt).
      */
-    suspend fun record(form: ActivityForm, attachToWorkout: Boolean = true): Long {
-        // one read, shared by both consumers, and skipped entirely when neither wants it
-        val events = if (attachToWorkout || form.wantsBodyweightSnapshot) allEvents() else emptyList()
-        val workout = if (attachToWorkout) openWorkoutRow(events, today()) else null
+    suspend fun record(
+        form: ActivityForm,
+        attachToWorkout: Boolean = true,
+        /**
+         * File it under THIS workout, whatever is open.
+         *
+         * The screen that is drawing a workout knows which one it is drawing, and that is a
+         * better answer than folding the journal for "the open one" — they differ exactly
+         * when a FINISHED workout is opened to add the set that was forgotten in the changing
+         * room (§13, finishing is a status and not a lock). Without this that set would land
+         * in whatever happened to be open instead, which is either another workout or nothing.
+         */
+        intoWorkoutId: Long? = null,
+    ): Long {
+        // one read, shared by both consumers, and skipped entirely when neither wants it —
+        // a named workout is looked up by id and needs no fold
+        val needsEvents = form.wantsBodyweightSnapshot || (attachToWorkout && intoWorkoutId == null)
+        val events = if (needsEvents) allEvents() else emptyList()
+        val workout: JournalEvent? = when {
+            intoWorkoutId != null -> db.events().byId(intoWorkoutId)?.toJournalEvent()
+            attachToWorkout -> openWorkoutRow(events)
+            else -> null
+        }
         // the body-weight snapshot is stamped HERE for the same reason the workout link is:
         // one method sees every write, and a screen that forgot would log a set with no
         // volume at all. See [withBodyweightSnapshot].
@@ -115,9 +139,29 @@ class ActivityRepository(private val db: AppDatabase) {
     private fun today(): String = LocalDate.now().toString()
 
     /** The workout in progress, or null — see [openWorkout] for what "in progress" means. */
-    suspend fun currentWorkoutId(): Long? = openWorkoutRow(allEvents(), today())?.id
+    suspend fun currentWorkoutId(): Long? = openWorkoutRow(allEvents())?.id
 
-    suspend fun currentWorkout(): Workout? = openWorkout(allEvents(), today())
+    suspend fun currentWorkout(): Workout? = openWorkout(allEvents())
+
+    /**
+     * Writes "that workout is over".
+     *
+     * No time is recorded — the end is read off the last set (see [Workout.endTs]) — and
+     * nothing is locked: the workout can still be opened and written into afterwards, which is
+     * how the set forgotten in the changing room gets in.
+     */
+    suspend fun finishWorkout(workoutId: Long): Long {
+        val uid = db.events().byId(workoutId)?.uid
+        return db.events().insert(
+            EventEntity(
+                ts = now(), type = TYPE_WORKOUT_FINISHED,
+                payload = payloadJson.encodeToString(WorkoutFinished(workoutId, uid)),
+                // the link in the column as well as the payload, so one query finds every row
+                // of a workout whatever its type — same as the "exercise added" event
+                workoutId = workoutId, workoutUid = uid,
+            )
+        )
+    }
 
     /**
      * Opens a workout and returns its id, which IS the id of the event just written.
@@ -141,6 +185,14 @@ class ActivityRepository(private val db: AppDatabase) {
         slotId: Long? = null,
         name: String? = null,
     ): Long {
+        /*
+         * THE FORGOTTEN ONE IS CLOSED ON THE WAY PAST, silently. Nobody presses "finish"
+         * reliably, and the alternative to closing it here is two workouts open at once —
+         * after which "the one in progress" has to guess, which is what the midnight rule
+         * used to do and what §13 replaced. Silent because there is nothing to decide: the
+         * user has just said, by starting this one, that the previous one is over.
+         */
+        openWorkoutRow(allEvents())?.let { finishWorkout(it.id) }
         val slot = slotId?.let { db.slots().byId(it) }
         return db.events().insert(
             EventEntity(
@@ -188,6 +240,49 @@ class ActivityRepository(private val db: AppDatabase) {
         )
         setDefaultRest(exerciseId, restSec)
         return id
+    }
+
+    /**
+     * Copies a plan's composition into a workout, in order, and hands back the rows written.
+     *
+     * ── A COPY, never a reference (§13.7) ───────────────────────────────────────
+     * The plan is editable and the facts are not. Rewriting a slot next month must not
+     * rewrite what a workout done in August consisted of, so the exercises are written INTO
+     * the workout as ordinary "exercise added" events — the same events the user's own taps
+     * produce, indistinguishable afterwards, which is also why nothing downstream had to
+     * learn about plans.
+     *
+     * ── Which rest wins ─────────────────────────────────────────────────────────
+     * The one ON THE PLAN when the plan names one, because a rest written next to an exercise
+     * in a planned session is a statement about THAT session. Failing that, [restHintSec]
+     * answers in its usual order: what the user last chose for the exercise, then what the
+     * journal says they actually rested, then the configured default. §13.8 left this open;
+     * this is the answer, and it is the only order in which the more specific statement wins.
+     *
+     * ── Two things it deliberately does anyway ──────────────────────────────────
+     * A planned exercise that is no longer in the catalog is still added: the workout should
+     * consist of what was planned, and a card for an exercise this phone cannot build a form
+     * for is already a state the screen handles. And [addExerciseToWorkout] writes the rest
+     * onto the catalog row as well, so a rest that came off the PLAN becomes the exercise's
+     * remembered answer — which is right when the plan is where the user last thought about
+     * it, and is a side effect worth knowing about either way.
+     *
+     * Reads the slot's rows directly rather than through `plannedExercises` over the whole
+     * plan: same list, one query, and this path only ever holds an id.
+     */
+    suspend fun copyPlannedExercises(
+        workoutId: Long,
+        slotId: Long,
+        settings: TimerSettings,
+    ): List<Long> {
+        val planned = slotExercises(slotId)
+        if (planned.isEmpty()) return emptyList()
+        val events = allEvents()
+        return planned.map { entry ->
+            val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
+                ?: restHintSec(settings, events, exercise(entry.exerciseId)?.toRef())
+            addExerciseToWorkout(workoutId, entry.exerciseId, rest)
+        }
     }
 
     /** Remembers the rest chosen for an exercise — see [ExerciseDao.setDefaultRest]. */

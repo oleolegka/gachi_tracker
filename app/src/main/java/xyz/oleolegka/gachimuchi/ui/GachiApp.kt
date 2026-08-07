@@ -41,6 +41,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
+import xyz.oleolegka.gachimuchi.ui.screens.ConductorScreen
 import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
@@ -108,6 +109,11 @@ fun GachiApp(viewModel: MainViewModel) {
     // when a rest starts or is cleared, not on every tick — the countdown is drawn from the
     // clock, so nothing here recomposes four times a second (see rememberTickingNow)
     val restFloors by viewModel.restFloors.collectAsStateWithLifecycle()
+    // the plate answered on the way into the running set, for the offer at the end of it
+    val entryAddedKg by viewModel.entryAddedKg.collectAsStateWithLifecycle()
+    // what matured while a protocol-led set had the rests muted. Already spoken by the time
+    // it gets here; the screen is where it gets written down
+    val floorSummary by viewModel.floorSummary.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     /*
@@ -119,6 +125,14 @@ fun GachiApp(viewModel: MainViewModel) {
     /** The workout the entry card is writing into, or null for an entry on its own. */
     var loggingWorkoutId by rememberSaveable { mutableStateOf<Long?>(null) }
     var viewingWorkoutId by rememberSaveable { mutableStateOf<Long?>(null) }
+    /*
+     * Whether the conductor has the screen — a BOOLEAN and not "which exercise", because the
+     * run itself already knows which exercise it belongs to (`RunSnapshot.exerciseId`) and two
+     * answers to that would be one too many. This says only whether the user is looking at it,
+     * which is a question about the screen and nothing else: leaving turns it off and the set
+     * carries on regardless (§13.3, step 10).
+     */
+    var conductorOpen by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditorTarget?>(null) }
     // the form detail screen is a MODE over the overview, like the logging screen: it has
     // exactly one way out and nothing to navigate to from inside it
@@ -132,7 +146,7 @@ fun GachiApp(viewModel: MainViewModel) {
      * it is derived from. It decides which card says "Continue" and whether the workout
      * screen offers a way back into the entry card.
      */
-    val runningWorkoutId = remember(state.events, iso) { openWorkoutRow(state.events, iso)?.id }
+    val runningWorkoutId = remember(state.events) { openWorkoutRow(state.events)?.id }
 
     /*
      * The offered rest length is derived from the whole journal, so it is computed once
@@ -193,23 +207,13 @@ fun GachiApp(viewModel: MainViewModel) {
         loggingDate = day
         loggingWorkoutId = workoutId
     }
+    /*
+     * Starting a workout, from a plan or off-plan. When it comes from a plan its exercises
+     * are already in it by the time the screen opens — the copy happens inside
+     * [MainViewModel.startWorkout], between the start event and this navigation, so there is
+     * no frame on which the workout looks empty.
+     */
     val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?) -> Unit> { day, slotId ->
-        /*
-         * TODO(§13.7): copy the slot's exercises into the workout. A workout started from a
-         * plan currently arrives EMPTY and the user adds exercises as they go, exactly as an
-         * off-plan one does.
-         *
-         * Everything needed is now in place — `plannedExercises(state.slots, slotId)` reads
-         * the list and `ActivityRepository.addExerciseToWorkout` writes each one in — so this
-         * is a deliberate omission rather than a missing dependency: it is one
-         * `addExerciseToWorkout` per planned exercise, run between the start event and the
-         * navigation below, and it needs its own verification (which rest wins when the slot
-         * names one and the catalog remembers another is still open, §13.8).
-         *
-         * It is a COPY rather than a reference whenever it lands: the plan is editable and
-         * the facts are not, so rewriting the slot next month must not rewrite the
-         * composition of a workout already done.
-         */
         viewModel.startWorkout(day, slotId) { id ->
             openLoggingNow(day.toString(), id)
         }
@@ -238,17 +242,28 @@ fun GachiApp(viewModel: MainViewModel) {
      * the gesture fall through to the system, which backgrounds the app. Handling it and
      * doing nothing would trap the user inside.
      */
+    /*
+     * A set that ends while nobody is looking takes its screen down with it. Without this the
+     * flag would survive the run and the next start would find the conductor already "open",
+     * which is a screen showing a run that is not there.
+     */
+    val runEnded = timerRun == null
+    LaunchedEffect(runEnded) { if (runEnded) conductorOpen = false }
+
     val step = backStep(
         editingProgram = editing != null,
         showingFormDetail = detailExerciseId != null,
         logging = loggingDate != null,
         showingWorkout = viewingWorkoutId != null,
         tab = tab,
+        conducting = conductorOpen && timerRun != null,
     )
     BackHandler(enabled = step != BackStep.LeaveApp) {
         when (step) {
             BackStep.CloseEditor -> editing = null
             BackStep.CloseFormDetail -> detailExerciseId = null
+            // the set keeps running, keeps speaking, and the card leads back to it
+            BackStep.CloseConductor -> conductorOpen = false
             BackStep.CloseLogging -> {
                 loggingDate = null
                 loggingWorkoutId = null
@@ -277,7 +292,18 @@ fun GachiApp(viewModel: MainViewModel) {
             outcome = outcome,
             exercise = state.refById(outcome.exerciseId),
             candidates = holdExercises,
-            lastAddedKg = { id -> lastHoldSet(state.events, state.linkOf(id))?.addedKg },
+            /*
+             * THE ANSWER GIVEN ON THE WAY IN WINS, for the exercise it was given about. That
+             * is the whole payoff of asking before the set (§13.5): the plate that was
+             * actually hung is what the offer arrives filled in with, rather than the one
+             * hung the previous time. For anything else — a different exercise picked in the
+             * offer, or a run nobody was asked about — the last logged set is still the best
+             * guess available.
+             */
+            lastAddedKg = { id ->
+                entryAddedKg?.takeIf { id == outcome.exerciseId }
+                    ?: lastHoldSet(state.events, state.linkOf(id))?.addedKg
+            },
             nowWallMs = System.currentTimeMillis(),
             onLog = viewModel::logRunSets,
             onDismiss = viewModel::dismissRunOutcome,
@@ -334,6 +360,21 @@ fun GachiApp(viewModel: MainViewModel) {
         )
 
         /*
+         * A protocol-led set, with the screen and the speaker (§13.2). Drawn OVER the logging
+         * screen rather than replacing it: leaving is one gesture and lands straight back on
+         * the card list, because during a superset that trip is made repeatedly and in a
+         * hurry. The condition carries `timerRun != null` as well as the flag so that a run
+         * ending anywhere — its own end, the Stop button, a process rebuild — puts the card
+         * list back without anything having to notice and clear a flag first.
+         */
+        conductorOpen && timerRun != null -> ConductorScreen(
+            exerciseName = state.exerciseById(timerRun?.exerciseId)?.name,
+            state = timerState,
+            actions = timerActions,
+            onLeave = { conductorOpen = false },
+        )
+
+        /*
          * TWO WAYS TO RECORD, and which one appears is decided by whether there is a workout
          * behind it.
          *
@@ -358,8 +399,22 @@ fun GachiApp(viewModel: MainViewModel) {
                     createExercise = { name, form, edge, work, rest, then ->
                         viewModel.createExercise(name, form, edge, work, rest, then)
                     },
-                    addSet = { form -> viewModel.addSet(form) },
+                    /*
+                     * INTO THIS WORKOUT, named rather than looked up. The screen is drawing a
+                     * particular workout and that is the one a set typed on it belongs to —
+                     * which is not the same as "the open one" the moment a FINISHED workout is
+                     * opened to add the set forgotten in the changing room (§13).
+                     */
+                    addSet = { form ->
+                        viewModel.addSet(form, intoWorkoutId = workoutBeingLogged)
+                    },
                     undoSet = viewModel::undoSet,
+                    finish = { viewModel.finishWorkout(workoutBeingLogged) },
+                    startProtocolSet = { exercise, addedKg ->
+                        viewModel.startProgramForExercise(exercise, addedKg)
+                        conductorOpen = true
+                    },
+                    openConductor = { conductorOpen = true },
                     close = {
                         loggingDate = null
                         loggingWorkoutId = null
@@ -372,6 +427,9 @@ fun GachiApp(viewModel: MainViewModel) {
                 settings = timerSettings,
                 floors = restFloors,
                 actions = workoutActions,
+                liveExerciseId = timerRun?.exerciseId,
+                readySummary = floorSummary,
+                onDismissSummary = viewModel::dismissFloorSummary,
             )
         }
 

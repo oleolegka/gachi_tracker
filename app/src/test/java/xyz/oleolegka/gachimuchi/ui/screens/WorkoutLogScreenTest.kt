@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -9,6 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
@@ -46,6 +49,15 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val abs = exerciseRef(2, "Abs")
 
     /**
+     * A hangboard exercise, which is what a protocol-led one is in practice: the 7:3 protocol
+     * is part of its identity (§12-A), so it is on the catalog row rather than asked per set.
+     */
+    private val hangs = ExerciseRef(
+        id = 3, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
+        edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+    )
+
+    /**
      * The catalog carries a chosen rest for each, which is what the "add an exercise" question
      * is prefilled from. Set here rather than left to be measured out of the journal so the
      * number under test is a fact of the fixture and not of the gaps between its timestamps.
@@ -53,11 +65,17 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val catalog = listOf(
         exerciseEntity(1, "Bench press").copy(defaultRestSec = 150),
         exerciseEntity(2, "Abs").copy(defaultRestSec = 90),
+        exerciseEntity(3, "Hangs 20 mm", ExerciseForm.HOLD)
+            .copy(defaultRestSec = 240, edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0),
     )
 
     private val added = mutableListOf<Pair<Long, Int>>()
     private val logged = mutableListOf<ActivityForm>()
     private val undone = mutableListOf<Long>()
+    private val started = mutableListOf<Pair<String, Double?>>()
+    private var conductorOpened = 0
+    private var summaryDismissed = 0
+    private var finishes = 0
     private var closed = 0
 
     /** A monotonic instant the floors are placed around, so no test races a real clock. */
@@ -67,6 +85,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal: Journal,
         workoutId: Long,
         floors: List<RestFloor> = emptyList(),
+        liveExerciseId: Long? = null,
+        readySummary: String? = null,
     ) {
         val state = UiState(events = journal.events, exercises = catalog, loading = false)
         screen {
@@ -80,8 +100,14 @@ class WorkoutLogScreenTest : ScreenTest() {
                     createExercise = { _, _, _, _, _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
+                    finish = { finishes++ },
+                    startProtocolSet = { exercise, kg -> started += exercise.name to kg },
+                    openConductor = { conductorOpened++ },
                     close = { closed++ },
                 ),
+                liveExerciseId = liveExerciseId,
+                readySummary = readySummary,
+                onDismissSummary = { summaryDismissed++ },
                 nowMs = now,
             )
         }
@@ -330,6 +356,185 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Save").performClick()
         assertEquals(listOf(1L to 150), added)
+    }
+
+    // --- finishing --------------------------------------------------------------------------
+
+    @Test
+    fun `finishing is a button, and it is not the way out of the screen`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Finish").performClick()
+
+        assertEquals(1, finishes)
+        // leaving and finishing are two different things and two different controls
+        assertEquals(0, closed)
+    }
+
+    /**
+     * The end is READ OFF THE LAST SET, not stamped when the button was pressed — the button
+     * is pressed in the changing room, the training stopped at the last set. So a finished
+     * workout can be opened again and written into, and the end moves by itself.
+     */
+    @Test
+    fun `a finished workout says when it ended, counted from its last set`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+        journal.strengthSet(bench, iso, at = "19:42", weightKg = 62.5, workoutId = workout)
+        journal.finishWorkout(workout, iso, at = "19:55")
+        show(journal, workout)
+
+        compose.onNodeWithText("Fri 7 Aug - 1 exercise, 2 sets - finished 19:42").assertIsDisplayed()
+        // the button says the state rather than offering it again
+        compose.onNodeWithText("Finished").assertIsDisplayed()
+    }
+
+    /** And an unfinished one says nothing about an end it has not reached. */
+    @Test
+    fun `an unfinished workout has no end time in its heading`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Fri 7 Aug - 2 exercises, 2 sets").assertIsDisplayed()
+        compose.onNodeWithText("Finish").assertIsDisplayed()
+    }
+
+    // --- what matured while the set was running ---------------------------------------------
+
+    /**
+     * The half of §13.4 that was missing: the summary was computed and spoken, and appeared
+     * on no screen. Every rest is silenced while a protocol runs — a beep in the middle of a
+     * seven-second hang is exactly what must not happen — so a set that took two minutes can
+     * end with several rests having come due unannounced, and this line is the only thing
+     * that says which.
+     */
+    @Test
+    fun `the readiness summary from a finished set is shown`() {
+        val journal = Journal()
+        show(
+            journal, supersetWorkout(journal),
+            readySummary = "Bench press has been ready for 1:20, Abs for 0:40",
+        )
+
+        compose.onNodeWithText("Bench press has been ready for 1:20, Abs for 0:40")
+            .assertIsDisplayed()
+
+        compose.onNodeWithText("Got it").performClick()
+        assertEquals(1, summaryDismissed)
+    }
+
+    @Test
+    fun `no summary means no banner, rather than an empty one`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onAllNodesWithText("Got it").assertCountEquals(0)
+    }
+
+    // --- the protocol-led set ---------------------------------------------------------------
+
+    /** Bench, plus a hangboard exercise that is run by its protocol. */
+    private fun hangWorkout(journal: Journal): Long {
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        journal.addExercise(workout, iso, hangs, restSec = 240, at = "18:06")
+        return workout
+    }
+
+    /**
+     * The whole point of the card being the tap target for two different things: for a hang
+     * the app is not taking a report, it is about to call out seven seconds on and three off,
+     * and a form asking for numbers that do not exist yet is in the way.
+     */
+    @Test
+    fun `tapping a protocol-led card starts the set instead of raising the form`() {
+        val journal = Journal()
+        show(journal, hangWorkout(journal))
+
+        compose.onNodeWithText("Hangs 20 mm").performClick()
+        settle()
+
+        assertEquals(listOf("Hangs 20 mm" to null), started)
+        // no form and no question: a bodyweight protocol used to start with one tap and
+        // still does
+        compose.onAllNodesWithText("Added weight").assertCountEquals(0)
+        compose.onAllNodesWithText("Repeat set").assertCountEquals(0)
+    }
+
+    /** And the ordinary exercise on the same screen still gets the form it always had. */
+    @Test
+    fun `a card that is not protocol-led still raises the entry form`() {
+        val journal = Journal()
+        show(journal, hangWorkout(journal))
+
+        compose.onNodeWithText("Bench press").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Weight, kg").assertExists()
+        assertEquals(emptyList<Pair<String, Double?>>(), started)
+    }
+
+    /**
+     * The plate goes on before you get under the cable, so before the set is when the app can
+     * ask (§13.5). Prefilled with what was hung last time, so agreeing is one tap.
+     */
+    @Test
+    fun `the weight is asked on the way in when the last set carried one`() {
+        val journal = Journal()
+        journal.holdSet(hangs, "2026-08-05", addedKg = 15.0)
+        show(journal, hangWorkout(journal))
+
+        compose.onNodeWithText("Hangs 20 mm").performClick()
+        settle()
+
+        compose.onNodeWithText("Added weight").assertExists()
+        compose.onNodeWithText("15").assertExists()
+        // nothing has started yet: the question is in front of the set, not beside it
+        assertEquals(emptyList<Pair<String, Double?>>(), started)
+
+        compose.onNodeWithText("Start the set").performClick()
+        assertEquals(listOf("Hangs 20 mm" to 15.0), started)
+    }
+
+    /**
+     * The oversight §13.5 names explicitly: asking unconditionally would put a screen in
+     * front of every bodyweight protocol, where there used to be none at all.
+     */
+    @Test
+    fun `no weight is asked when the last set carried none`() {
+        val journal = Journal()
+        journal.holdSet(hangs, "2026-08-05", addedKg = null)
+        show(journal, hangWorkout(journal))
+
+        compose.onNodeWithText("Hangs 20 mm").performClick()
+        settle()
+
+        compose.onAllNodesWithText("Added weight").assertCountEquals(0)
+        assertEquals(listOf("Hangs 20 mm" to null), started)
+    }
+
+    /**
+     * Leaving the conductor does not stop the set, so the card has to be both the sign that
+     * it is still running and the way back to it — otherwise a set left behind is a set with
+     * no route to its own screen.
+     */
+    @Test
+    fun `a card whose set is running says so and leads back to it`() {
+        val journal = Journal()
+        show(journal, hangWorkout(journal), liveExerciseId = 3L)
+
+        compose.onNodeWithText("Set running - tap to go back to it").assertIsDisplayed()
+
+        compose.onNodeWithText("Hangs 20 mm").performClick()
+        settle()
+
+        assertEquals(1, conductorOpened)
+        // and nothing was started a second time on top of the set already running
+        assertEquals(emptyList<Pair<String, Double?>>(), started)
     }
 
     // --- taking a set back ------------------------------------------------------------------

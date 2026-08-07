@@ -137,7 +137,7 @@ fun dayCards(
 ): DayCards {
     val iso = date.toString()
     val canRecord = !date.isAfter(today)
-    val openUid = openWorkoutRow(events, today.toString())?.uid
+    val openUid = openWorkoutRow(events)?.uid
     val workouts = workoutsOn(events, iso)
     val startedFromSlot = workouts.mapNotNull { it.slot }
 

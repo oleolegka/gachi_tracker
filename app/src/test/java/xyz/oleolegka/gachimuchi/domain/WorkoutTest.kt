@@ -41,6 +41,15 @@ class WorkoutTest {
             workoutId,
         )
 
+    /** "That workout is over" — written by the button and by the start of the next one. */
+    private fun finished(workoutId: Long, ts: String = "2026-08-07T20:00:00") =
+        row(
+            TYPE_WORKOUT_FINISHED,
+            payloadJson.encodeToString(WorkoutFinished(workoutId)),
+            ts,
+            workoutId,
+        )
+
     private fun set(
         exercise: ExerciseRef,
         opDate: String,
@@ -62,8 +71,8 @@ class WorkoutTest {
     @Test
     fun `there is no open workout until one is started`() {
         val events = listOf(set(bench, today))
-        assertNull(openWorkout(events, today))
-        assertNull(openWorkoutRow(events, today)?.id)
+        assertNull(openWorkout(events))
+        assertNull(openWorkoutRow(events)?.id)
     }
 
     @Test
@@ -71,16 +80,87 @@ class WorkoutTest {
         val start = started(today)
         val events = listOf(start)
 
-        assertEquals(start.id, openWorkoutRow(events, today)?.id)
-        assertEquals(start.id, openWorkout(events, today)!!.id)
+        assertEquals(start.id, openWorkoutRow(events)?.id)
+        assertEquals(start.id, openWorkout(events)!!.id)
+    }
+
+    /**
+     * MIDNIGHT DOES NOT CLOSE A WORKOUT. It used to, and that rule split the training this
+     * app is actually used for: an evening session that runs to three in the morning is one
+     * session, and closing it at midnight left its last sets in the wrong half.
+     */
+    @Test
+    fun `a workout that ran past midnight is still the open one`() {
+        val evening = started("2026-08-06", ts = "2026-08-06T22:00:00")
+        val events = listOf(evening)
+
+        assertEquals(evening.id, openWorkoutRow(events)?.id)
+        assertEquals(1, workoutsOn(events, "2026-08-06").size)
     }
 
     @Test
-    fun `yesterday's workout is not open today`() {
-        val events = listOf(started("2026-08-06"))
-        assertNull(openWorkoutRow(events, today)?.id)
-        // and it is still perfectly findable as history
-        assertEquals(1, workoutsOn(events, "2026-08-06").size)
+    fun `finishing closes it, and nothing else is open afterwards`() {
+        val start = started(today)
+        val events = listOf(start, finished(start.id))
+
+        assertNull(openWorkoutRow(events)?.id)
+        // it is not gone, it is over: still findable, still complete
+        assertEquals(1, workoutsOn(events, today).size)
+        assertTrue(buildWorkout(events, start.id)!!.finished)
+    }
+
+    /**
+     * The forgotten workout, closed on the way past. Without this, "the one in progress" has
+     * two candidates and has to guess — which is what the midnight rule used to do.
+     */
+    @Test
+    fun `a workout is finished by whoever starts the next one`() {
+        val morning = started(today, ts = "${today}T08:00:00")
+        val evening = started(today, ts = "${today}T19:00:00")
+        val events = listOf(morning, finished(morning.id), evening)
+
+        assertEquals(evening.id, openWorkoutRow(events)?.id)
+        assertTrue(buildWorkout(events, morning.id)!!.finished)
+        assertFalse(buildWorkout(events, evening.id)!!.finished)
+    }
+
+    /**
+     * "Finished" is a STATUS AND NOT A LOCK: the set remembered on the way to the car goes
+     * into the workout it belongs to, and the end time follows it there.
+     */
+    @Test
+    fun `a set added after finishing still lands in the workout, and moves its end`() {
+        val start = started(today, ts = "${today}T18:00:00")
+        val first = set(bench, today, workoutId = start.id, ts = "${today}T18:30:00")
+        val done = finished(start.id)
+        val afterwards = set(bench, today, workoutId = start.id, ts = "${today}T19:05:00")
+
+        val workout = buildWorkout(listOf(start, first, done, afterwards), start.id)!!
+        assertTrue("it does not re-open", workout.finished)
+        assertEquals(2, workout.setCount)
+        assertEquals("${today}T19:05:00", workout.endTs)
+    }
+
+    // --- when a workout ended ---------------------------------------------------------
+
+    /**
+     * The end is READ OFF THE LAST SET rather than stamped when the button was pressed. The
+     * button is pressed in the changing room; the training stopped at the last set.
+     */
+    @Test
+    fun `the end time is the last set recorded, whenever the button was pressed`() {
+        val start = started(today, ts = "${today}T18:00:00")
+        val early = set(bench, today, workoutId = start.id, ts = "${today}T18:20:00")
+        val late = set(squat, today, workoutId = start.id, ts = "${today}T19:10:00")
+
+        assertEquals("${today}T19:10:00", buildWorkout(listOf(start, early, late), start.id)!!.endTs)
+    }
+
+    /** A workout that recorded nothing has only its own start to be dated by. */
+    @Test
+    fun `an empty workout ends when it started`() {
+        val start = started(today, ts = "${today}T18:00:00")
+        assertEquals("${today}T18:00:00", buildWorkout(listOf(start), start.id)!!.endTs)
     }
 
     @Test
@@ -89,7 +169,7 @@ class WorkoutTest {
         val evening = started(today, ts = "${today}T19:00:00")
         val events = listOf(morning, evening)
 
-        assertEquals(evening.id, openWorkoutRow(events, today)?.id)
+        assertEquals(evening.id, openWorkoutRow(events)?.id)
         // both are on the day: two separate workouts is the thing a Session could not express
         assertEquals(listOf(morning.id, evening.id), workoutsOn(events, today).map { it.id })
     }
@@ -104,8 +184,8 @@ class WorkoutTest {
         val start = started("2026-06-01", ts = "${today}T21:00:00")
         val events = listOf(start)
 
-        assertEquals(start.id, openWorkoutRow(events, today)?.id)
-        val workout = openWorkout(events, today)!!
+        assertEquals(start.id, openWorkoutRow(events)?.id)
+        val workout = openWorkout(events)!!
         assertEquals("2026-06-01", workout.opDate)
         assertTrue("nothing in a workout from June may count anything down", workout.isBackdated(today))
         assertEquals(emptyList<Workout>(), workoutsOn(events, today))
@@ -115,7 +195,7 @@ class WorkoutTest {
     @Test
     fun `a workout of today is not backdated`() {
         val events = listOf(started(today))
-        assertFalse(openWorkout(events, today)!!.isBackdated(today))
+        assertFalse(openWorkout(events)!!.isBackdated(today))
     }
 
     // --- the plan a workout was started from ------------------------------------------
@@ -216,7 +296,7 @@ class WorkoutTest {
         val broken = row(TYPE_WORKOUT_STARTED, "{ this is not json", "${today}T09:00:00")
         val events = listOf(broken, set(bench, today, workoutId = broken.id))
 
-        val workout = openWorkout(events, today)
+        val workout = openWorkout(events)
         assertNotNull("losing the start event must not lose the training", workout)
         // it degrades to the write day and to "no slot", which is what an older row meant
         assertEquals(today, workout!!.opDate)
@@ -365,14 +445,14 @@ class WorkoutTest {
          * that row disagree forever.
          */
         val start = started("2026-06-01", ts = "${today}T21:00:00")
-        val june = openWorkout(listOf(start), today)!!
+        val june = openWorkout(listOf(start))!!
 
         assertEquals("2026-06-01", loggingDay(june, today))
     }
 
     @Test
     fun `a workout of today logs under today, so nothing changes for the ordinary case`() {
-        val workout = openWorkout(listOf(started(today)), today)!!
+        val workout = openWorkout(listOf(started(today)))!!
         assertEquals(today, loggingDay(workout, today))
     }
 
@@ -578,7 +658,7 @@ class WorkoutTest {
     fun `a workout knows its own identity, and it is the start event's`() {
         val start = started(today)
         assertEquals(start.uid, buildWorkout(listOf(start), start.id)!!.uid)
-        assertEquals(start.uid, openWorkoutRow(listOf(start), today)?.uid)
+        assertEquals(start.uid, openWorkoutRow(listOf(start))?.uid)
     }
 
     /**

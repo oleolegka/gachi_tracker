@@ -7,10 +7,13 @@ import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
+import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.payloadJson
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.toPayload
@@ -55,6 +58,17 @@ class Journal {
         "${day}T$at:00",
     )
 
+    /**
+     * Closes a workout. It carries NO time of its own: when the training ended is folded out
+     * of the last set recorded, so this row states only which workout is over.
+     */
+    fun finishWorkout(workoutId: Long, day: String, at: String = "20:00") = add(
+        TYPE_WORKOUT_FINISHED,
+        payloadJson.encodeToString(WorkoutFinished(workoutId)),
+        "${day}T$at:00",
+        workoutId,
+    )
+
     /** Puts an exercise into a workout before any set of it exists. */
     fun addExercise(workoutId: Long, day: String, exercise: ExerciseRef, restSec: Int, at: String = "09:01") =
         add(
@@ -80,6 +94,22 @@ class Journal {
     ): Long {
         val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg)
         return add(form.type, form.toPayload(), "${writtenOn}T$at:00", workoutId)
+    }
+
+    /**
+     * A hang. [addedKg] null is the plate-free case, which is the one the weight question on
+     * the way into a protocol-led set is required NOT to appear for (§13.5).
+     */
+    fun holdSet(
+        exercise: ExerciseRef,
+        day: String,
+        reps: Int = 6,
+        addedKg: Double? = null,
+        at: String = "09:10",
+        workoutId: Long? = null,
+    ): Long {
+        val form = holdSetOf(exercise, day, addedKg = addedKg, reps = reps)
+        return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
     }
 
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */

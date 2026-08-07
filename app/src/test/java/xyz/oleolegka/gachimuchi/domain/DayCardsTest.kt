@@ -37,6 +37,21 @@ class DayCardsTest {
     )
 
     /** A start event WRITTEN today for a day already gone — training typed up afterwards. */
+    /**
+     * "That workout is over."
+     *
+     * Needed by any fixture whose workout must NOT read as the one in progress: midnight no
+     * longer closes one (§13), so a workout left open on a past day is still the open one and
+     * would draw a "Continue" card on a day that is over.
+     */
+    private fun finished(workoutId: Long, opDate: String, at: String = "20:00") =
+        row(
+            TYPE_WORKOUT_FINISHED,
+            payloadJson.encodeToString(WorkoutFinished(workoutId)),
+            "${opDate}T$at:00",
+            workoutId,
+        )
+
     private fun startedLate(opDate: String, writtenOn: String, at: String = "21:00", slotId: Long? = null) =
         row(TYPE_WORKOUT_STARTED, payloadJson.encodeToString(WorkoutStarted(opDate, slotId)), "${writtenOn}T$at:00")
 
@@ -340,6 +355,9 @@ class DayCardsTest {
                 set(stretching, iso, at = "13:00"),
                 set(fingerboard, iso, at = "15:00"),
                 set(fingerboard, iso, at = "15:06"),
+                // it was closed at the time, which is what makes it a DONE card rather than
+                // the one in progress — a workout nobody finishes stays open indefinitely now
+                finished(gym.id, iso, at = "11:00"),
             ),
             slots,
             date = yesterday,

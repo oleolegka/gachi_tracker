@@ -119,10 +119,12 @@ class DayCardListTest : ScreenTest() {
     @Test
     fun `a workout that is not the open one counts its contents and opens on a tap`() {
         val journal = Journal()
-        // yesterday, so nothing about it is the workout in progress
+        // yesterday AND closed, which is what makes it not the one in progress: midnight no
+        // longer ends a workout (§13), so an unfinished one from yesterday still is
         val workout = journal.startWorkout(yesterday.toString(), at = "18:05")
         journal.addExercise(workout, yesterday.toString(), bench, restSec = 150)
         journal.strengthSet(bench, yesterday.toString(), at = "18:10", workoutId = workout)
+        journal.finishWorkout(workout, yesterday.toString(), at = "18:30")
 
         day(journal.events, date = yesterday)
 

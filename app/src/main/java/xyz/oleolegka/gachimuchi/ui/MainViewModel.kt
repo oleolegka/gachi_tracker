@@ -185,13 +185,13 @@ class MainViewModel(
      * The duration is resolved AFTER the write, so the gap that has just been measured (the
      * pause before this very set) is part of what the offer is based on.
      */
-    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true) {
+    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true, intoWorkoutId: Long? = null) {
         viewModelScope.launch {
             val worthAPicture = celebratedByPicture(form)
             // BEFORE the write, or the set would be compared against itself and no set
             // would ever be a record
             val record = if (worthAPicture) recordBrokenBy(form) else null
-            repo.record(form, attachToWorkout = attachToWorkout)
+            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
             if (worthAPicture) {
                 _celebrations.tryEmit(
                     CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
@@ -240,11 +240,20 @@ class MainViewModel(
      * the thing it just created and it has no other way to name it — the id IS the id of the
      * event the repository just wrote.
      *
-     * [slotId] is the plan it was started from, when it was started from one. The exercises
-     * ON that slot are NOT copied in yet; see the note at the call site in ui/GachiApp.kt.
+     * [slotId] is the plan it was started from, when it was started from one — and when it is
+     * one, that plan's exercises are COPIED into the workout before the caller is told about
+     * it, so the screen it opens is already the list of what the session is meant to be
+     * (§13.7). Copied and not referenced: the plan is editable and the facts are not.
+     *
+     * The copy happens between the start and [then] rather than after it, so the screen never
+     * draws a workout that is about to gain three cards on the next frame.
      */
     fun startWorkout(day: LocalDate, slotId: Long? = null, then: (Long) -> Unit) {
-        viewModelScope.launch { then(repo.startWorkout(day.toString(), slotId)) }
+        viewModelScope.launch {
+            val id = repo.startWorkout(day.toString(), slotId)
+            if (slotId != null) repo.copyPlannedExercises(id, slotId, timer.settings.value)
+            then(id)
+        }
     }
 
     /**
@@ -260,6 +269,17 @@ class MainViewModel(
      */
     fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
         viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
+    }
+
+    /**
+     * Says a workout is over.
+     *
+     * It is not an undo and not a lock: the workout keeps everything it has, can be opened
+     * again, and a set added afterwards goes into it and moves its end time. What it changes
+     * is that this workout stops being the one sets land in by default.
+     */
+    fun finishWorkout(workoutId: Long) {
+        viewModelScope.launch { repo.finishWorkout(workoutId) }
     }
 
     // --- celebration -------------------------------------------------------------------
@@ -394,12 +414,32 @@ class MainViewModel(
     fun dismissFloor(exerciseId: Long) = timer.floors.dismiss(exerciseId)
 
     /**
+     * The plate answered on the way INTO the set that is running, or null when none was.
+     *
+     * ── Why it is held here and not in the run ──────────────────────────────────
+     * It is the answer to a question the USER was asked, and its only job is to be the number
+     * the offer at the end arrives prefilled with. Putting it in [RunSnapshot] would mean a
+     * schema change to the stored run for a value nothing about the running of the set uses.
+     *
+     * The cost, stated: this does NOT survive the process. A set conducted while the app is
+     * killed and rebuilt from the alarm comes back with the offer prefilled from the last
+     * logged set instead of from the answer given at the start — the behaviour before the
+     * question existed, so nothing is worse than it was, but the answer is quietly lost.
+     */
+    private val _entryAddedKg = MutableStateFlow<Double?>(null)
+    val entryAddedKg: StateFlow<Double?> = _entryAddedKg.asStateFlow()
+
+    /**
      * The one-tap program for a hangboard exercise: its work:rest protocol is already on
      * the catalog row, the rep count comes from the last set of it that was logged, the set
      * count from the settings, and the pause between sets from what was actually rested.
-     * Nothing is asked, because nothing is unknown.
+     *
+     * [addedKg] is the one thing that can be asked first, and only when there is a reason to
+     * (§13.5) — the caller decides that, because the caller is the one that would be putting
+     * the extra screen in front of the user.
      */
-    fun startProgramForExercise(exercise: ExerciseRef) {
+    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null) {
+        _entryAddedKg.value = addedKg
         viewModelScope.launch {
             val events = repo.allEvents()
             val settings = timerSettings.value
@@ -424,11 +464,16 @@ class MainViewModel(
      * program a run that belonged to nothing and therefore offered nothing, however many
      * sets it had just counted.
      */
-    fun runProgram(program: WorkoutProgram) = timer.start(
-        program = program,
-        exerciseId = program.exerciseId,
-        origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
-    )
+    fun runProgram(program: WorkoutProgram): Unit {
+        // nobody was asked about a plate for this one, and the previous answer belongs to a
+        // run that is now over
+        _entryAddedKg.value = null
+        timer.start(
+            program = program,
+            exerciseId = program.exerciseId,
+            origin = if (program.exerciseId != null) RunOrigin.EXERCISE else RunOrigin.PROGRAM,
+        )
+    }
 
     fun pauseTimer() = timer.pause()
     fun resumeTimer() = timer.resume()
@@ -462,7 +507,10 @@ class MainViewModel(
     val runOutcome: StateFlow<RunOutcome?> = timer.outcome
 
     /** "Not this time": the offer goes away and the journal is untouched. */
-    fun dismissRunOutcome() = timer.clearOutcome()
+    fun dismissRunOutcome() {
+        _entryAddedKg.value = null
+        timer.clearOutcome()
+    }
 
     /**
      * Writes the confirmed sets, one journal event per set, through the same repository and
@@ -482,6 +530,9 @@ class MainViewModel(
      */
     fun logRunSets(exercise: ExerciseRef, sets: List<CompletedSet>, addedKg: Double? = null) {
         val outcome = timer.outcome.value
+        // the question has been answered for good: whatever the user typed into the offer is
+        // the weight now, and the entry answer must not prefill the NEXT run
+        _entryAddedKg.value = null
         viewModelScope.launch {
             val day = outcome?.opDate?.takeIf { it.isNotBlank() } ?: LocalDate.now().toString()
             val written = ArrayList<Long>()

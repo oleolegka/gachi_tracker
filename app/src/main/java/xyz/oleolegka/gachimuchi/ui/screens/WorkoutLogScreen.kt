@@ -56,8 +56,12 @@ import xyz.oleolegka.gachimuchi.domain.activityName
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.ceilSeconds
 import xyz.oleolegka.gachimuchi.domain.formatClock
+import xyz.oleolegka.gachimuchi.domain.formatNumber
+import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.lastTimeOf
+import xyz.oleolegka.gachimuchi.domain.ledByProtocol
 import xyz.oleolegka.gachimuchi.domain.parseCount
+import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -106,14 +110,12 @@ import java.time.LocalDate
  * `loggingDay`, applied at the one place that builds forms rather than passed in as a
  * parameter that could be handed the wrong value.
  *
- * ── Room left, deliberately empty ───────────────────────────────────────────────
- * Four things belong on this screen and are not on it: starting a protocol-led set from a
- * card and letting the conductor take the screen (§13.3), the weight question on the way into
- * such a set (§13.5), the readiness summary a finished set produces (§13.4), and a way to
- * declare the workout over (§13.8, which has not decided what closes one). Each is its own
- * change with its own verification. None of them is stubbed: a card carries no button that
- * does nothing, because a control that does nothing is worse than an absent one — it is
- * pressed in the gym, and nothing happens, and the app is the thing that broke.
+ * ── What a tap on a card does depends on the exercise ───────────────────────────
+ * For most exercises it raises the quick entry form, which is what a card has always done.
+ * For an exercise RUN BY ITS PROTOCOL (`ledByProtocol`, §13.2) it starts the set instead and
+ * hands the screen to the conductor — because for those the app is not recording what
+ * happened, it is calling out what to do next, and a form asking for numbers that do not
+ * exist yet is in the way. A card whose set is already running leads back to it.
  */
 @Immutable
 data class WorkoutLogActions(
@@ -150,6 +152,28 @@ data class WorkoutLogActions(
     /** Take back a set: an append-only reversal, not a delete. */
     val undoSet: (eventId: Long) -> Unit,
 
+    /**
+     * Declare the workout over.
+     *
+     * Not a lock and not a way out: the screen stays where it is, everything on it can still
+     * be tapped, and a set added afterwards goes into this workout and moves its end time.
+     * What it changes is that sets logged from anywhere ELSE stop landing here.
+     */
+    val finish: () -> Unit,
+
+    /**
+     * Begin a protocol-led set and give the screen to the conductor.
+     *
+     * [addedKg] is what was hung off the belt, answered BEFORE the set rather than after it
+     * (§13.5): the plate goes on before you get under the cable, so that is when the app can
+     * ask without being in the way. Null means nothing was asked — see [WorkoutLogScreen] for
+     * the rule that decides.
+     */
+    val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?) -> Unit,
+
+    /** Go back to the set already running. It has never stopped; this only shows it again. */
+    val openConductor: () -> Unit,
+
     /** Leave the workout. It is not finished by leaving — nothing here ends one. */
     val close: () -> Unit,
 )
@@ -164,6 +188,27 @@ fun WorkoutLogScreen(
     floors: List<RestFloor>,
     actions: WorkoutLogActions,
     modifier: Modifier = Modifier,
+    /**
+     * The exercise whose protocol-led set is running right now, or null for none.
+     *
+     * Read off the run itself (`RunSnapshot.exerciseId`) rather than remembered here, so a
+     * set that ends while this screen is not looking cannot leave a card claiming to be
+     * running. The card says so in words and leads back to the conductor instead of raising
+     * the entry form — logging the set is what the conductor offers when it finishes.
+     */
+    liveExerciseId: Long? = null,
+    /**
+     * What matured while a protocol-led set had the rests muted, as one sentence, or null.
+     *
+     * Computed and spoken already (domain/Floors.kt, `floorSummaryText`); this is the only
+     * place it is WRITTEN DOWN. It matters because a running conductor silences every floor
+     * (a beep in the middle of a seven-second hang is exactly what must not happen), so a set
+     * that took two minutes can end with three rests having come due unannounced. One line
+     * answers "what is ready now" at a glance, which a queue of missed beeps never could.
+     */
+    readySummary: String? = null,
+    /** Acknowledge the summary. It says nothing that is not already visible on the cards. */
+    onDismissSummary: () -> Unit = {},
     /**
      * The monotonic reading the bars are drawn against.
      *
@@ -193,10 +238,13 @@ fun WorkoutLogScreen(
     var askingRestFor by rememberSaveable { mutableStateOf<Long?>(null) }
     /** The exercise whose quick entry form is raised, or null. */
     var entryFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** The exercise whose protocol-led set is waiting on the weight question, or null. */
+    var weighingFor by rememberSaveable { mutableStateOf<Long?>(null) }
 
     Scaffold(
         modifier = modifier.imePadding(),
         topBar = {
+            Column {
             TopAppBar(
                 title = {
                     Column {
@@ -207,8 +255,13 @@ fun WorkoutLogScreen(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            listOfNotNull(date?.let { fmtWeekdayDay(it) }, summaryOf(workout))
-                                .joinToString(" - "),
+                            listOfNotNull(
+                                date?.let { fmtWeekdayDay(it) },
+                                summaryOf(workout),
+                                // stated only once it means something: an unfinished workout
+                                // has an end time too, and it is simply "so far"
+                                "finished ${clockOf(workout.endTs)}".takeIf { workout.finished },
+                            ).joinToString(" - "),
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.inkSecondary,
                         )
@@ -229,8 +282,25 @@ fun WorkoutLogScreen(
                     TextButton(onClick = { last?.let(actions.undoSet) }, enabled = last != null) {
                         Text("Undo last")
                     }
+                    /*
+                     * Up here for the same reason as "Undo last", and not because it is
+                     * dangerous — it is not, nothing is lost and the screen carries on
+                     * working. It is simply pressed once at the end of a session, and every
+                     * control the thumb can reach without aiming is reserved for the moves
+                     * made twenty times an hour.
+                     */
+                    TextButton(onClick = actions.finish, enabled = !workout.finished) {
+                        Text(if (workout.finished) "Finished" else "Finish")
+                    }
                 },
             )
+            /*
+             * PINNED under the title bar rather than put in the scrolling list. It appears at
+             * the moment a set ends and the phone is being picked up again, and a line that
+             * the same thumb can scroll away before reading it is a line that gets missed.
+             */
+            readySummary?.let { line -> ReadyBanner(line, onDismissSummary) }
+            }
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
@@ -268,15 +338,48 @@ fun WorkoutLogScreen(
             items(workout.exercises.size, key = { workout.exercises[it].exercise.key }) { index ->
                 val exercise = workout.exercises[index]
                 val id = exercise.exerciseId
+                // an exercise this phone has no catalog row for cannot have a form built
+                // for it, so it is shown and not offered — see WorkoutExercise.exerciseId
+                val ref = state.refById(id)
+                val running = id != null && id == liveExerciseId
                 ExerciseCard(
                     name = exerciseName(state, exercise),
                     restSec = exercise.restSec,
                     sets = exercise.sets.map { it.form.summaryLine() },
+                    running = running,
                     floor = id?.let { e -> floors.firstOrNull { it.exerciseId == e } },
                     nowMs = nowMs,
-                    // an exercise this phone has no catalog row for cannot have a form built
-                    // for it, so it is shown and not offered — see WorkoutExercise.exerciseId
-                    onTap = id?.takeIf { state.refById(it) != null }?.let { e -> { entryFor = e } },
+                    onTap = when {
+                        running -> actions.openConductor
+                        ref == null -> null
+                        /*
+                         * The protocol comes FIRST, before the form: for these the app is
+                         * conducting a set rather than taking a report of one, and there are
+                         * no numbers to prefill a form with until the set has been done.
+                         * `ledByProtocol` is the exercise's own answer (a maximum-weight hang
+                         * carries a protocol and is still led by weight — §13.2), and the
+                         * protocol has to actually be there for a run to be built out of it.
+                         */
+                        ledByProtocol(ref) && ref.protocol != null -> {
+                            {
+                                /*
+                                 * ASK ONLY IF THERE WAS A PLATE LAST TIME (§13.5). Asking
+                                 * unconditionally would put a question in front of every
+                                 * bodyweight protocol — a set that used to start with one tap
+                                 * and no screens at all.
+                                 */
+                                if (lastAddedKg(state, ref) == null) {
+                                    actions.startProtocolSet(ref, null)
+                                } else {
+                                    weighingFor = ref.id
+                                }
+                            }
+                        }
+
+                        else -> {
+                            { entryFor = ref.id }
+                        }
+                    },
                     onRest = id?.let { e -> { askingRestFor = e } },
                 )
             }
@@ -293,6 +396,7 @@ fun WorkoutLogScreen(
                         name = "Other entries",
                         restSec = null,
                         sets = workout.entriesWithoutExercise.map { it.form.summaryLine() },
+                        running = false,
                         floor = null,
                         nowMs = nowMs,
                         onTap = null,
@@ -343,6 +447,18 @@ fun WorkoutLogScreen(
         )
     } }
 
+    weighingFor?.let { id -> state.refById(id)?.let { ref ->
+        WeightDialog(
+            exerciseName = ref.name,
+            initialKg = lastAddedKg(state, ref),
+            onConfirm = { kg ->
+                actions.startProtocolSet(ref, kg)
+                weighingFor = null
+            },
+            onDismiss = { weighingFor = null },
+        )
+    } }
+
     entryFor?.let { id -> state.refById(id)?.let { ref ->
         QuickEntrySheet(
             state = state,
@@ -368,6 +484,17 @@ fun WorkoutLogScreen(
  * saying it the same way.
  */
 
+/**
+ * The wall clock out of a journal timestamp: "2026-08-07T18:14:00" -> "18:14".
+ *
+ * By position rather than by parsing, because every timestamp this app writes has that exact
+ * shape and a row that does not is a row nothing else could read either. A string that is
+ * too short comes back whole, which is a visibly odd heading rather than a crash on the
+ * screen somebody is standing in a gym with.
+ */
+private fun clockOf(ts: String): String =
+    ts.substringAfter('T', "").takeIf { it.length >= 5 }?.take(5) ?: ts
+
 /** "3 exercises, 11 sets", or what a workout with nothing in it has instead. */
 private fun summaryOf(workout: Workout): String {
     if (workout.isEmpty) return "nothing recorded yet"
@@ -390,6 +517,21 @@ private fun lastSetOf(workout: Workout): Long? =
         .maxOfOrNull { it.id }
 
 /**
+ * The plate hung on the last set of this exercise, or null when there was none.
+ *
+ * A ZERO IS A NULL here, and that is the whole of the rule §13.5 asks for: the weight
+ * question exists for the belt-and-plate case, and a protocol done at body weight has never
+ * had a question in front of it. "Nothing was hung last time" and "nothing has ever been
+ * logged" both mean there is nothing to prefill and nothing worth asking about, so they give
+ * the same answer rather than two branches that read differently and behave the same.
+ *
+ * Only hold sets carry an added weight, which is also the only form that carries a protocol —
+ * so this is the whole of the question for every exercise that can reach it.
+ */
+private fun lastAddedKg(state: UiState, exercise: ExerciseRef): Double? =
+    lastHoldSet(state.events, exercise.link)?.addedKg?.takeIf { it != 0.0 }
+
+/**
  * The exercise's name.
  *
  * The catalog first, because that is the name the user maintains. The set's own payload is
@@ -400,6 +542,45 @@ private fun exerciseName(state: UiState, exercise: WorkoutExercise): String =
     state.exerciseById(exercise.exerciseId)?.name
         ?: exercise.sets.firstOrNull()?.form?.activityName()
         ?: "Exercise ${exercise.exerciseId}"
+
+/**
+ * What came due while a protocol-led set had the rests silenced.
+ *
+ * ── One line, and no new noise ──────────────────────────────────────────────────
+ * A running conductor mutes every floor, because a beep in the middle of a seven-second hang
+ * is precisely the thing that ruins the set it was meant to time (domain/Floors.kt). What
+ * that leaves behind is a set of rests that matured unannounced, and the wrong way to settle
+ * up is a burst of the beeps that were withheld: they arrive after the fact, out of order,
+ * and say nothing about WHEN each one came due. So the debt is paid in words instead —
+ * already spoken by the time this appears, and now also written down, which is the half that
+ * was missing (§13.4).
+ *
+ * It is a statement and not a warning, so it carries no icon and no alarm colour: everything
+ * in it is also visible on the cards below, in the bars that have been counting all along.
+ * What it adds is that they can be read at a glance, at the one moment they are all relevant
+ * at once.
+ */
+@Composable
+private fun ReadyBanner(line: String, onDismiss: () -> Unit) {
+    val colors = LocalGachiColors.current
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 15.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                line,
+                fontSize = 12.sp,
+                color = colors.goodText,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+            )
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 44.dp)) {
+                Text("Got it", fontSize = 12.sp)
+            }
+        }
+    }
+}
 
 /**
  * One exercise of the workout: what it is, what has been done of it, and where its rest is.
@@ -414,6 +595,8 @@ private fun ExerciseCard(
     name: String,
     restSec: Int?,
     sets: List<String>,
+    /** A protocol-led set of this exercise is being conducted right now. */
+    running: Boolean,
     floor: RestFloor?,
     nowMs: Long,
     onTap: (() -> Unit)?,
@@ -448,6 +631,22 @@ private fun ExerciseCard(
             }
         }
         HorizontalDivider(color = colors.grid)
+
+        if (running) {
+            /*
+             * The card of a set being conducted somewhere else. The words matter more than
+             * usual here: the phone has been put down or the screen has been left, and this
+             * line is the only thing saying that the protocol did not stop when the screen
+             * did — and that this card, not the Programs tab, is the way back to it.
+             */
+            Text(
+                "Set running - tap to go back to it",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.accent,
+                modifier = Modifier.padding(start = 13.dp, end = 13.dp, top = 9.dp),
+            )
+        }
 
         Text(
             // one line per card rather than one row per set: this is read at a glance
@@ -558,6 +757,65 @@ private fun RestDialog(
             TextButton(onClick = { seconds?.let(onConfirm) }, enabled = seconds != null) {
                 Text(confirmLabel)
             }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * The plate, asked on the way INTO a protocol-led set.
+ *
+ * ── Why before and not after ────────────────────────────────────────────────────
+ * The weight is hung on the belt before you get under the cable, so before the set is the
+ * moment the answer is actually known and the moment the phone is still in a hand. Asking
+ * afterwards was the state this replaces, and it produced a specific failure (§13.5): the run
+ * offered one weight for the whole thing, so a set where the last few reps were done lighter
+ * had nowhere to say so.
+ *
+ * ── An empty box is a legitimate answer ─────────────────────────────────────────
+ * Blank means "no plate today", which is why the confirm button is enabled on arrival and
+ * with the field cleared. This dialog is only ever raised when the last set DID carry one
+ * (see [lastAddedKg]), so the ordinary path is one tap on a number that is already right, and
+ * the only thing that ever needs typing is the day the plate comes off or changes.
+ */
+@Composable
+private fun WeightDialog(
+    exerciseName: String,
+    initialKg: Double?,
+    onConfirm: (Double?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    var draft by remember(exerciseName, initialKg) {
+        mutableStateOf(initialKg?.let { formatNumber(it) }.orEmpty())
+    }
+    val kg = parseNumber(draft)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Added weight") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    exerciseName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                StepperField(
+                    label = "Added weight, kg",
+                    value = draft,
+                    onValueChange = { draft = it },
+                    steps = listOf(2.5, 5.0),
+                )
+                Text(
+                    "Hang it before you start. Leave it empty for none.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkSecondary,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(kg) }) { Text("Start the set") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
