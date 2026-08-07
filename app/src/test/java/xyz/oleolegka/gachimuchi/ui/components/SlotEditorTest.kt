@@ -1,6 +1,7 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
 import androidx.compose.ui.test.assertCountEquals
+import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -461,6 +462,46 @@ class SlotEditorTest : ScreenTest() {
 
         compose.onNodeWithText("Bench press").assertExists()
         compose.onNodeWithText("Squat").assertDoesNotExist()
+    }
+
+    /**
+     * Two exercises of one name, told apart by the thing that makes them two.
+     *
+     * This became possible only when creating an exercise stopped deduplicating by name — up
+     * to then a second "Hangs" on another edge was silently handed the first one's row. A list
+     * showing two identical lines would put the same failure back one step later, with the user
+     * picking whichever came first and their sets landing in an arbitrary history.
+     */
+    @Test
+    fun `two exercises of one name are told apart by the edge and the protocol`() {
+        screen {
+            SlotEditorDialog(
+                initial = null,
+                day = day,
+                suggestions = emptyList(),
+                today = day,
+                state = UiState(
+                    exercises = listOf(
+                        exerciseEntity(1, "Hangs", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0),
+                        exerciseEntity(2, "Hangs", ExerciseForm.HOLD, edgeMm = 15.0, workSec = 7.0, restSec = 3.0),
+                    ),
+                    loading = false,
+                ),
+                onSave = { saved = it },
+                onDelete = { deleted++ },
+                onDismiss = { dismissed++ },
+            )
+        }
+
+        inBody("Exercises - none planned").performClick()
+        settle()
+        addExerciseButton().performClick()
+        settle()
+        settle()
+
+        compose.onAllNodesWithText("Hangs").assertCountEquals(2)
+        compose.onNodeWithText("20 mm", substring = true).assertExists()
+        compose.onNodeWithText("15 mm", substring = true).assertExists()
     }
 
     // --- editing an existing session -----------------------------------------------------------

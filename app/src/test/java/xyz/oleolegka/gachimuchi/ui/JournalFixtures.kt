@@ -130,8 +130,13 @@ fun exerciseEntity(
     form: ExerciseForm = ExerciseForm.STRENGTH,
     /** Kept out of the pickers — see [ExerciseEntity.hidden]. */
     hidden: Boolean = false,
+    /** Part of the identity of a hold, and what tells two rows of one name apart (§12-A). */
+    edgeMm: Double? = null,
+    workSec: Double? = null,
+    restSec: Double? = null,
 ) = ExerciseEntity(
     id = id, name = name, form = form.code, createdAt = "2026-01-01T00:00:00", hidden = hidden,
+    edgeMm = edgeMm, protocolWorkSec = workSec, protocolRestSec = restSec,
 )
 
 fun slot(id: Long, name: String, atTime: String?, day: String) =

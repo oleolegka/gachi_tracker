@@ -259,6 +259,19 @@ private fun PickExisting(
                 Text(
                     buildString {
                         append(form?.title ?: "unknown form")
+                        /*
+                         * The edge and the protocol are on the row because they are what makes
+                         * two rows of the same NAME two exercises (§12-A). They used to be
+                         * unnecessary here for a bad reason: creating an exercise deduplicated
+                         * by name, so a second "Hangs" on another edge could not exist — it was
+                         * silently handed the first one's history. Now that it can exist, a list
+                         * showing two identical lines would put the same failure back one step
+                         * later, with the user picking whichever of the two came first.
+                         */
+                        exercise.edgeMm?.let { append(" - ${it.trimZero()} mm") }
+                        if (exercise.protocolWorkSec != null && exercise.protocolRestSec != null) {
+                            append(" - ${exercise.protocolWorkSec.trimZero()}:${exercise.protocolRestSec.trimZero()}")
+                        }
                         if (used == null) {
                             append(" - not logged yet")
                         } else {
@@ -273,6 +286,10 @@ private fun PickExisting(
         }
     }
 }
+
+/** "20" rather than "20.0": an edge is written the way it is spoken. */
+private fun Double.trimZero(): String =
+    if (this == toLong().toDouble()) toLong().toString() else toString()
 
 /**
  * Creating an exercise. The form is asked ONCE, here, and never again (§11): it is part
