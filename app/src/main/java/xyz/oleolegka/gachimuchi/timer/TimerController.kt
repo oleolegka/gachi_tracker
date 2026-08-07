@@ -159,6 +159,17 @@ class TimerController internal constructor(context: Context) {
     /** The step the last signal was fired for, so a redraw cannot double-signal. */
     private var signalledStep: Int = -1
 
+    /**
+     * The monotonic moment the boundary signal for [signalledStep] actually went out, or null
+     * when that step got no signal (a fresh start, a boundary too stale to sound).
+     *
+     * Handed to `timerCue`, which uses it to keep a countdown tick off the boundary beep. NOT
+     * derivable from the state: a boundary noticed a second late is signalled a second late,
+     * and the step's nominal start no longer says when the speaker was busy. See
+     * `tickAllowed` in domain/Runner.kt for the whole of it.
+     */
+    private var boundarySignalAtMs: Long? = null
+
     /** Whole seconds remaining at the last countdown tick, so each second ticks once. */
     private var lastTickSecond: Int = -1
 
@@ -537,9 +548,16 @@ class TimerController internal constructor(context: Context) {
         if (index == signalledStep) return
         signalledStep = index
         lastTickSecond = -1
+        // cleared first: every path out of here that does NOT sound leaves this step without a
+        // signal to protect, and a moment left over from the previous step would guard the
+        // wrong thing
+        boundarySignalAtMs = null
         val step = snapshot.steps.getOrNull(index) ?: return
         val startedAt = snapshot.state.stepEndAtMs - step.durationMs
         if (!isMomentNow(startedAt)) return
+        // the moment the speaker is BUSY FROM, which on a late boundary is not the moment the
+        // step began. `timerCue` keeps the countdown ticks clear of it.
+        boundarySignalAtMs = SystemClock.elapsedRealtime()
         signals.boundary(store.settings.value, step.kind)
     }
 
@@ -607,6 +625,7 @@ class TimerController internal constructor(context: Context) {
                     state = current.state,
                     countdownTicks = settings.countdownTicks,
                     now = SystemClock.elapsedRealtime(),
+                    boundaryAtMs = boundarySignalAtMs,
                 )
 
                 if (cue.boundary) {

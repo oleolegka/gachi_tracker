@@ -69,6 +69,86 @@ class SignalTimingTest {
         assertEquals(1, timerCue(list, running(list), true, now = 1_000).tickSecond)
     }
 
+    // --- the same bug by its second route: a boundary NOTICED LATE -------------------------
+
+    /*
+     * The rule above holds only while a step is entered at its full length. It is not always:
+     * the exact alarm can be delivered a second after the moment, or the countdown coroutine
+     * can oversleep, and the run is then settled onto a step that is already part-way through.
+     * The boundary signal is fired at that late moment — it is still worth firing — and the
+     * step has less than its own length left, which used to make a tick due IMMEDIATELY,
+     * milliseconds after the beep it would cut off. Same silence, same 7:3 rests, different
+     * route, and only on the sessions where the phone happened to be busy.
+     *
+     * These fix the moment the signal was REALLY made rather than the moment the step
+     * nominally began, which is what `boundaryAtMs` carries.
+     */
+
+    /** The 3 s rest of a 7:3 set, reached 1.2 s late: its "two" tick is now behind the beep. */
+    @Test
+    fun `a rest boundary noticed late is not cut off by the tick it makes due`() {
+        val list = steps(7, 3)
+        val state = running(list)
+        // the second step runs 7 000..10 000; the boundary is only handled at 8 200
+        val late = 8_200L
+
+        val cue = timerCue(list, state, countdownTicks = true, now = late, boundaryAtMs = late)
+
+        assertFalse(cue.boundary)
+        assertNull("'two' was due at 8 000, before the beep that has just gone out", cue.tickSecond)
+        assertEquals("and the next tick worth making is 'one'", 9_000, cue.wakeAtMs)
+    }
+
+    /** The tick a whole second clear of the late beep is still made: this suppresses, not mutes. */
+    @Test
+    fun `the tick that clears the late beep still sounds`() {
+        val list = steps(7, 3)
+        val cue = timerCue(list, running(list), countdownTicks = true, now = 9_000, boundaryAtMs = 8_200)
+
+        assertEquals(1, cue.tickSecond)
+    }
+
+    /**
+     * A late boundary can also land INSIDE the last second, at which point the step owes no
+     * tick at all rather than one on top of the beep.
+     */
+    @Test
+    fun `a rest reached with under a second left owes no tick at all`() {
+        val list = steps(7, 3)
+        val late = 9_100L
+
+        val cue = timerCue(list, running(list), countdownTicks = true, now = late, boundaryAtMs = late)
+
+        assertNull(cue.tickSecond)
+        assertEquals(10_000, cue.wakeAtMs)
+    }
+
+    /** The seven second hang has more room, but it is the same rule and the same failure. */
+    @Test
+    fun `a work boundary noticed four seconds late is not cut off either`() {
+        val list = steps(3, 7)
+        val late = 7_200L
+
+        val cue = timerCue(list, running(list), countdownTicks = true, now = late, boundaryAtMs = late)
+
+        assertNull("'three' was due at 7 000", cue.tickSecond)
+        assertEquals(8_000, cue.wakeAtMs)
+    }
+
+    /**
+     * A boundary moment left over from an EARLIER step protects nothing and must not be read
+     * as permission: the guard never moves earlier than the step's own start.
+     */
+    @Test
+    fun `a stale boundary moment does not re-open the tick a short step has no room for`() {
+        val list = steps(3, 3)
+        // as if the previous step's beep were still being carried
+        val cue = timerCue(list, running(list), countdownTicks = true, now = 0, boundaryAtMs = -5_000)
+
+        assertNull("a three second step has never had room for 'three'", cue.tickSecond)
+        assertEquals(1_000, cue.wakeAtMs)
+    }
+
     // --- the ordinary case, which must not have changed ------------------------------------
 
     @Test

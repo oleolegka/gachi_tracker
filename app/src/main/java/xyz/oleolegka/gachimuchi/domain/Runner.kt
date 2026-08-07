@@ -73,19 +73,63 @@ data class TimerCue(
 )
 
 /**
- * Whether the tick for "[second] seconds left" may be sounded inside a step of
- * [stepDurationSec].
+ * How much room a countdown tick must leave after a boundary signal.
  *
- * The last condition is the whole point: a tick is only allowed STRICTLY INSIDE the step.
- * On a step three seconds long the "three" tick would land on the very moment the step
- * begins — the same moment the boundary signal fires — and both the tone generator and the
- * vibrator play one thing at a time, so the tick would cut the boundary signal off after a
- * few milliseconds. That is the missing "next step" beep on 7:3 repeaters: every three
- * second rest silenced its own boundary. A step gets ticks for the seconds it has room for
- * and no others.
+ * A boundary is the longest thing the app plays: 620 ms of vibration waveform for a step
+ * that starts work, 350 ms of tone (timer/Signals.kt). Both the tone generator and the
+ * vibrator do ONE thing at a time, so a tick inside that window does not mix with the
+ * boundary — it replaces it, and what the user gets is a 40 ms tap where the "go" was.
+ *
+ * The value is pinned between two bounds and both of them matter:
+ *
+ *  - ABOVE 620 ms, or it does not actually cover the waveform it exists to protect.
+ *  - BELOW 1000 ms, so that a step entered ON TIME behaves exactly as it always has. A tick
+ *    then sits a whole number of seconds after the step began, so the only tick this rule
+ *    can refuse is the one at zero — which is the same tick `second < durationSec` used to
+ *    refuse. The generalisation costs nothing in the ordinary case; see [tickAllowed].
  */
-private fun tickAllowed(second: Int, stepDurationSec: Int, countdownTicks: Boolean): Boolean =
-    countdownTicks && second in 1..TICK_SECONDS && second < stepDurationSec
+const val BOUNDARY_GUARD_MS = 700L
+
+/**
+ * Whether the tick for "[second] seconds left" may be sounded in a step that ends at
+ * [stepEndAtMs], began at [stepStartAtMs], and whose boundary signal actually went out at
+ * [boundaryAtMs].
+ *
+ * ── The rule, and why it is expressed against the SIGNAL rather than the step ───
+ * A tick is only allowed once the boundary signal it would otherwise cut off has had
+ * [BOUNDARY_GUARD_MS] to play.
+ *
+ * This used to be written as `second < stepDurationSec`, which is the same statement under
+ * one assumption: that the step's boundary was signalled AT THE MOMENT THE STEP BEGAN. On a
+ * three second rest the "three" tick would land exactly on the start of the step, cutting
+ * the boundary beep off — the missing "next step" signal on 7:3 repeaters, once per rest.
+ *
+ * The assumption does not always hold, and that is this fix. A boundary can be NOTICED late:
+ * the exact alarm is delivered a second after the moment, or the countdown coroutine
+ * oversleeps, and the run is settled onto a step that is already part-way through. The
+ * boundary signal is then fired late too (it is still worth firing — see
+ * `SIGNAL_LATENESS_MS`), and the step is entered with less than its own length left. On a
+ * three second rest entered with 1.8 s left, "two" is due 200 ms BEFORE the boundary signal
+ * that has just gone out, so the loop fires it immediately and the rest silences its own
+ * boundary again — by a different route, on the sessions where the phone was busy. Measuring
+ * from the moment the signal was really made closes both routes with one rule.
+ *
+ * [boundaryAtMs] is null when this step's boundary was not signalled at all (a fresh start, a
+ * run rebuilt from disk, a boundary passed over for being stale). The step's own start is
+ * then the honest floor, which reproduces the old behaviour exactly.
+ */
+private fun tickAllowed(
+    second: Int,
+    stepEndAtMs: Long,
+    stepStartAtMs: Long,
+    boundaryAtMs: Long?,
+    countdownTicks: Boolean,
+): Boolean {
+    if (!countdownTicks || second !in 1..TICK_SECONDS) return false
+    // a boundary moment before the step began belongs to an earlier step and protects nothing
+    val guardFrom = maxOf(boundaryAtMs ?: stepStartAtMs, stepStartAtMs)
+    return (stepEndAtMs - second * 1000L) - guardFrom >= BOUNDARY_GUARD_MS
+}
 
 /**
  * Reads the clock and says what the countdown owes the user right now.
@@ -94,12 +138,17 @@ private fun tickAllowed(second: Int, stepDurationSec: Int, countdownTicks: Boole
  * reading the countdown itself is expressed in — the signals are not a second timeline that
  * can drift away from the first one. A run that is paused, finished or empty owes nothing
  * and asks to be woken immediately, because it is a caller's mistake to be looping at all.
+ *
+ * [boundaryAtMs] is the monotonic moment the CURRENT step's boundary signal was actually
+ * sounded, or null when it was not. It is the caller's one piece of memory in an otherwise
+ * stateless decision, and [tickAllowed] says what it is for.
  */
 fun timerCue(
     steps: List<WorkoutStep>,
     state: RunState,
     countdownTicks: Boolean,
     now: Long,
+    boundaryAtMs: Long? = null,
 ): TimerCue {
     if (steps.isEmpty() || state.finished || !state.running) {
         return TimerCue(boundary = false, tickSecond = null, wakeAtMs = now)
@@ -110,15 +159,16 @@ fun timerCue(
     }
 
     val end = settled.stepEndAtMs
-    val durationSec = steps[settled.stepIndex].durationSec
+    val start = end - steps[settled.stepIndex].durationMs
     // the second a countdown would be showing: 2500 ms left reads as "3"
     val second = ((end - now + 999) / 1000).toInt()
 
-    val due = second.takeIf { tickAllowed(it, durationSec, countdownTicks) }
+    fun allowed(candidate: Int) = tickAllowed(candidate, end, start, boundaryAtMs, countdownTicks)
+
+    val due = second.takeIf { allowed(it) }
     // the next tick is the one below the current second, but never above the window: a step
     // entered with twenty seconds left owes its first tick at three, not at nineteen
-    val nextTick = minOf(second - 1, TICK_SECONDS)
-        .takeIf { tickAllowed(it, durationSec, countdownTicks) }
+    val nextTick = minOf(second - 1, TICK_SECONDS).takeIf { allowed(it) }
 
     return TimerCue(
         boundary = false,
