@@ -31,6 +31,7 @@ class TimerReceiver : BroadcastReceiver() {
         when (intent.action) {
             ACTION_ALARM -> controller.onAlarm()
             ACTION_FLOOR_ALARM -> controller.floors.onAlarm()
+            ACTION_FLOOR_DISMISS -> controller.floors.dismissReady()
             ACTION_PAUSE -> controller.pause()
             ACTION_RESUME -> controller.resume()
             ACTION_SKIP -> controller.skip()
@@ -51,6 +52,14 @@ class TimerReceiver : BroadcastReceiver() {
          * otherwise take the floors' with it — see FloorController.alarmIntent.
          */
         const val ACTION_FLOOR_ALARM = PREFIX + "FLOOR_ALARM"
+
+        /**
+         * The button on the rests' notification: clear every rest that is already over,
+         * without unlocking the phone. A broadcast rather than a service intent for the same
+         * reason as everything else here — the process may not exist by the time it is
+         * pressed, and rebuilding the controller reads the floors back off disk.
+         */
+        const val ACTION_FLOOR_DISMISS = PREFIX + "FLOOR_DISMISS"
         const val ACTION_PAUSE = PREFIX + "PAUSE"
         const val ACTION_RESUME = PREFIX + "RESUME"
         const val ACTION_SKIP = PREFIX + "SKIP"

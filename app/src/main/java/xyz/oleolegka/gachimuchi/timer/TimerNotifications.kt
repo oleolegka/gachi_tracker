@@ -47,17 +47,49 @@ import xyz.oleolegka.gachimuchi.domain.formatClock
  * the monotonic clock, so the countdown would be wrong while the outcome stayed right.
  * Some third-party notification shades also ignore the chronometer flag and will show a
  * static time instead; the controls still work.
+ *
+ * ── The rest floors are the one thing here that IS redrawn on a clock ───────────
+ * [floors] shows several countdowns at once ("Bench ready · Abs 1:20") and the platform
+ * chronometer can only render one time, so that line is text the app writes and therefore
+ * text the app has to rewrite. It is redrawn at most once a second and only when the text
+ * actually changed — the pacing lives in timer/FloorController.restartNotifyLoop, which is
+ * the only thing in the app that posts [ID_RUNNING] on behalf of the floors.
+ *
+ * The cost is bounded and stated plainly: one wakeup a second, only while a rest is counting
+ * AND no conductor is running, and never while the CPU is suspended, because the floors take
+ * no wake lock (see FloorController). A phone in a pocket with the screen off is not running
+ * this loop; a phone being looked at is, which is the only time the line is read.
  */
 object TimerNotifications {
 
     const val CHANNEL_RUNNING = "timer_running"
     const val CHANNEL_ALERT = "timer_alert"
 
-    /** The foreground service's notification. Stable, because the service is tied to it. */
+    /**
+     * The foreground service's notification. Stable, because the service is tied to it.
+     *
+     * ── One id, two possible authors, and the order of precedence ───────────────
+     * There is exactly ONE foreground service (timer/TimerService.kt) and a foreground
+     * service has exactly one notification, so the conductor and the rest floors share this
+     * id rather than each having their own. They cannot both draw it, and the rule is that
+     * the CONDUCTOR WINS: while a run exists this notification is the run's, and the floors
+     * neither post nor cancel it. See [floors] for why that is not a loss.
+     */
     const val ID_RUNNING = 1001
 
     /** The "it is over" alert. A separate id so it survives the ongoing one being removed. */
     const val ID_ALERT = 1002
+
+    /**
+     * The line about rests that matured while a conductor had them muted.
+     *
+     * Its own id because its lifetime is its own: it is posted at the moment a protocol ends
+     * and stays until it is read, which is neither the service's lifetime nor the ongoing
+     * notification's. Putting it in [ID_RUNNING] would mean it vanished the instant the last
+     * rest matured — which, for a summary produced when everything already matured, is
+     * immediately.
+     */
+    const val ID_FLOOR_SUMMARY = 1003
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -68,7 +100,9 @@ object TimerNotifications {
             "Timer running",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "The live countdown while a workout timer is running."
+            description =
+                "The live countdown while a workout timer is running, and the rests " +
+                    "between sets while they are counting."
             setSound(null, null)
             enableVibration(false)
             setShowBadge(false)
@@ -185,6 +219,80 @@ object TimerNotifications {
     }
 
     /**
+     * The ongoing notification for the rest floors, when no conductor is running.
+     *
+     * ── Why this exists at all, when a rest is only a "not before" ──────────────
+     * It is not primarily a display. It is the notification of the FOREGROUND SERVICE that
+     * now stays up while any rest is still counting, and the service is there so that the
+     * process is not frozen and the rest's own coroutine — the accurate first line — actually
+     * gets to run. The platform requires a foreground service to show something; given that
+     * something has to be shown, it may as well be the answer to the question the user would
+     * otherwise unlock the phone for.
+     *
+     * [line] comes from `floorNotificationLine` in domain/FloorLines.kt and is the whole
+     * content: "Bench ready · Abs 1:20". It is the TITLE rather than the body because it is
+     * the only thing here worth reading, and a collapsed notification shows the title.
+     *
+     * ── One action, and only when it has something to act on ────────────────────
+     * [dismissLabel] is null when nothing is ready, and then there is no button. The button
+     * clears every ready rest at once, which is the only thing anybody wants to do to a rest
+     * that is over from a lock screen; anything finer needs the list, and the list is in the
+     * app. Deliberately no "add a minute" and no "stop": lengthening a rest is a decision
+     * made while looking at the numbers, and there is nothing to stop — a floor that is over
+     * is over whether or not it is on the screen.
+     */
+    fun floors(context: Context, line: String, dismissLabel: String?): Notification {
+        val builder = NotificationCompat.Builder(context, CHANNEL_RUNNING)
+            .setSmallIcon(R.drawable.ic_timer)
+            .setContentTitle(line)
+            .setSubText("Rest")
+            .setContentIntent(openApp(context))
+            .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_STOPWATCH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+
+        if (dismissLabel != null) {
+            builder.addAction(
+                NotificationCompat.Action(
+                    0,
+                    dismissLabel,
+                    action(context, TimerReceiver.ACTION_FLOOR_DISMISS, 6),
+                )
+            )
+        }
+        return builder.build()
+    }
+
+    /**
+     * "Bench has been ready for 1:20" — what matured while a protocol had the room.
+     *
+     * Not ongoing, and on the LOW channel rather than the alert one. It is posted in the same
+     * second as the conductor's own "Workout finished", and two heads-up banners arriving
+     * together is how both of them end up unread; this one is the lesser of the two and waits
+     * in the shade instead of competing for the screen. Silent for the reason the whole file
+     * is silent: the app makes its own noises, and this particular message is by definition
+     * the one that was decided not to be worth a noise (see `releaseFloors`).
+     */
+    fun floorSummary(context: Context, text: String): Notification =
+        NotificationCompat.Builder(context, CHANNEL_RUNNING)
+            .setSmallIcon(R.drawable.ic_timer)
+            .setContentTitle(text)
+            .setSubText("Rest")
+            .setContentIntent(openApp(context))
+            .setAutoCancel(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setCategory(NotificationCompat.CATEGORY_STOPWATCH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+    /**
      * The "it is over" notification. Not ongoing and self-cancelling on tap: it has done
      * its job the moment it is seen, and an alert that has to be dismissed by hand is one
      * more thing to do between sets.
@@ -206,6 +314,15 @@ object TimerNotifications {
     fun canPost(context: Context): Boolean =
         NotificationManagerCompat.from(context).areNotificationsEnabled()
 
+    /**
+     * Takes down the CONDUCTOR'S notifications. Not the floors' summary, which is not the
+     * conductor's to remove: a run ending is the very thing that produces it.
+     *
+     * [ID_RUNNING] is included even though the floors may want it back a moment later, and
+     * they take it back themselves — see `FloorController.conductorStopped`. Leaving the
+     * conductor's content up while it drew a run that no longer exists would be worse than
+     * the flicker.
+     */
     fun cancelAll(context: Context) {
         val manager = NotificationManagerCompat.from(context)
         runCatching { manager.cancel(ID_RUNNING) }

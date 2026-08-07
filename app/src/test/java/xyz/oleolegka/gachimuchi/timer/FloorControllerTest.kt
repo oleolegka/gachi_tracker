@@ -1,12 +1,16 @@
 package xyz.oleolegka.gachimuchi.timer
 
 import android.app.AlarmManager
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.Context
 import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -38,11 +42,17 @@ import java.time.Duration
  * stopping puts it back.
  *
  * ── What this still cannot show, and it is the important half ───────────────────
- * Robolectric's alarm manager and vibrator are ledgers, not hardware. Nothing here proves
- * that the platform delivers the alarm in deep Doze — where the quota is per app and now
- * shared with the conductor (see FloorController.armAlarm) — that two signals two seconds
- * apart are distinguishable through a pocket, or that the tone generator is free when the
- * second one asks for it. Those need a phone.
+ * Robolectric's alarm manager, vibrator, service starter and notification manager are all
+ * ledgers, not hardware. Nothing here proves that the platform delivers the alarm in deep
+ * Doze — where the quota is per app and now shared with the conductor (see
+ * FloorController.armAlarm) — that two signals two seconds apart are distinguishable through
+ * a pocket, or that the tone generator is free when the second one asks for it.
+ *
+ * The service half is thinner still. What is asserted is that the right intents are HANDED to
+ * the platform, and that [TimerController.serviceNeeded] answers correctly; [TimerService]
+ * itself is never instantiated here, so nothing proves that `startForeground` succeeds, that
+ * Android does not refuse the start from the background, or that the process actually survives
+ * the screen going off — which is the entire reason the service exists. Those need a phone.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -73,6 +83,30 @@ class FloorControllerTest {
     private fun now() = SystemClock.elapsedRealtime()
 
     private fun advance(seconds: Long) = ShadowSystemClock.advanceBy(Duration.ofSeconds(seconds))
+
+    private fun shadowApp() = shadowOf(context as Application)
+
+    private fun notifications() = shadowOf(context.getSystemService(NotificationManager::class.java))
+
+    /** What the shade would read at a glance, or null when nothing is posted under [id]. */
+    private fun shownTitle(id: Int): String? = notifications().getNotification(id)
+        ?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+
+    private fun shownActions(id: Int): List<String> =
+        notifications().getNotification(id)?.actions.orEmpty().map { it.title.toString() }
+
+    /**
+     * Empties both service ledgers, so a following assertion is about what the step under
+     * test did and not about the controller having been built.
+     */
+    private fun forgetServiceIntents() {
+        shadowApp().clearStartedServices()
+        while (shadowApp().nextStoppedService != null) Unit
+    }
+
+    private fun startedService(): String? = shadowApp().nextStartedService?.component?.className
+
+    private fun stoppedService(): String? = shadowApp().nextStoppedService?.component?.className
 
     @After
     fun tearDown() {
@@ -419,6 +453,250 @@ class FloorControllerTest {
         val abs = byId.getValue(2L).progressAt(now())
         assertFalse(abs.ready)
         assertEquals(440_000L, abs.remainingMs)
+    }
+
+    // --- the foreground service, which the rests now share with the conductor ----------------
+
+    /**
+     * The change this whole line of work is about: a rest is a reason for the process to stay
+     * alive, and stops being one the moment it has had its say.
+     *
+     * The second half matters as much as the first. A foreground service that outlives its
+     * reason is a battery cost and a complaint from the platform, and the rests are the one
+     * claimant that ends quietly — nobody presses Stop on a rest.
+     */
+    @Test
+    fun `the first rest brings the service up and the last one takes it down`() {
+        val timer = newController()
+        forgetServiceIntents()
+
+        timer.floors.start(1, "Bench", 120_000)
+
+        assertTrue(timer.floors.needsService())
+        assertTrue(timer.serviceNeeded())
+        assertEquals(TimerService::class.java.name, startedService())
+
+        forgetServiceIntents()
+        advance(120)
+        timer.floors.onAlarm()
+
+        assertFalse("a rest that has had its moment needs no process", timer.floors.needsService())
+        assertFalse(timer.serviceNeeded())
+        assertEquals(TimerService::class.java.name, stoppedService())
+    }
+
+    /**
+     * Two claimants, ONE service, and the awkward direction: the run ends first.
+     *
+     * This used to be a stop followed by a start, and the start would have been refused —
+     * Android 12 and later do not allow a foreground service to be started from the
+     * background, which is exactly where a program finishing with the phone in a pocket is.
+     * So nothing may be stopped until both halves have said whether they still need it.
+     */
+    @Test
+    fun `a rest keeps the service up when the protocol sharing it ends`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 300_000)
+        timer.start(tabata)
+        forgetServiceIntents()
+
+        timer.stop()
+
+        assertNull("the rest is still counting; taking it down here is the bug", stoppedService())
+        assertTrue(timer.serviceNeeded())
+        assertEquals("and it is asked for again rather than assumed", TimerService::class.java.name, startedService())
+    }
+
+    /** And the other direction: the last rest goes while the protocol is still running. */
+    @Test
+    fun `the protocol keeps the service up when the last rest goes out from under it`() {
+        val timer = newController()
+        timer.start(tabata)
+        timer.floors.start(1, "Bench", 120_000)
+        forgetServiceIntents()
+
+        timer.floors.dismiss(1)
+
+        assertFalse(timer.floors.needsService())
+        assertTrue("the run is still counting", timer.serviceNeeded())
+        assertNull(stoppedService())
+
+        forgetServiceIntents()
+        timer.stop()
+
+        assertFalse(timer.serviceNeeded())
+        assertEquals(TimerService::class.java.name, stoppedService())
+    }
+
+    // --- the line in the shade ----------------------------------------------------------------
+
+    @Test
+    fun `the shade says what is ready and what is still counting`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 10_000)
+        timer.floors.start(2, "Abs", 600_000)
+
+        advance(10)
+        timer.floors.onAlarm()
+
+        assertEquals("Bench ready · Abs 9:50", shownTitle(TimerNotifications.ID_RUNNING))
+    }
+
+    /**
+     * The rate limit, and the only way to see it from here: a change that arrives too soon
+     * after the last post is simply not written, so the shade still reads what it read before.
+     *
+     * Three rests logged in one breath is not hypothetical — a superset is entered as fast as
+     * the sets are done — and it is the case that would otherwise write to the shade three
+     * times in the same millisecond.
+     */
+    @Test
+    fun `the shade is not written to more than once a second`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 120_000)
+        assertEquals("Bench 2:00", shownTitle(TimerNotifications.ID_RUNNING))
+
+        timer.floors.start(2, "Abs", 60_000)
+        assertEquals(
+            "a second rest in the same millisecond does not buy a second write",
+            "Bench 2:00",
+            shownTitle(TimerNotifications.ID_RUNNING),
+        )
+
+        advance(1)
+        timer.floors.refresh()
+
+        assertEquals("Abs 0:59 · Bench 1:59", shownTitle(TimerNotifications.ID_RUNNING))
+    }
+
+    /**
+     * The conductor owns the one notification the one service comes with, and the rests do not
+     * take it back until the run is over. A rest cannot sound while a conductor runs, so there
+     * is nothing on that line anyone could act on.
+     */
+    @Test
+    fun `a running protocol keeps the notification, and the rests take it back after it`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 300_000)
+        assertEquals("Bench 5:00", shownTitle(TimerNotifications.ID_RUNNING))
+
+        timer.start(tabata)
+        val underConductor = shownTitle(TimerNotifications.ID_RUNNING)
+        assertNotEquals("the run's own countdown, not the rests'", "Bench 5:00", underConductor)
+
+        advance(60)
+        timer.floors.refresh()
+        assertEquals("and a rest waking up does not steal it", underConductor, shownTitle(TimerNotifications.ID_RUNNING))
+
+        timer.stop()
+
+        assertEquals("Bench 4:00", shownTitle(TimerNotifications.ID_RUNNING))
+    }
+
+    /**
+     * The hand-off back from a protocol is rate limited like everything else, and this pins
+     * the cost of that rather than pretending there is none: a protocol that starts and stops
+     * inside one second leaves the shade EMPTY, because the conductor took the notification
+     * down and the rests may not write another one yet. The tick loop puts it back within the
+     * second, which is what the second half asserts.
+     *
+     * The alternative — letting a hand-off jump the queue — was rejected: "not more than once
+     * a second" with an exception in it is not a rule, and a shade that is a second behind
+     * after a run nobody meant to start is not a cost worth an exception.
+     */
+    @Test
+    fun `the rests take the shade back after a protocol, but no sooner than the rate allows`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 300_000)
+        assertEquals("Bench 5:00", shownTitle(TimerNotifications.ID_RUNNING))
+
+        // started and stopped without the clock moving at all
+        timer.start(tabata)
+        timer.stop()
+
+        assertNull(
+            "the conductor took it down and the rate limit will not let it back yet",
+            notifications().getNotification(TimerNotifications.ID_RUNNING),
+        )
+
+        advance(1)
+        timer.floors.refresh()
+
+        assertEquals("Bench 4:59", shownTitle(TimerNotifications.ID_RUNNING))
+    }
+
+    @Test
+    fun `nothing left to count takes the line out of the shade with the service`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 10_000)
+        assertNotNull(shownTitle(TimerNotifications.ID_RUNNING))
+
+        advance(10)
+        timer.floors.onAlarm()
+
+        assertNull(
+            "the notification belongs to the service, and the service is going",
+            notifications().getNotification(TimerNotifications.ID_RUNNING),
+        )
+    }
+
+    // --- the button ---------------------------------------------------------------------------
+
+    /**
+     * The one action, and the reason it is worth having: in a superset the shade is up because
+     * something ELSE is still counting, and the rest that is over can be cleared without
+     * unlocking the phone.
+     */
+    @Test
+    fun `the button clears the rests that are over and leaves the ones that are not`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 10_000)
+        timer.floors.start(2, "Abs", 600_000)
+        advance(10)
+        timer.floors.onAlarm()
+
+        assertEquals(listOf("Dismiss Bench"), shownActions(TimerNotifications.ID_RUNNING))
+
+        timer.floors.dismissReady()
+
+        assertEquals(listOf(2L), timer.floors.floors.value.map { it.exerciseId })
+        assertTrue("and the rest that is still counting keeps its alarm", alarms().size == 1)
+    }
+
+    @Test
+    fun `nothing ready means no button at all`() {
+        val timer = newController()
+        timer.floors.start(1, "Bench", 120_000)
+
+        assertEquals(emptyList<String>(), shownActions(TimerNotifications.ID_RUNNING))
+    }
+
+    // --- the summary, which has a shade entry of its own ---------------------------------------
+
+    /**
+     * The summary outlives the ongoing notification on purpose. It is produced at the moment a
+     * protocol ends, which is a moment at which every rest it is about has ALREADY matured —
+     * so if it shared the ongoing notification's id it would be removed in the same breath as
+     * the service that owns it.
+     */
+    @Test
+    fun `what matured under the conductor gets its own line in the shade`() {
+        val timer = newController()
+        timer.start(tabata)
+        timer.floors.start(1, "Bench", 1_000)
+        advance(30)
+
+        timer.stop()
+
+        assertEquals("Bench has been ready for 0:29", shownTitle(TimerNotifications.ID_FLOOR_SUMMARY))
+        assertNull(
+            "and the ongoing one is gone, because nothing is counting",
+            notifications().getNotification(TimerNotifications.ID_RUNNING),
+        )
+
+        timer.floors.clearSummary()
+
+        assertNull(notifications().getNotification(TimerNotifications.ID_FLOOR_SUMMARY))
     }
 
     @Test
