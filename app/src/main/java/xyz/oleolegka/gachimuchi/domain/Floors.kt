@@ -59,22 +59,28 @@ import kotlinx.serialization.Serializable
 const val FLOOR_STAGGER_MS = 2_000L
 
 /**
- * How late a floor's moment may be and still be worth a noise.
+ * How late a moment may be and still be worth a noise — for a floor here, and for a step
+ * boundary in timer/TimerController.kt, which reads this same constant.
  *
- * MUST STAY EQUAL to `SIGNAL_LATENESS_MS` in timer/TimerController.kt, which is a private
- * copy of this same number. They are one rule with two homes, and nothing checks that they
- * agree — unifying them means editing the timer, which is deliberately left to whoever writes
- * the service layer rather than done from here.
+ * ONE RULE, ONE HOME. It used to be two: this, and a private copy in the timer, with a
+ * comment on each asking the other to stay equal. Nothing checked, and nothing would have —
+ * the two numbers being different is not a compile error, not a test failure and not
+ * observable on a phone until the day somebody tunes one of them and a rest starts gonging
+ * an hour late while the step boundaries stay quiet.
  *
- * Same rule, and the same five seconds, as the step boundary in timer/TimerController.kt,
- * and for the same reason: the path that sounds a floor is also the path a process woken by
- * an alarm runs, and the path the app runs when it is simply opened. An alarm arrives within
- * a fraction of a second of the moment; a person opening the app arrives minutes or hours
- * after it, and a phone that gongs on the alarm stream for a rest that ended before dinner is
- * the bug this number exists to prevent. Past the window the floor is still resolved — it is
- * marked as dealt with, silently, so it does not sit pending forever.
+ * The reason is the same on both sides: the path that sounds a signal is also the path a
+ * process woken by an alarm runs, AND the path the app runs when it is simply opened. An
+ * alarm arrives within a fraction of a second of the moment; a person opening the app arrives
+ * minutes or hours after it, and a phone that gongs on the alarm stream for a rest that ended
+ * before dinner is the bug this number exists to prevent. Five seconds sits well above the
+ * worst case of the mechanism that has to keep working (an exact alarm waking a dead process:
+ * a broadcast plus a controller construction, under a second even cold) and far below the
+ * shortest gap that could plausibly be a person picking the phone up.
+ *
+ * Past the window a floor is still resolved — marked as dealt with, silently, so it does not
+ * sit pending forever.
  */
-const val FLOOR_SIGNAL_LATENESS_MS = 5_000L
+const val SIGNAL_LATENESS_MS = 5_000L
 
 /**
  * One rest running against one exercise.
@@ -340,7 +346,7 @@ data class FloorCue(
  * [releaseFloors] for what happens when the conductor stops.
  *
  * ── A floor nobody was there to hear is not sounded later ───────────────────────
- * A moment more than [FLOOR_SIGNAL_LATENESS_MS] old is resolved without a sound. The process
+ * A moment more than [SIGNAL_LATENESS_MS] old is resolved without a sound. The process
  * that reaches it is one that has been asleep for an hour, and a rest that ended an hour ago
  * is not news worth an alarm-volume tone.
  *
@@ -358,7 +364,7 @@ fun floorCue(floors: List<RestFloor>, conductorRunning: Boolean, now: Long): Flo
     for (i in floorOrder(floors)) {
         val floor = floors[i]
         if (floor.signalled || due[i] > now) continue
-        if (now - due[i] > FLOOR_SIGNAL_LATENESS_MS) {
+        if (now - due[i] > SIGNAL_LATENESS_MS) {
             settled[i] = floor.copy(signalled = true)
             continue
         }

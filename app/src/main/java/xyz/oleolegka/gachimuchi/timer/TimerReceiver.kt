@@ -30,6 +30,7 @@ class TimerReceiver : BroadcastReceiver() {
         val controller = TimerController.get(context)
         when (intent.action) {
             ACTION_ALARM -> controller.onAlarm()
+            ACTION_FLOOR_ALARM -> controller.floors.onAlarm()
             ACTION_PAUSE -> controller.pause()
             ACTION_RESUME -> controller.resume()
             ACTION_SKIP -> controller.skip()
@@ -43,6 +44,13 @@ class TimerReceiver : BroadcastReceiver() {
 
         /** The step boundary the exact alarm was armed for. */
         const val ACTION_ALARM = PREFIX + "ALARM"
+
+        /**
+         * A rest floor coming due. A separate action, and a separate request code on the far
+         * side, because the conductor cancels its own alarm several times a minute and would
+         * otherwise take the floors' with it — see FloorController.alarmIntent.
+         */
+        const val ACTION_FLOOR_ALARM = PREFIX + "FLOOR_ALARM"
         const val ACTION_PAUSE = PREFIX + "PAUSE"
         const val ACTION_RESUME = PREFIX + "RESUME"
         const val ACTION_SKIP = PREFIX + "SKIP"

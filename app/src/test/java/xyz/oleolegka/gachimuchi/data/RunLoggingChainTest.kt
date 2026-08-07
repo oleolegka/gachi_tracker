@@ -22,6 +22,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.totalSec
@@ -76,6 +77,8 @@ class RunLoggingChainTest {
     fun tearDown() {
         controllers.forEach { it.stop() }
         context.getSharedPreferences("timer", Context.MODE_PRIVATE).edit().clear().commit()
+        // the floors live in their own preference file and leak into the next test otherwise
+        context.getSharedPreferences("floors", Context.MODE_PRIVATE).edit().clear().commit()
         db.close()
     }
 
@@ -282,9 +285,52 @@ class RunLoggingChainTest {
         assertEquals(RunOrigin.PROGRAM, timer.run.value!!.origin)
         assertNull(timer.run.value!!.exerciseId)
 
-        // 4. a rest between sets, which must never be offered as a set of one
-        viewModel.startRest(exercise.id)
-        waitFor("the rest to start") { timer.run.value?.origin == RunOrigin.REST }
+        /*
+         * There used to be a fourth case here: a rest between sets, started through the
+         * ViewModel as a run of its own and marked so it would never be offered as a set of
+         * one. It is gone because a rest is no longer a run — see the floors test below for
+         * what recording a set starts now.
+         */
+    }
+
+    /**
+     * Recording a set starts a REST FLOOR for that exercise, and recording another one
+     * restarts it.
+     *
+     * The path this walks is the reason it is here rather than in FloorControllerTest: the
+     * length is resolved from the journal and the name from the catalog, both AFTER the write,
+     * so it needs a real database. What it does not cover is the timing — that lives in
+     * FloorsTest and FloorControllerTest.
+     */
+    @Test
+    fun `recording a set starts the rest for that exercise, and the next set restarts it`() = runTest {
+        val exercise = hangs()
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        viewModel.addSet(
+            holdSetOf(exercise, LocalDate.now().toString(), reps = 6, holdSec = 7.0),
+            attachToWorkout = false,
+        )
+        waitFor("the floor to start") { timer.floors.floors.value.isNotEmpty() }
+
+        val first = timer.floors.floors.value.single()
+        assertEquals(exercise.id, first.exerciseId)
+        assertEquals("Hangs 20 mm", first.exerciseName)
+        // the default, since the journal has only one entry and so no gap to measure
+        assertEquals(timer.settings.value.defaultRestSec * 1000L, first.orderedMs)
+
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(30))
+        viewModel.addSet(
+            holdSetOf(exercise, LocalDate.now().toString(), reps = 6, holdSec = 7.0),
+            attachToWorkout = false,
+        )
+        waitFor("the floor to be restarted") {
+            timer.floors.floors.value.singleOrNull()?.readyAtMs?.let { it > first.readyAtMs } == true
+        }
+
+        assertEquals("one exercise, one floor", 1, timer.floors.floors.value.size)
     }
 
     @Test

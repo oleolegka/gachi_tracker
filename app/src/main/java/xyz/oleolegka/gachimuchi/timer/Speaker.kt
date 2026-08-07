@@ -91,13 +91,28 @@ class Speaker(context: Context) {
     /**
      * Says [text], or does nothing at all.
      *
-     * [QUEUE_FLUSH] on purpose: a step boundary makes the previous announcement obsolete,
-     * and a queue that backs up would have the phone narrating the set before last while
-     * the current one is already half over.
+     * ── [replacing] is the whole API, and it is not a convenience ───────────────
+     * Default true, meaning [TextToSpeech.QUEUE_FLUSH]: a step boundary makes the previous
+     * announcement obsolete, and a queue that backs up would have the phone narrating the
+     * set before last while the current one is already half over. That is right for
+     * everything the conductor says.
+     *
+     * It is exactly wrong for the ONE thing that is additive: the rest-floor summary
+     * (timer/FloorController.kt), which is produced at the moment a run ends — the same
+     * instant the conductor says "Done". With a flush on both, whichever arrives second
+     * wipes the first, and which one that is depends on thread scheduling; the user hears
+     * "Done" some sessions and "Bench has been ready for 1:20" on others, at random. So the
+     * summary asks to be APPENDED, the conductor keeps flushing, and the order is decided
+     * here rather than by a race.
+     *
+     * The pairing is enforced by call order, not by this parameter alone: the finish
+     * announcement is fired before the floors are released (see `apply` in
+     * timer/TimerController.kt), so the thing that flushes always goes first.
      */
-    fun speak(text: String) {
+    fun speak(text: String, replacing: Boolean = true) {
         if (_status.value != SpeechStatus.READY) return
-        runCatching { engine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, text) }
+        val mode = if (replacing) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+        runCatching { engine?.speak(text, mode, null, text) }
     }
 
     fun shutdown() {

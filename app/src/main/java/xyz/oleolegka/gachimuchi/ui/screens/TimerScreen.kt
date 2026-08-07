@@ -434,7 +434,8 @@ private fun SettingsSection(
 
         SettingRow(
             title = "Start the rest automatically",
-            subtitle = "The countdown begins the moment a set is recorded.",
+            subtitle = "Recording a set starts that exercise's rest. Several run at once, " +
+                "one per exercise, so a superset counts them all.",
             checked = settings.autoStartRest,
         ) { onChange(settings.copy(autoStartRest = it)) }
 

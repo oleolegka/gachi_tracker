@@ -326,9 +326,18 @@ fun WorkoutProgram.workStepCount(): Int = flatten().count { it.kind == StepKind.
 /**
  * A single pause, as a one-step program.
  *
- * The rest between sets is not a second mechanism bolted on next to the interval timer:
- * it is a program of one REST step. One runner, one service, one notification, one set of
- * tests. There is no prepare step — the rest starts the moment the set ends.
+ * ── No longer how the rest between sets works, and the correction is worth stating ──
+ * This used to be the whole rest feature: a pause was a program of one step, run on the same
+ * conductor as everything else, so there was one runner, one service and one set of tests.
+ * The economy was real and the model was wrong. A conductor is singular by nature — one
+ * screen, one speaker, one countdown — and a rest between sets is not: a superset has the
+ * bench resting while the abs work, and with one countdown the second rest simply cancelled
+ * the first. Rests are FLOORS now (domain/Floors.kt), several at a time, one per exercise,
+ * and nothing in the app builds a rest program any more.
+ *
+ * What survives is the one-step program itself, which is a real shape the runner has to
+ * handle — the boundary, finish and salvage paths all behave differently when there is no
+ * next step — and this is where the tests get one. There is no prepare step.
  */
 fun restProgram(restSec: Int, label: String = "Rest"): WorkoutProgram = WorkoutProgram(
     name = label,

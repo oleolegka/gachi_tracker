@@ -140,6 +140,26 @@ class Signals(context: Context) {
         }
     }
 
+    /**
+     * A rest floor coming due: the bench is free.
+     *
+     * A shape of its own rather than a reuse of [boundary], because the two mean opposite
+     * kinds of thing and are heard in the same room. A boundary is an ORDER from the
+     * conductor — go now, stop now — and it lands while you are mid-set. A floor is a
+     * PERMISSION, and it lands while you are standing around. Borrowing the "start work"
+     * pattern for it would train the one reflex a workout timer must not train: moving
+     * because a noise happened, without knowing which noise.
+     *
+     * Deliberately the quietest of the three patterns — two short taps and one short tone,
+     * 400 ms of waveform against the boundary's 620 — and comfortably inside
+     * `FLOOR_STAGGER_MS` (domain/Floors.kt), which is what guarantees that two floors coming
+     * due together do not talk over each other.
+     */
+    fun floor(settings: TimerSettings) {
+        if (settings.vibrate) vibrate(longArrayOf(0, 150, 100, 150))
+        if (settings.sound) tone(ToneGenerator.TONE_PROP_PROMPT, 300)
+    }
+
     /** The end of the whole program: longer and unlike any boundary within it. */
     fun finish(settings: TimerSettings) {
         if (settings.vibrate) vibrate(longArrayOf(0, 500, 200, 500, 200, 700))

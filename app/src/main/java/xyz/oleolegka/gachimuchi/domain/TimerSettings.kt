@@ -32,7 +32,7 @@ const val NUDGE_SEC = 30
 data class TimerSettings(
     /** Fallback length of a rest between sets when the journal has nothing to say. */
     val defaultRestSec: Int = 120,
-    /** Start the rest timer by itself the moment a set is recorded. */
+    /** Start the rest for an exercise by itself the moment a set of it is recorded. */
     val autoStartRest: Boolean = true,
     /** Prefer the rest actually taken last time over [defaultRestSec]. */
     val adaptRestToExercise: Boolean = true,
@@ -123,11 +123,11 @@ fun restSourceLabel(settings: TimerSettings, events: List<JournalEvent>, exercis
     }
 
 /**
- * Whether recording this form should pull up a rest timer.
+ * Whether recording this form should start a rest floor for its exercise.
  *
  * Only the two set-based forms. A body weight reading, a check-in and a finished cardio
- * session are not followed by another set, and a timer counting down after them is noise
- * that trains you to ignore the timer.
+ * session are not followed by another set, and a countdown after them is noise that trains
+ * you to ignore the timer.
  */
 fun startsRest(form: ActivityForm): Boolean = form is StrengthSet || form is HoldSet
 
