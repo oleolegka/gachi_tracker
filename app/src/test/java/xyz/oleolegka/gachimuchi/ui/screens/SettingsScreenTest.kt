@@ -2,8 +2,11 @@ package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import org.junit.Test
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 
@@ -44,16 +47,19 @@ class SettingsScreenTest : ScreenTest() {
     fun `an empty gallery says so, and the way to fill it is a button that is wired up`() {
         screen { SettingsScreen() }
 
+        // the tab is a lazy list, so the lower rows have to be scrolled to before they exist
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Add pictures"))
         compose.onNodeWithText("Add pictures").assertIsDisplayed().assertHasClickAction()
         compose.onNodeWithText("none yet").assertIsDisplayed()
         compose.onNodeWithText(
             "No pictures yet. Pictures are chosen with the system picker, and the app " +
                 "keeps its own copy of each one — moving or deleting the original later " +
                 "changes nothing here. Until there is at least one, nothing is ever shown."
-        ).assertIsDisplayed()
+        ).assertExists()
 
         // choosing a mode must not throw: the row writes through to the process-wide store,
         // which is a real SharedPreferences write even under Robolectric
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("On every set"))
         compose.onNodeWithText("On every set").assertHasClickAction().performClick()
     }
 }

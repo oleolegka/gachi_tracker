@@ -64,6 +64,11 @@ class TimerScreenTest : ScreenTest() {
         exerciseId = 1,
     )
 
+    /** Brings a row of the lazy list into existence; below the fold it is not composed. */
+    private fun scrollTo(text: String) {
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText(text))
+    }
+
     private fun timer(on: Boolean, programs: List<WorkoutProgram> = emptyList()) {
         val state = TimerUiState(
             enabled = on,
@@ -108,6 +113,9 @@ class TimerScreenTest : ScreenTest() {
 
         compose.onNodeWithText("No programs yet").assertIsDisplayed()
         compose.onNodeWithText("New program").assertIsDisplayed()
+        // the list is lazy, so anything below the fold has to be scrolled to before it
+        // exists at all
+        scrollTo("Export all")
         compose.onNodeWithText("Import from a file").assertIsDisplayed()
         // there is nothing to export, and the button says so rather than doing nothing
         compose.onNodeWithText("Export all").assertIsNotEnabled()
@@ -121,7 +129,7 @@ class TimerScreenTest : ScreenTest() {
         compose.onNodeWithText("The timer is off").assertDoesNotExist()
         // the settings are the last thing on the list, deliberately: they are read once and
         // then never again
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Timer settings"))
+        scrollTo("Timer settings")
         compose.onNodeWithText("Timer settings").assertIsDisplayed()
     }
 
@@ -139,6 +147,7 @@ class TimerScreenTest : ScreenTest() {
             "${formatClock(repeaters.totalSec())} total   logs as Hangs 20 mm"
         compose.onNodeWithText(line).assertIsDisplayed()
         compose.onNodeWithText("Run").assertIsEnabled()
+        scrollTo("Export all")
         compose.onNodeWithText("Export all").assertIsEnabled()
     }
 
