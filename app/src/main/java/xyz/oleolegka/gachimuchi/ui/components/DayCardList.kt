@@ -94,8 +94,15 @@ data class DayActions(
     /** Look inside a workout that is not running. */
     val openWorkout: (Long) -> Unit,
 
-    /** Look at the history of one exercise — where a single-entry card leads. */
-    val openExercise: (Long) -> Unit,
+    /**
+     * Look at what was done of one exercise ON THIS DAY — where a single-entry card leads.
+     *
+     * The DAY travels with the exercise, and that is the whole of the change §14.2 asked for:
+     * this card used to open the all-time statistics of the exercise, which answers a question
+     * nobody is asking at the moment they tap a card saying "3 entries". The charts are one tap
+     * further on, from the breakdown.
+     */
+    val openExercise: (exerciseId: Long, date: LocalDate) -> Unit,
 
     /**
      * Remove a workout and everything recorded into it — behind the long press and behind a
@@ -167,7 +174,7 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         DayCardAction.START -> card.slotId?.let { id -> { actions.startFromPlan(id, date) } }
         DayCardAction.CONTINUE -> card.workoutId?.let { id -> { actions.continueWorkout(id) } }
         DayCardAction.OPEN -> when (card.kind) {
-            DayCardKind.SINGLE -> card.exerciseId?.let { id -> { actions.openExercise(id) } }
+            DayCardKind.SINGLE -> card.exerciseId?.let { id -> { actions.openExercise(id, date) } }
             else -> card.workoutId?.let { id -> { actions.openWorkout(id) } }
         }
 

@@ -58,7 +58,7 @@ class DayCardListTest : ScreenTest() {
     private var loggedSingle: LocalDate? = null
     private var continued: Long? = null
     private var opened: Long? = null
-    private var openedExercise: Long? = null
+    private var openedExercise: Pair<Long, LocalDate>? = null
     private var edited: Long? = null
     private var deleted: Long? = null
     private var deletedWorkout: Long? = null
@@ -69,7 +69,7 @@ class DayCardListTest : ScreenTest() {
         logSingleEntry = { date -> loggedSingle = date },
         continueWorkout = { id -> continued = id },
         openWorkout = { id -> opened = id },
-        openExercise = { id -> openedExercise = id },
+        openExercise = { id, date -> openedExercise = id to date },
         deleteWorkout = { id -> deletedWorkout = id },
         editSlot = if (withSlotIcons) ({ id -> edited = id }) else null,
         deleteSlot = if (withSlotIcons) ({ id -> deleted = id }) else null,
@@ -156,7 +156,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("12:00 - 12:08").assertIsDisplayed()
 
         compose.onNodeWithText("Fingerboard 20 mm").performClick()
-        assertEquals(fingerboard.id, openedExercise)
+        assertEquals("the breakdown is opened for the day on screen", fingerboard.id to today, openedExercise)
     }
 
     @Test

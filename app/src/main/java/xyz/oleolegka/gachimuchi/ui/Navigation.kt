@@ -71,6 +71,9 @@ sealed interface BackStep {
     /** Leave the workout screen, back to the day list that opened it. */
     data object CloseWorkout : BackStep
 
+    /** Leave the breakdown of one exercise on one day, back to the day list. */
+    data object CloseDayEntries : BackStep
+
     /** Switch to [tab] — always [HomeTab], see the note there. */
     data class SwitchTab(val tab: Tab) : BackStep
 
@@ -86,7 +89,8 @@ sealed interface BackStep {
  * Where back leads from the state described by the arguments.
  *
  * The order is the precedence the app is drawn in — editor over detail over logging over
- * the workout screen over the tabs — because "back" has to close the thing in front, and
+ * the workout screen over the day breakdown over the tabs — because "back" has to close the
+ * thing in front, and
  * the thing in front is whichever of these is checked first when drawing. Keeping both
  * orders in step is the whole point of having this as a function: change one and the test
  * that pins them together fails.
@@ -114,6 +118,16 @@ fun backStep(
      * it — and the default is the state the app is in whenever nothing is being conducted.
      */
     conducting: Boolean = false,
+    /**
+     * The breakdown of one exercise on one day has the screen.
+     *
+     * BELOW the form detail screen, because the breakdown is where that screen is now reached
+     * from: back out of the charts and the day they were opened from is what has to come back.
+     * A peer of the workout screen otherwise — both are opened from a card on a day, and
+     * neither leads to the other. Defaulted, like [conducting], because most callers have
+     * nothing to say about it.
+     */
+    showingDayEntries: Boolean = false,
 ): BackStep = when {
     editingProgram -> BackStep.CloseEditor
     showingFormDetail -> BackStep.CloseFormDetail
@@ -122,6 +136,7 @@ fun backStep(
     conducting -> BackStep.CloseConductor
     logging -> BackStep.CloseLogging
     showingWorkout -> BackStep.CloseWorkout
+    showingDayEntries -> BackStep.CloseDayEntries
     tab != HomeTab -> BackStep.SwitchTab(HomeTab)
     else -> BackStep.LeaveApp
 }

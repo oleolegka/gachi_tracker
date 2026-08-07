@@ -57,7 +57,7 @@ class CalendarScreenTest : ScreenTest() {
         logSingleEntry = {},
         continueWorkout = {},
         openWorkout = {},
-        openExercise = {},
+        openExercise = { _, _ -> },
         deleteWorkout = {},
     )
 

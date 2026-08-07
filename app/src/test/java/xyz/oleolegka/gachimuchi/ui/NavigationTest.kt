@@ -109,6 +109,38 @@ class NavigationTest {
         }
     }
 
+    /**
+     * The pair whose order carries a decision: the charts of an exercise are now opened FROM
+     * the breakdown of a day, so backing out of them has to land on that day rather than skip
+     * past it to the tab underneath.
+     */
+    @Test
+    fun `back out of the charts lands on the day breakdown that opened them`() {
+        assertEquals(
+            BackStep.CloseFormDetail,
+            backStep(false, showingFormDetail = true, logging = false, showingWorkout = false,
+                tab = HomeTab, showingDayEntries = true),
+        )
+        assertEquals(
+            BackStep.CloseDayEntries,
+            backStep(false, showingFormDetail = false, logging = false, showingWorkout = false,
+                tab = HomeTab, showingDayEntries = true),
+        )
+    }
+
+    @Test
+    fun `back leaves the day breakdown for whichever tab opened it`() {
+        // a single-entry card lives on Today and on the calendar, like every other day card
+        for (tab in Tab.entries) {
+            assertEquals(
+                "breakdown opened from $tab",
+                BackStep.CloseDayEntries,
+                backStep(false, showingFormDetail = false, logging = false, showingWorkout = false,
+                    tab = tab, showingDayEntries = true),
+            )
+        }
+    }
+
     @Test
     fun `back from any other tab goes home, and only home ends the app`() {
         for (tab in Tab.entries - HomeTab) {
@@ -149,7 +181,7 @@ class NavigationTest {
     @Test
     fun `back always reaches the exit, in a bounded number of presses`() {
         /*
-         * Six is the ceiling over ALL flag combinations: five modes closed one at a time,
+         * Seven is the ceiling over ALL flag combinations: six modes closed one at a time,
          * then one hop to the home tab. In the app itself at most THREE can be open at once —
          * the conductor over logging over a workout, which is a hang started from a card
          * inside a workout that was opened to look at — so the real worst case is four
@@ -162,14 +194,14 @@ class NavigationTest {
             while (current.back() != BackStep.LeaveApp) {
                 current = current.after(current.back())!!
                 presses++
-                assertTrue("back loops from $state", presses <= 6)
+                assertTrue("back loops from $state", presses <= 7)
             }
             assertEquals("back must end at the bare home tab, from $state", home(), current)
             // the combinations the app can actually produce, and from each of them the exit
             // is never more than the open modes plus a tab away
             val modes = listOf(
                 state.editingProgram, state.showingFormDetail, state.conducting,
-                state.logging, state.showingWorkout,
+                state.logging, state.showingWorkout, state.showingDayEntries,
             )
             if (modes.count { it } <= 1) {
                 assertTrue("$state should exit within two presses, took $presses", presses <= 2)
@@ -194,12 +226,16 @@ class NavigationTest {
         val showingWorkout: Boolean,
         val tab: Tab,
         val conducting: Boolean = false,
+        val showingDayEntries: Boolean = false,
     )
 
     private fun home() = NavState(false, false, false, false, HomeTab)
 
-    private fun NavState.back() =
-        backStep(editingProgram, showingFormDetail, logging, showingWorkout, tab, conducting)
+    private fun NavState.back() = backStep(
+        editingProgram, showingFormDetail, logging, showingWorkout, tab,
+        conducting = conducting,
+        showingDayEntries = showingDayEntries,
+    )
 
     /**
      * The state the app is left in after [step] is carried out — mirrors the handler.
@@ -214,6 +250,7 @@ class NavigationTest {
         BackStep.CloseConductor -> copy(conducting = false)
         BackStep.CloseLogging -> copy(logging = false)
         BackStep.CloseWorkout -> copy(showingWorkout = false)
+        BackStep.CloseDayEntries -> copy(showingDayEntries = false)
         is BackStep.SwitchTab -> copy(tab = step.tab)
         BackStep.LeaveApp -> null
     }
@@ -225,16 +262,22 @@ class NavigationTest {
                 for (log in listOf(false, true)) {
                     for (workout in listOf(false, true)) {
                         for (conducting in listOf(false, true)) {
-                            for (tab in Tab.entries) {
-                                check(NavState(editor, detail, log, workout, tab, conducting))
-                                seen++
+                            for (entries in listOf(false, true)) {
+                                for (tab in Tab.entries) {
+                                    check(
+                                        NavState(
+                                            editor, detail, log, workout, tab, conducting, entries,
+                                        )
+                                    )
+                                    seen++
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        assertEquals(2 * 2 * 2 * 2 * 2 * Tab.entries.size, seen)
+        assertEquals(2 * 2 * 2 * 2 * 2 * 2 * Tab.entries.size, seen)
     }
 
     @Test
@@ -247,6 +290,7 @@ class NavigationTest {
             BackStep.CloseConductor,
             BackStep.CloseLogging,
             BackStep.CloseWorkout,
+            BackStep.CloseDayEntries,
             BackStep.SwitchTab(HomeTab),
             BackStep.LeaveApp,
         )
