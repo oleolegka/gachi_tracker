@@ -241,7 +241,11 @@ fun WorkoutLogScreen(
                         .heightIn(min = 52.dp),
                 ) {
                     Icon(Icons.Filled.Add, contentDescription = null)
-                    Text("  Add exercise", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Add exercise",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
                 }
             }
         },
