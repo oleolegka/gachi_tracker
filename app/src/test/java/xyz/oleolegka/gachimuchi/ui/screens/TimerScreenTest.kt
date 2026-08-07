@@ -23,7 +23,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 
 /**
- * The timer tab, at rest: what it says when the timer is off, when there is nothing saved,
+ * The programs tab, at rest: what it says when the timer is off, when the library is empty,
  * and that the buttons are wired to the callbacks they claim.
  *
  * A live run is NOT exercised here. The countdown is driven by the process-wide controller
@@ -111,7 +111,7 @@ class TimerScreenTest : ScreenTest() {
     fun `an empty program list says what a program is instead of looking like a failed load`() {
         timer(on = true)
 
-        compose.onNodeWithText("No programs yet").assertIsDisplayed()
+        compose.onNodeWithText("The library is empty").assertIsDisplayed()
         compose.onNodeWithText("New program").assertIsDisplayed()
         // the list is lazy, so anything below the fold has to be scrolled to before it
         // exists at all
@@ -125,7 +125,7 @@ class TimerScreenTest : ScreenTest() {
     fun `the screen's own three sections are all present`() {
         timer(on = true, programs = listOf(repeaters))
 
-        compose.onNodeWithText("Programs").assertIsDisplayed()
+        compose.onNodeWithText("Your programs").assertIsDisplayed()
         compose.onNodeWithText("The timer is off").assertDoesNotExist()
         // the settings are the last thing on the list, deliberately: they are read once and
         // then never again

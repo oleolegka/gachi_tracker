@@ -51,8 +51,8 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * identify this copy of the app — which installation it is and which build it is.
  *
  * It exists as a tab of its own rather than as a section of another screen because the
- * settings that are still to come (and the timer's own, which live on the timer screen
- * next to the thing they configure) need somewhere to land.
+ * settings that are still to come (and the timer's own, which live on the programs tab next
+ * to the thing they configure) need somewhere to land.
  *
  * The timer's settings deliberately stay where they are. They are read while looking at a
  * countdown; these are read once and then rarely again.

@@ -18,7 +18,16 @@ enum class Tab(val title: String) {
     TODAY("Today"),
     OVERVIEW("Overview"),
     CALENDAR("Calendar"),
-    TIMER("Timer"),
+
+    /*
+     * Called "Programs" and not "Timer". A protocol is started from the exercise card in the
+     * workout being done, so a tab called Timer was an invitation to begin training in the
+     * wrong place — and what is actually on it is the LIBRARY: the programs, the headings
+     * they are filed under, import and export, and the timer's own settings. The constant
+     * keeps its old name because it names a place in the app rather than a word on screen,
+     * and renaming it would touch every file that switches on a tab.
+     */
+    TIMER("Programs"),
     SETTINGS("Settings"),
 }
 
