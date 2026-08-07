@@ -3,15 +3,14 @@ package xyz.oleolegka.gachimuchi.data.db
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 /**
  * The journal DAO. Updates and deletes of events are absent ON PURPOSE — the journal is
- * append-only (the single exception is [deleteBySeedAuthor], wiping the demo seed: that
- * is not rewriting history but erasing something that was never part of it).
+ * append-only. There used to be one exception, a delete keyed on the demo seed's author id;
+ * it went with the demo seed, and the journal now has no delete at all.
  */
 @Dao
 interface EventDao {
@@ -32,10 +31,6 @@ interface EventDao {
 
     @Query("SELECT * FROM events WHERE id = :id")
     suspend fun byId(id: Long): EventEntity?
-
-    /** Wipes the demo seed: ONLY the events of the seed author are deleted. */
-    @Query("DELETE FROM events WHERE space_id = :spaceId AND author_id = :authorId")
-    suspend fun deleteBySeedAuthor(spaceId: Long = LOCAL_SPACE_ID, authorId: Long = SEED_AUTHOR_ID): Int
 }
 
 @Dao
@@ -58,19 +53,6 @@ interface ExerciseDao {
     @Query("SELECT * FROM exercises WHERE id = :id")
     suspend fun byId(id: Long): ExerciseEntity?
 
-    @Query("DELETE FROM exercises WHERE space_id = :spaceId AND id IN (:ids)")
-    suspend fun deleteByIds(ids: List<Long>, spaceId: Long = LOCAL_SPACE_ID)
-
-    /**
-     * Hands a seeded exercise over to the user.
-     *
-     * Called when the demo data is removed and one of its exercises turns out to carry real
-     * sets: the row cannot go without orphaning them, so it stops being demo data instead.
-     * Clearing the mark is what stops the next press of the button trying again.
-     */
-    @Query("UPDATE exercises SET seeded = 0 WHERE space_id = :spaceId AND id IN (:ids)")
-    suspend fun clearSeedMark(ids: List<Long>, spaceId: Long = LOCAL_SPACE_ID)
-
     /**
      * Remembers the rest last chosen for an exercise.
      *
@@ -86,25 +68,6 @@ interface ExerciseDao {
     /** Same, for "run this by its protocol". Null puts the row back to inferring it. */
     @Query("UPDATE exercises SET led_by_protocol = :led WHERE space_id = :spaceId AND id = :id")
     suspend fun setLedByProtocol(id: Long, led: Boolean?, spaceId: Long = LOCAL_SPACE_ID)
-}
-
-@Dao
-interface AliasDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(alias: AliasEntity)
-
-    @Query("SELECT * FROM aliases WHERE space_id = :spaceId AND key = :key")
-    suspend fun byKey(key: String, spaceId: Long = LOCAL_SPACE_ID): AliasEntity?
-
-    /** Live aliases: the exercise picker searches by them alongside the names. */
-    @Query("SELECT * FROM aliases WHERE space_id = :spaceId ORDER BY key")
-    fun observeAll(spaceId: Long = LOCAL_SPACE_ID): Flow<List<AliasEntity>>
-
-    @Query("SELECT * FROM aliases WHERE space_id = :spaceId ORDER BY key")
-    suspend fun all(spaceId: Long = LOCAL_SPACE_ID): List<AliasEntity>
-
-    @Query("DELETE FROM aliases WHERE space_id = :spaceId AND key IN (:keys)")
-    suspend fun deleteByKeys(keys: List<String>, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 /**
@@ -202,13 +165,10 @@ interface SlotDao {
      * loads `created_at` or `space_id` and an entity rebuilt from a draft would overwrite
      * them with whatever the rebuild made up. Returns the number of rows touched, so a
      * caller can tell "saved" from "that slot is gone".
-     *
-     * Editing also clears the demo-seed mark: a slot the user has opened and changed is
-     * theirs, and removing the demo data later must not take it away.
      */
     @Query(
         "UPDATE slots SET name = :name, at_time = :atTime, repeat_rule = :repeatRule, " +
-            "anchor_date = :anchorDate, seeded = 0 WHERE space_id = :spaceId AND id = :id"
+            "anchor_date = :anchorDate WHERE space_id = :spaceId AND id = :id"
     )
     suspend fun updateFields(
         id: Long,

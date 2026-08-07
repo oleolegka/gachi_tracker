@@ -6,7 +6,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -15,7 +14,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
-import xyz.oleolegka.gachimuchi.data.db.SEED_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
@@ -285,17 +283,5 @@ class WorkoutFlowTest {
         assertEquals(1, buildWorkout(repo.allEvents(), workoutId)!!.setCount)
         val loose = setsOutsideWorkouts(repo.allEvents(), day)
         assertEquals(listOf(stretching.id), loose.map { it.form.exerciseId })
-    }
-
-    @Test
-    fun `the demo seed never pours itself into an open workout`() = runTest {
-        val bench = ref("Bench press", ExerciseForm.STRENGTH)
-        val workoutId = repo.startWorkout()
-
-        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), authorId = SEED_AUTHOR_ID)
-
-        assertEquals(0, buildWorkout(repo.allEvents(), workoutId)!!.setCount)
-        assertNotNull(repo.allEvents().single { it.authorId == SEED_AUTHOR_ID })
-        assertNull(repo.allEvents().single { it.authorId == SEED_AUTHOR_ID }.workoutId)
     }
 }

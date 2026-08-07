@@ -165,7 +165,7 @@ fun bodyweightOf(opDate: String, weightKg: Double): Bodyweight =
 
 // --- prefilling the entry card -------------------------------------------------------
 
-/** The last non-cancelled strength set of an exercise (across aliases, by exercise_id). */
+/** The last non-cancelled strength set of an exercise, by exercise_id and not by name. */
 fun lastStrengthSet(events: List<JournalEvent>, exerciseId: Long): StrengthSet? =
     strengthSetsByExerciseId(events, exerciseId).lastOrNull()
 
@@ -229,9 +229,10 @@ data class Session(
  * the workout, not a sorted report. Cancelled sets are gone (the reducers drop them),
  * but their events remain in the journal.
  *
- * Grouping goes by exercise_id, which merges aliases into one block. Entries with no id
- * (written before the catalog existed, and body weight, which never has one) fall back
- * to the normalized name so they still show up instead of vanishing.
+ * Grouping goes by exercise_id, so entries spelled differently (the bot writes whatever
+ * sentence it was given) still land in one block. Entries with no id (written before the
+ * catalog existed, and body weight, which never has one) fall back to the normalized name
+ * so they still show up instead of vanishing.
  */
 fun buildSession(events: List<JournalEvent>, opDate: String): Session {
     val all = readActivities(events)
@@ -294,7 +295,7 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
 }
 
 /**
- * The rest a form states outright (the bot and the demo seed write it; the app does not).
+ * The rest a form states outright (the bot writes it; the app does not).
  *
  * Not private: the rest timer derives its offered duration the same way the session feed
  * derives the "rest 2:30" line (domain/TimerSettings.kt). Two implementations of "how long
@@ -407,36 +408,25 @@ fun exerciseToLogNext(
 }
 
 /**
- * Whether an exercise matches what was typed into the search field. Both the name and
- * the learned aliases are matched, normalized the same way the journal keys are, so
- * "bench" finds "Bench press" through either route. An empty query matches everything.
+ * Whether an exercise matches what was typed into the search field. A substring of the
+ * NAME, normalized the same way the journal keys are, so "bench" finds "Bench press". An
+ * empty query matches everything.
+ *
+ * ── It used to match learned synonyms too, and no longer can ────────────────────
+ * The app kept a table of words the user had taught it, filled in by watching which exercise
+ * was tapped while a word sat in this search box. That mechanism came from the telegram bot,
+ * where an exercise was named by typing a sentence and a synonym was the only way to be
+ * understood. Here the exercise is picked from a list ordered by recency, so a synonym could
+ * only ever save keystrokes in a search — and it could not be set on purpose, only guessed
+ * at from a tap.
+ *
+ * The consequence for the picker is deliberate and worth naming: a word that matches no name
+ * now narrows the list to NOTHING, where it used to fall back to the whole catalog. That
+ * fallback existed to keep the tap-that-teaches reachable; with nothing left to teach, a
+ * search that quietly ignores what was typed would just be a search box that lies. The
+ * screen says nothing matched and offers to clear the search — see ui/screens/ExercisePicker.
  */
-fun matchesExerciseQuery(name: String, aliases: List<String>, query: String): Boolean {
+fun matchesExerciseQuery(name: String, query: String): Boolean {
     val q = normPhrase(query) ?: return true
-    if (normPhrase(name)?.contains(q) == true) return true
-    return aliases.any { normPhrase(it)?.contains(q) == true }
+    return normPhrase(name)?.contains(q) == true
 }
-
-/**
- * Whether the picker should fall back to the WHOLE catalog for a word that matched nothing.
- *
- * This is the alias-learning branch of §11, and without it that branch is unreachable. The
- * app learns a word by watching which exercise is tapped while it is in the search box
- * (`onPick(id, query)` -> `ActivityRepository.learnAlias`), so a word can only ever be
- * taught to an exercise the list is still showing. A search that filters the list down to
- * nothing therefore takes the one word that most needs teaching — a genuinely new one,
- * "jim" for "Bench press" — and removes every exercise it could be attached to, leaving
- * "create a new exercise" as the only way out and a duplicate of an exercise that already
- * exists as the result.
- *
- * §11 settled this: an unknown word shows the exercises that ARE known, plus "add new".
- * That is not a guess and not fuzzy matching — nothing is preselected and nothing is
- * relearned behind the user's back; the full list is simply offered again so that the tap
- * which teaches the word is available at the moment it is worth something.
- *
- * The fallback is deliberately not applied to an empty catalog (there is nothing to fall
- * back to; the screen offers creation instead) nor to an empty query (the list is already
- * everything).
- */
-fun offersWholeCatalog(query: String, matchCount: Int, catalogSize: Int): Boolean =
-    normPhrase(query) != null && matchCount == 0 && catalogSize > 0

@@ -56,10 +56,9 @@ class MainActivity : ComponentActivity() {
                  * It used to write ninety days of invented training as well, so that no
                  * screen would ever be seen empty. That was the wrong trade in an app whose
                  * only claim is that its journal is true: a new user was handed somebody
-                 * else's history as if it were theirs, and the two then grew together in one
-                 * journal with no way to separate them again. Empty screens now say they are
-                 * empty and point at the button that fills them; the demo is available in
-                 * Settings, on request, and removable from the same place.
+                 * else's history as if it were theirs, and on one occasion the seed wrote
+                 * sets into exercises the user had made. Empty screens now say what to do
+                 * instead, and there is no demo left to offer anywhere.
                  *
                  * The starter programs stay because they are not history. They are two real
                  * protocols in a list the user can delete, they claim nothing about what

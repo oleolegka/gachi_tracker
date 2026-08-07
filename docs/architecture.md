@@ -288,22 +288,39 @@ promise about wall-clock time — the device dozes and the process is frozen —
 timed to end exactly at midnight can come back hours late, while a date comparison every
 minute costs nothing and is right however the sleep behaves.
 
-## Demo data is asked for, and can be taken back
+## There is no demo data, and empty screens say what to do
 
-The app used to write about ninety days of invented training on first launch so that no
-screen would ever be seen empty. That is the wrong trade for an app whose only claim is
-that its journal is true, and the removal half was missing entirely: the synthetic sets
-went into the same journal as the real ones and stayed there.
+The app used to write about ninety days of invented training so that no screen would ever
+be seen empty. It ran on first launch at first, then from a button in Settings behind a
+confirmation, with a removal routine that knew which rows were the seed's.
 
-It now lives in Settings, behind a confirmation, in both directions. Everything the seed
-creates is marked — events by a negative author id, catalog rows, aliases and slots by a
-`seeded` column (schema version 4) — so removal can take exactly what it wrote. Two rules
-keep that safe. An exercise that carries records the user made is never deleted; it stops
-being demo data instead. And demo data written before the mark existed is recognised by
-matching the known set of names, which is a guess, so it is only acted on from the button
-that shows what it is about to remove first.
+It is gone entirely (schema version 7). The reasons stack up rather than balance out: it
+once wrote synthetic sets into exercises the user had created; it cost a `seeded` column on
+three tables, a migration, and a page of rules about which deletes were allowed to touch
+what; and every one of those costs was paid inside the one part of the app that promises the
+journal is true. What it bought was screens that looked inhabited to somebody who had not
+trained yet.
 
-Empty screens now say they are empty and name the button that fills them.
+Empty states do that job better, because they can say what to do. An empty day names the
+button under it, the overview says where the first entry comes from, and the logging screen
+explains what an exercise is before asking for one.
+
+## Exercises are found by name, not by learned synonyms
+
+The catalog used to carry a `dictionary` of words the user had taught it — `bench` ->
+`Bench press` — ported from the telegram bot, where an exercise was named by typing a
+sentence and a synonym was the only way to be understood.
+
+In the app the exercise is picked from a list ordered by recency, so a synonym could only
+ever save keystrokes in a search, and it could not be set on purpose: the app guessed one
+from whatever was in the search box when a row was tapped. For a while the mechanism was
+unreachable altogether — the search filtered the word out of the list before it could be
+learned, and the fix was to stop filtering, which turned "no match" into "here is the whole
+catalog again".
+
+Both are gone (schema version 7). Search matches a substring of the name, and a word that
+matches nothing narrows the list to nothing and says so, with the two ways out named: clear
+the search, or create the exercise.
 
 ## Known limits
 

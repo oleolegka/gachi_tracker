@@ -41,7 +41,6 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
-import xyz.oleolegka.gachimuchi.ui.screens.DemoActions
 import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
@@ -103,8 +102,6 @@ fun GachiApp(viewModel: MainViewModel) {
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val runOutcome by viewModel.runOutcome.collectAsStateWithLifecycle()
     val logReceipt by viewModel.logReceipt.collectAsStateWithLifecycle()
-    val demoPrompt by viewModel.demoPrompt.collectAsStateWithLifecycle()
-    val demoNote by viewModel.demoNote.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     /*
@@ -426,19 +423,7 @@ fun GachiApp(viewModel: MainViewModel) {
                     )
                 }
 
-                Tab.SETTINGS -> SettingsScreen(
-                    demo = DemoActions(
-                        prompt = demoPrompt,
-                        note = demoNote,
-                        busy = state.loading,
-                        askWrite = viewModel::askWriteDemoData,
-                        askRemove = viewModel::askRemoveDemoData,
-                        confirm = viewModel::confirmDemoPrompt,
-                        dismissPrompt = viewModel::dismissDemoPrompt,
-                        dismissNote = viewModel::dismissDemoNote,
-                    ),
-                    modifier = inner,
-                )
+                Tab.SETTINGS -> SettingsScreen(modifier = inner)
             }
         }
     }

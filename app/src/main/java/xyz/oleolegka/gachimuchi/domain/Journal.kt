@@ -95,17 +95,6 @@ fun readActivities(
     return out
 }
 
-/**
- * Every catalog exercise these events point at — CANCELLED SETS INCLUDED.
- *
- * Deliberately not built on [readActivities]: that drops reversed sets, and this answers a
- * different question. A cancelled set is still a row in the journal that names its exercise,
- * so deleting the catalog row underneath it would leave a record nothing can label. Used by
- * the demo wipe to decide which of its own exercises have to be spared.
- */
-fun exerciseIdsReferencedBy(events: List<JournalEvent>): Set<Long> =
-    events.mapNotNullTo(HashSet()) { formFromEventOrNull(it.type, it.payload)?.exerciseId }
-
 /** Strength sets of one exercise on one day (a plain reducer, no record detection). */
 data class StrengthDayGroup(
     val exerciseKey: String,
@@ -132,7 +121,7 @@ fun strengthSetsByExerciseDay(
 
 /**
  * All sets of a given canonical exercise (by exercise_id, §11), in journal order.
- * This crosses ALIASES: sets recorded under different words but with the same
+ * This crosses SPELLINGS: sets recorded under different words but with the same
  * exercise_id are collected together — grouping by key cannot achieve that.
  *
  * Caveat (the seam): records with exercise_id = null (written before the catalog was

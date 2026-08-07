@@ -9,8 +9,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * The local database (SQLite via Room). The schema repeats the server one (`bot/db.py`):
- * append-only journal + catalog + aliases + slots, plus the local-only program tables
- * added in version 2.
+ * append-only journal + catalog + slots, plus the local-only program tables added in
+ * version 2. The server's synonym dictionary was mirrored here too until version 7.
  *
  * There is NO encryption (SQLCipher) here yet, unlike on the server: on the phone the
  * database sits in the app's internal storage, and the key would have to be kept right
@@ -27,20 +27,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         EventEntity::class,
         ExerciseEntity::class,
-        AliasEntity::class,
         SlotEntity::class,
         SlotExerciseEntity::class,
         ProgramEntity::class,
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun events(): EventDao
     abstract fun exercises(): ExerciseDao
-    abstract fun aliases(): AliasDao
     abstract fun slots(): SlotDao
     abstract fun programs(): ProgramDao
 
@@ -134,26 +132,24 @@ abstract class AppDatabase : RoomDatabase() {
         /**
          * Version 3 -> 4: the demo-seed marker on the catalog, the aliases and the slots.
          *
-         * Purely additive: one boolean column per table, NOT NULL with a default of 0, so
-         * every row already on the phone reads as "the user's own" — which is the safe
-         * answer, because the only thing this flag is ever used for is DELETION.
+         * A column per table, NOT NULL with a default of 0, so every row already on the
+         * phone read as "the user's own" — the safe answer, because the only thing the flag
+         * was ever used for was DELETION.
          *
-         * That default is also why the migration does not try to be clever and stamp the
-         * demo rows an older build wrote. It cannot tell them apart from the user's: the
-         * seed's exercises are deduplicated by name, so a hand-made "Bench press" and a
-         * seeded one are the same row shape, and a migration that guessed wrong would
-         * quietly arm a delete button against real data. Recognising that older demo data is
-         * done at wipe time instead (data/seed/DemoCleanup.kt), where the journal can be
-         * consulted and a row that carries real records can be spared.
-         *
-         * NOT NULL with a default rather than nullable, because [ExerciseEntity] and friends
-         * declare a non-null Boolean: Room compares the database against the entities on the
-         * next open and a nullable column here would fail that check.
+         * ── This adds a column that version 7 takes away again ──────────────────────
+         * The demo seed is gone and so is the mark; [MIGRATION_6_7] drops all three columns.
+         * This step is kept, and kept literal, because a phone at version 3 still has to walk
+         * through 4, 5 and 6 to get to 7, and every one of those steps has to describe the
+         * database that actually existed at the time. Shortening the chain by pretending the
+         * column was never added would make 4 -> 5 and 5 -> 6 run against a schema no phone
+         * ever had; the column names are spelled out here rather than taken from a constant
+         * for the same reason — there is no constant left, and there should not be one, since
+         * nothing in today's schema is allowed to depend on it.
          */
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 for (table in listOf("exercises", "aliases", "slots")) {
-                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `$COLUMN_SEEDED` INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `seeded` INTEGER NOT NULL DEFAULT 0")
                 }
             }
         }
@@ -227,8 +223,113 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+        /**
+         * Version 6 -> 7: the demo seed and the learned synonyms are gone, and so is
+         * everything in the schema that existed to serve them — the `aliases` table and the
+         * `seeded` column on the catalog and on the plan.
+         *
+         * THE FIRST MIGRATION THAT TAKES SOMETHING AWAY, which is why it is longer than the
+         * five before it. SQLite cannot drop a column portably, so each affected table is
+         * rebuilt: create the new shape, copy every row across by name, drop the old table,
+         * rename. That is the sequence Room's own generated migrations use, and it is safe
+         * here for one reason that has to be said out loud — `slot_exercises` has an
+         * ON DELETE CASCADE against `slots`, and dropping a parent table WITH FOREIGN KEYS
+         * ENABLED performs an implicit delete of its rows, which would take every planned
+         * composition with it. Room turns foreign keys on in `onOpen`, which runs after
+         * migrations, so they are off while this executes. The migration test writes a
+         * composition before the upgrade and reads it back after, so that this is checked
+         * rather than assumed.
+         *
+         * ── Nothing is lost, including the rows the seed created ────────────────────
+         * The copy is unconditional: a row marked `seeded = 1` comes through exactly like
+         * any other. There is no longer any such thing as demo data, so an exercise that was
+         * demo data is simply an exercise, and deleting rows during an upgrade — silently,
+         * with no dialog and no undo — is the opposite of what this app promises. A user who
+         * wants the leftovers gone can delete them one at a time, seeing what goes.
+         *
+         * ── Why the id sequences are restored by hand ───────────────────────────────
+         * `id INTEGER PRIMARY KEY AUTOINCREMENT` never reuses an id, and the guarantee is
+         * kept in `sqlite_sequence`, which the drop takes with it: the rebuilt table's
+         * counter restarts at its highest SURVIVING id, so ids above that — exercises the
+         * user deleted — would be handed out a second time. The journal outlives the catalog
+         * (an entry keeps the exercise_id of a row that is gone), so a reissued id would
+         * silently re-attach old entries to a new exercise. Copying the counters back across
+         * the rebuild is four lines and closes that.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v7` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` IN ('exercises', 'slots')"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`edge_mm` REAL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`edge_mm`, `protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`) SELECT `id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`edge_mm`, `protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol` FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_slots` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`at_time` TEXT, " +
+                        "`repeat_rule` TEXT NOT NULL, " +
+                        "`anchor_date` TEXT NOT NULL, " +
+                        "`created_at` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_slots` (`id`, `space_id`, `name`, `at_time`, `repeat_rule`, " +
+                        "`anchor_date`, `created_at`) SELECT `id`, `space_id`, `name`, `at_time`, " +
+                        "`repeat_rule`, `anchor_date`, `created_at` FROM `slots`"
+                )
+                db.execSQL("DROP TABLE `slots`")
+                db.execSQL("ALTER TABLE `_new_slots` RENAME TO `slots`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_slots_space_id_id` ON `slots` (`space_id`, `id`)"
+                )
+
+                db.execSQL("DROP TABLE IF EXISTS `aliases`")
+
+                // delete-then-insert rather than INSERT OR REPLACE: `sqlite_sequence` carries
+                // no unique index on `name`, so "or replace" has nothing to match on and
+                // quietly leaves TWO counters for the same table
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v7`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v7`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v7`")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+            MIGRATION_6_7,
+        )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(

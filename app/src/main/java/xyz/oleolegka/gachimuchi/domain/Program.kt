@@ -399,12 +399,16 @@ fun programFromExercise(
 // --- the two programs that ship with the app ------------------------------------------
 
 /**
- * Starter programs, written on first launch alongside the demo history.
+ * Starter programs, written on first launch and the only thing that is.
  *
  * Two, not ten: they exist so the program screen is not an empty list with a plus button,
  * and so the shape of a program is obvious from an example. Both are real protocols
  * rather than filler — 7:3 repeaters is the standard hangboard set, and Tabata is the
  * canonical 20:10.
+ *
+ * They are NOT what the demo seed was, which is why they outlived it: a program claims
+ * nothing about what anybody has done. It is an offer to count time, editable and
+ * deletable, and it puts no row in the journal until a run is confirmed into one.
  */
 fun starterPrograms(): List<WorkoutProgram> = listOf(
     WorkoutProgram(
