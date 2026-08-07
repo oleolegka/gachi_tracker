@@ -36,7 +36,8 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
 import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightAt
-import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.ExerciseIdentity
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
@@ -434,20 +435,32 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun exercise(id: Long): ExerciseEntity? = db.exercises().byId(id)
 
     /**
-     * Creates an exercise. Deduplication by NORMALIZED name is advisory, same as on the
-     * server (there is no UNIQUE index): if an exercise with that name already exists,
-     * its id is returned.
+     * The exercise with this IDENTITY, creating it if there is none: name, form, edge and
+     * work:rest protocol together (see [ExerciseIdentity]), not the name on its own.
+     *
+     * ── What this used to do, and what it cost ─────────────────────────────────
+     * It looked for a row with the same normalized NAME and returned it, dropping the edge
+     * and the protocol it had been handed without a word. §12-A says those are part of what a
+     * hangboard exercise IS, so adding hangs on a 15 mm edge while 20 mm hangs existed handed
+     * back the 20 mm row: two exercises became one, every set went into one history, and
+     * nothing anywhere said so. The only thing that ever prevented it was the user's habit of
+     * typing the edge into the name.
+     *
+     * Now a different edge, a different protocol or a different form is a DIFFERENT EXERCISE
+     * and gets a row of its own — which is also what the UNIQUE index added in schema version
+     * 15 enforces, so this lookup and the constraint cannot disagree.
      *
      * ── What a found row does and does not pick up ──────────────────────────────
-     * Name, form, edge and protocol of an existing row are NEVER touched. Those four are the
-     * exercise's IDENTITY (§12-A puts edge and protocol in it), and quietly rewriting them
-     * from whatever a caller passed would move an exercise's history onto a different
-     * exercise — the failure this whole catalog exists to prevent.
+     * Nothing about its identity, because a row can only be found by matching it exactly.
      *
-     * [defaultRestSec] is the one exception, and only when it is given. It is a PREFERENCE,
-     * not identity: "I want two and a half minutes between these" is a statement about the
-     * next set, it replaces the previous answer to the same question by design, and it
-     * carries no history that a rewrite could strand.
+     * [defaultRestSec] is written when it is given, because it is a PREFERENCE: "I want two
+     * and a half minutes between these" replaces the previous answer to the same question by
+     * design and strands no history.
+     *
+     * A HIDDEN row that is found comes back into the pickers. Hiding says "do not offer me
+     * this any more"; typing its name and logging a set says the opposite, and leaving it
+     * hidden would mean an exercise that is being trained and cannot be found in the list to
+     * train it again.
      */
     suspend fun ensureExercise(
         name: String,
@@ -457,9 +470,10 @@ class ActivityRepository(private val db: AppDatabase) {
         restSec: Double? = null,
         defaultRestSec: Int? = null,
     ): Long {
-        val want = normPhrase(name)
-        db.exercises().all().firstOrNull { normPhrase(it.name) == want }?.let { found ->
+        val key = exerciseIdentityKey(name, form.code, edgeMm, workSec, restSec)
+        db.exercises().byIdentityKey(key)?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
+            if (found.hidden) setHidden(found.id, false)
             return found.id
         }
         return db.exercises().insert(
@@ -470,6 +484,80 @@ class ActivityRepository(private val db: AppDatabase) {
             )
         )
     }
+
+    /**
+     * Corrects what an exercise is: the name it was given, the edge it is done on, the
+     * protocol it is run at. The form is deliberately absent — see below.
+     *
+     * ── What this does to the history, said out loud ───────────────────────────
+     * Nothing is rewritten, and the sets do not move. Every set names its exercise by uid, so
+     * they all stay with this row and its records, charts and totals are computed over the
+     * same sets as before.
+     *
+     * What DOES change is what those sets mean. A hangboard set carries a SNAPSHOT of the edge
+     * and protocol it was performed at (see HoldSet), so after correcting an edge from 20 to 15
+     * the row says 15 mm while sets recorded before the correction still say 20. That is the
+     * honest record of a typo being fixed: the sets were performed on whatever the user
+     * actually used, and the app was never told. It is also the record of a genuine mistake if
+     * the edit is wrong — an exercise really trained on 20 mm, relabelled 15, now has a history
+     * that claims a harder edge than was ever hung on.
+     *
+     * The app cannot tell those two apart, so it does neither automatically. THIS EDIT IS FOR
+     * CORRECTING WHAT THE CATALOG SAYS, not for recording a change of training. An exercise
+     * that has genuinely moved to a different edge is a different exercise under §12-A and
+     * should be created as one; it will then have its own history from that day, which is what
+     * actually happened.
+     *
+     * ── Why the form cannot be changed ─────────────────────────────────────────
+     * The form decides the SHAPE of the payload a set is written in. Changing it would leave
+     * every set already logged in the old shape, read by a screen expecting the new one — a
+     * strength history that the hold reducers cannot read, in the one place where being able
+     * to read the history is the whole product. Getting the form wrong means creating the
+     * exercise again and hiding the mistake.
+     *
+     * Returns what happened, because the identity is unique in the schema and "there is
+     * already an exercise like that" is a normal answer the user has to be given rather than
+     * a crash.
+     *
+     * NONE OF THE THREE NUMBERS HAS A DEFAULT, deliberately. Null here means "this exercise
+     * has no edge / no protocol", not "leave whatever is stored alone", and a default would
+     * make forgetting an argument the way to silently strip a hangboard exercise of the two
+     * values that decide which sets are its own.
+     */
+    suspend fun editExercise(
+        id: Long,
+        name: String,
+        edgeMm: Double?,
+        workSec: Double?,
+        restSec: Double?,
+    ): ExerciseEdit {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return ExerciseEdit.Blank
+        val stored = db.exercises().byId(id) ?: return ExerciseEdit.Gone
+        val key = exerciseIdentityKey(trimmed, stored.form, edgeMm, workSec, restSec)
+        // asked before it is attempted, so the ordinary collision is an answer rather than a
+        // caught exception; the constraint is still there underneath as the thing that makes
+        // the answer true
+        db.exercises().byIdentityKey(key)?.let { clash ->
+            if (clash.id != id) return ExerciseEdit.Taken(clash.name)
+        }
+        val touched = db.exercises().editIdentity(
+            id = id, name = trimmed, edgeMm = edgeMm, workSec = workSec, restSec = restSec,
+            identityKey = key,
+        )
+        return if (touched == 0) ExerciseEdit.Gone else ExerciseEdit.Saved
+    }
+
+    /**
+     * Keeps an exercise out of the pickers, or brings it back.
+     *
+     * NOT a delete, and there is no delete to offer instead — see [ExerciseEntity.hidden]. A
+     * hidden exercise keeps every set it ever had, goes on counting in the totals it always
+     * counted in, and stays reachable from the overview, which is where it is brought back
+     * from.
+     */
+    suspend fun setHidden(exerciseId: Long, hidden: Boolean) =
+        db.exercises().setHidden(exerciseId, hidden)
 
     // --- calendar slots (§12-B) ---
 
@@ -599,6 +687,27 @@ fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
 )
 
 fun SlotExerciseEntity.toPlanned() = PlannedExercise(exerciseId = exerciseId, restSec = restSec)
+
+/**
+ * What came of correcting an exercise — see [ActivityRepository.editExercise].
+ *
+ * A result rather than an exception or a bare Boolean, because two of these four are things
+ * the person typing has to be TOLD, in words that name the exercise they collided with. A
+ * Boolean would have made "there is already one of those" and "somebody deleted it while the
+ * dialog was open" the same answer, and the right thing to say about them is not the same.
+ */
+sealed interface ExerciseEdit {
+    data object Saved : ExerciseEdit
+
+    /** A name of nothing but spaces. Refused here as well as on screen; see [saveSlot]. */
+    data object Blank : ExerciseEdit
+
+    /** The row is not there any more — nothing was written. */
+    data object Gone : ExerciseEdit
+
+    /** Another exercise already has this identity. [name] is what it is called. */
+    data class Taken(val name: String) : ExerciseEdit
+}
 
 /**
  * Slot rows plus their composition rows -> the plan as the domain sees it.

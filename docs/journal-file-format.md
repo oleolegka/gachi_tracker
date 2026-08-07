@@ -133,6 +133,11 @@ already a uid.
 | `led_by_protocol` | boolean | no | Run sets by the protocol, or just count the rest. `null` means "decide from whether a protocol exists". |
 | `one_sided` | boolean | no | A set is done one side at a time. |
 | `bodyweight_share` | number | no | How much of the body weight this exercise actually lifts. |
+| `hidden` | boolean | no | Kept out of the pickers. Not part of the identity — a hidden row and a shown one still merge. |
+
+The stored `identity_key` is **not** in the file: it is the four defining values folded into
+one string, and it is recomputed on the way in. A key carried in a file could disagree with
+the columns it claims to summarise.
 
 The catalog, the plan and the programs are carried **column by column**, unlike an event
 payload. That is a standing obligation on whoever adds a column: a column added to `exercises`

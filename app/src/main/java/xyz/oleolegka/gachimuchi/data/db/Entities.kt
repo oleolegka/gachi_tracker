@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.data.db
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.newUid
 
 /**
@@ -109,12 +110,21 @@ data class EventEntity(
  * That refactor has not been done on the server yet (it is waiting for the design to
  * settle), so the schema here is DELIBERATELY ahead — when sync arrives, the server
  * will have to add these fields, otherwise identity will drift apart.
+ *
+ * ── The identity is a constraint now, not a convention (schema version 15) ──────
+ * §12-A was a rule written in documentation and obeyed by the readers, while the writer —
+ * the one place that creates rows — looked an exercise up by NAME and handed back whatever
+ * it found. Hangs on a 15 mm edge added while 20 mm hangs existed became 20 mm hangs, and
+ * two histories merged for good, silently. [identityKey] closes it in the schema itself:
+ * the four values that make an exercise what it is are folded into one string and carry a
+ * UNIQUE index, so a second row of one identity is not something a bug can create.
  */
 @Entity(
     tableName = "exercises",
     indices = [
         Index(value = ["space_id", "id"]),
         Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "identity_key"], unique = true),
     ],
 )
 data class ExerciseEntity(
@@ -206,6 +216,47 @@ data class ExerciseEntity(
      * non-positive edge on this row.
      */
     @androidx.room.ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
+    /**
+     * Whether this exercise is kept out of the pickers (schema version 15).
+     *
+     * ── Hidden, and deliberately not deleted ───────────────────────────────────
+     * The journal outlives the catalog. Every set ever logged names its exercise by uid, and
+     * deleting the row would leave years of sets pointing at nothing — the history would still
+     * list them, and they would belong to no exercise, have no records and appear on no chart.
+     * That is a worse outcome than the problem being solved, which is only that a list has
+     * something in it nobody trains any more.
+     *
+     * So hiding is a PRESENTATION choice and nothing else. A hidden exercise keeps its sets,
+     * its records and its charts; it is absent from the list you pick from when logging, and
+     * from nowhere else. It is not part of [identityKey] for the same reason: hiding an
+     * exercise must not make room for a second row claiming to be it.
+     *
+     * NOT NULL with false for every row that predates it, on the same grounds as [oneSided].
+     */
+    val hidden: Boolean = false,
+    /**
+     * The exercise's identity as one string — see
+     * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity] (schema version 15).
+     *
+     * ── Derived state, and how it is kept from drifting ────────────────────────
+     * This is not an independent fact: it is [name], [form], [edgeMm], [protocolWorkSec] and
+     * [protocolRestSec] folded together, and a row whose key disagrees with its own columns
+     * would be invisible to the lookup that prevents duplicates. Two things hold it in place.
+     *
+     * It is a CONSTRUCTOR DEFAULT computed from the parameters above it, so there is no way to
+     * build the entity without it and no call site that has to remember — every insert in the
+     * app, the backup restore included, gets a correct key for free.
+     *
+     * And the only statement that may change an identity ([ExerciseDao.editIdentity]) writes
+     * the new key in the same UPDATE as the values it was computed from. There is deliberately
+     * no other way to touch those four columns: Room's whole-entity `@Update` is gone from the
+     * DAO precisely because it would let a caller rewrite the name and leave the key behind.
+     *
+     * Last in the parameter list because a Kotlin default may only refer to parameters
+     * declared before it.
+     */
+    @androidx.room.ColumnInfo(name = "identity_key")
+    val identityKey: String = exerciseIdentityKey(name, form, edgeMm, protocolWorkSec, protocolRestSec),
 )
 
 /**
