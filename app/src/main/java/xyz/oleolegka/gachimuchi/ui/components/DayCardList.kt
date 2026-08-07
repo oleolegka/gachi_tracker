@@ -82,8 +82,14 @@ data class DayActions(
     /** Begin a workout from a planned session, on the given day. */
     val startFromPlan: (Long, LocalDate) -> Unit,
 
-    /** Begin a workout with no plan behind it. */
-    val startWorkout: (LocalDate) -> Unit,
+    /**
+     * Begin a workout with no plan behind it, under [name] or under none.
+     *
+     * The name is NULLABLE and usually null: it is asked for on the way in, with the field
+     * empty and the button already enabled, so that giving one is an option and never a toll
+     * (§14.3). A workout with no name is shown by its time of day.
+     */
+    val startWorkout: (date: LocalDate, name: String?) -> Unit,
 
     /** Record something on its own, outside any workout. */
     val logSingleEntry: (LocalDate) -> Unit,
@@ -110,6 +116,9 @@ data class DayActions(
      */
     val deleteWorkout: (Long) -> Unit,
 
+    /** Name a workout that is already going, or clear its name with null. */
+    val renameWorkout: (workoutId: Long, name: String?) -> Unit,
+
     /** The calendar's own two, absent everywhere else. */
     val editSlot: ((Long) -> Unit)? = null,
     val deleteSlot: ((Long) -> Unit)? = null,
@@ -126,6 +135,9 @@ fun DayCardList(
     actions: DayActions,
     modifier: Modifier = Modifier,
 ) {
+    /** Whether the question "what shall this one be called" is on screen. */
+    var naming by remember(day.date) { mutableStateOf(false) }
+
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         if (day.isEmpty) {
             /*
@@ -152,11 +164,27 @@ fun DayCardList(
 
         if (day.canRecord) {
             AddMenuButton(
-                onWorkout = { actions.startWorkout(date) },
+                onWorkout = { naming = true },
                 onSingleEntry = { actions.logSingleEntry(date) },
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
+    }
+
+    if (naming) {
+        NameDialog(
+            title = "Start a workout",
+            label = "Name (optional)",
+            initial = "",
+            confirmLabel = "Start",
+            note = "Leave it empty and the card shows the time of day instead. It can be " +
+                "named later from the card.",
+            onConfirm = { name ->
+                naming = false
+                actions.startWorkout(date, name)
+            },
+            onDismiss = { naming = false },
+        )
     }
 }
 
@@ -192,10 +220,14 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         card.kind == DayCardKind.RUNNING || card.kind == DayCardKind.DONE
     }
     var confirmingDelete by remember(card.key) { mutableStateOf(false) }
+    var renaming by remember(card.key) { mutableStateOf(false) }
     val menu = if (workoutId == null) {
         emptyList()
     } else {
         listOf(
+            // the harmless one first: a menu whose top entry deletes is a menu that gets
+            // dismissed rather than read
+            ItemAction(if (card.workoutName == null) "Name it" else "Rename") { renaming = true },
             ItemAction("Delete workout", destructive = true) { confirmingDelete = true },
         )
     }
@@ -275,6 +307,23 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             Box(Modifier.width(12.dp))
         }
     }
+    }
+
+    if (renaming && workoutId != null) {
+        NameDialog(
+            title = if (card.workoutName == null) "Name this workout" else "Rename this workout",
+            label = "Name (optional)",
+            // empty for a workout nobody named, rather than the time range it is shown by:
+            // the range is a fact about the day and was never a name to edit
+            initial = card.workoutName.orEmpty(),
+            confirmLabel = "Save",
+            note = "Leave it empty and the card goes back to showing the time of day.",
+            onConfirm = { name ->
+                renaming = false
+                actions.renameWorkout(workoutId, name)
+            },
+            onDismiss = { renaming = false },
+        )
     }
 
     if (confirmingDelete && workoutId != null) {

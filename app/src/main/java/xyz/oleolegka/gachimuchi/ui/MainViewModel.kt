@@ -249,9 +249,19 @@ class MainViewModel(
      * The copy happens between the start and [then] rather than after it, so the screen never
      * draws a workout that is about to gain three cards on the next frame.
      */
-    fun startWorkout(day: LocalDate, slotId: Long? = null, then: (Long) -> Unit) {
+    fun startWorkout(
+        day: LocalDate,
+        slotId: Long? = null,
+        /**
+         * What to call it, or null for a workout nobody named — which is the ordinary case and
+         * not a defect. A workout started FROM A PLAN and given no name of its own takes the
+         * plan's, copied once as a snapshot; see [ActivityRepository.startWorkout].
+         */
+        name: String? = null,
+        then: (Long) -> Unit,
+    ) {
         viewModelScope.launch {
-            val id = repo.startWorkout(day.toString(), slotId)
+            val id = repo.startWorkout(day.toString(), slotId, name)
             if (slotId != null) repo.copyPlannedExercises(id, slotId, timer.settings.value)
             then(id)
         }
@@ -381,6 +391,17 @@ class MainViewModel(
         viewModelScope.launch {
             workoutEventIds(repo.allEvents(), workoutId).forEach { repo.deleteEntry(it) }
         }
+    }
+
+    /**
+     * Names a workout already started, or — with null — takes its name away again.
+     *
+     * An amendment of the start event, folded like every other correction, so the card, the
+     * workout screen and the logging screen agree without any of them being told. See
+     * [ActivityRepository.renameWorkout].
+     */
+    fun renameWorkout(workoutId: Long, name: String?) {
+        viewModelScope.launch { repo.renameWorkout(workoutId, name) }
     }
 
     /**

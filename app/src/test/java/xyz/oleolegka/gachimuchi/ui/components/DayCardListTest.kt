@@ -54,7 +54,7 @@ class DayCardListTest : ScreenTest() {
 
     // what each callback was last called with; null means it was never called
     private var startedFromPlan: Pair<Long, LocalDate>? = null
-    private var startedWorkout: LocalDate? = null
+    private var startedWorkout: Pair<LocalDate, String?>? = null
     private var loggedSingle: LocalDate? = null
     private var continued: Long? = null
     private var opened: Long? = null
@@ -62,15 +62,17 @@ class DayCardListTest : ScreenTest() {
     private var edited: Long? = null
     private var deleted: Long? = null
     private var deletedWorkout: Long? = null
+    private var renamed: Pair<Long, String?>? = null
 
     private fun actions(withSlotIcons: Boolean = false) = DayActions(
         startFromPlan = { id, date -> startedFromPlan = id to date },
-        startWorkout = { date -> startedWorkout = date },
+        startWorkout = { date, name -> startedWorkout = date to name },
         logSingleEntry = { date -> loggedSingle = date },
         continueWorkout = { id -> continued = id },
         openWorkout = { id -> opened = id },
         openExercise = { id, date -> openedExercise = id to date },
         deleteWorkout = { id -> deletedWorkout = id },
+        renameWorkout = { id, name -> renamed = id to name },
         editSlot = if (withSlotIcons) ({ id -> edited = id }) else null,
         deleteSlot = if (withSlotIcons) ({ id -> deleted = id }) else null,
     )
@@ -220,6 +222,12 @@ class DayCardListTest : ScreenTest() {
 
     // --- adding ---------------------------------------------------------------------------
 
+    /**
+     * What the "Workout" answer then does — it asks for a name — is exercised in
+     * [DayCardNamingTest] rather than here, because that dialog carries a text field and a
+     * text field inside a dialog needs a 600 dp window under Robolectric (see [ScreenTest]).
+     * This class stays at the width of a real phone, so it stops at the menu.
+     */
     @Test
     fun `the Add button asks which of the two, and each answer calls its own action`() {
         day()
@@ -233,8 +241,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("Workout").assertIsDisplayed()
         compose.onNodeWithText("Single entry").assertIsDisplayed()
 
-        compose.onNodeWithText("Workout").performClick()
-        assertEquals(today, startedWorkout)
+        assertNull("neither answer has been given yet", startedWorkout)
         assertNull(loggedSingle)
     }
 

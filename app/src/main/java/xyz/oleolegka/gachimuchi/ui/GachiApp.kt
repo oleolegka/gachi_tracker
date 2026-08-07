@@ -222,8 +222,9 @@ fun GachiApp(viewModel: MainViewModel) {
      * [MainViewModel.startWorkout], between the start event and this navigation, so there is
      * no frame on which the workout looks empty.
      */
-    val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?) -> Unit> { day, slotId ->
-        viewModel.startWorkout(day, slotId) { id ->
+    val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?, String?) -> Unit> {
+        day, slotId, name ->
+        viewModel.startWorkout(day, slotId, name) { id ->
             openLoggingNow(day.toString(), id)
         }
     }
@@ -235,8 +236,10 @@ fun GachiApp(viewModel: MainViewModel) {
 
     val dayActions = remember {
         DayActions(
-            startFromPlan = { slotId, day -> startWorkoutNow(day, slotId) },
-            startWorkout = { day -> startWorkoutNow(day, null) },
+            // a workout started from a plan takes the plan's name as its snapshot, so it is
+            // not asked for one — see ActivityRepository.startWorkout
+            startFromPlan = { slotId, day -> startWorkoutNow(day, slotId, null) },
+            startWorkout = { day, name -> startWorkoutNow(day, null, name) },
             logSingleEntry = { day -> openLoggingNow(day.toString(), null) },
             continueWorkout = { id -> continueWorkoutNow(id) },
             openWorkout = { id -> viewingWorkoutId = id },
@@ -245,6 +248,7 @@ fun GachiApp(viewModel: MainViewModel) {
                 entriesDate = day.toString()
             },
             deleteWorkout = viewModel::deleteWorkout,
+            renameWorkout = viewModel::renameWorkout,
         )
     }
 

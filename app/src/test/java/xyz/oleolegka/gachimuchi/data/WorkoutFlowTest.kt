@@ -490,4 +490,63 @@ class WorkoutFlowTest {
         val loose = setsOutsideWorkouts(repo.allEvents(), day)
         assertEquals(listOf(stretching.id), loose.map { it.form.exerciseId })
     }
+
+    // --- the name, given late and taken away again (14.3) ---------------------------------
+
+    /**
+     * Naming a workout after it has begun is an AMENDMENT of the start event, not a new kind
+     * of event and not a rewrite: the original row is untouched and the readers see the name
+     * because the amendment funnel folds it in.
+     */
+    @Test
+    fun `a workout can be named after it has been started`() = runTest {
+        val workoutId = repo.startWorkout(day)
+        assertNull(buildWorkout(repo.allEvents(), workoutId)!!.name)
+
+        repo.renameWorkout(workoutId, "Push day")
+
+        assertEquals("Push day", buildWorkout(repo.allEvents(), workoutId)!!.name)
+        // the row that was written is still exactly what was written
+        val start = repo.allEvents().first { it.id == workoutId }
+        assertFalse("the start event must not be rewritten", start.payload.contains("Push day"))
+    }
+
+    /** The last word wins, like every other correction folded by domain/Amendments.kt. */
+    @Test
+    fun `renaming again wins, and an empty name goes back to no name`() = runTest {
+        val workoutId = repo.startWorkout(day, name = "Push day")
+
+        repo.renameWorkout(workoutId, "Pull day")
+        assertEquals("Pull day", buildWorkout(repo.allEvents(), workoutId)!!.name)
+
+        repo.renameWorkout(workoutId, "   ")
+        assertNull(
+            "a name of nothing but spaces is nobody having named it",
+            buildWorkout(repo.allEvents(), workoutId)!!.name,
+        )
+    }
+
+    /** The day the workout is filed under is a different field and is not touched. */
+    @Test
+    fun `naming a workout leaves everything else about it alone`() = runTest {
+        val past = "2026-06-01"
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val workoutId = repo.startWorkout(past)
+        repo.record(strengthSetOf(bench, past, reps = 5, weightKg = 60.0))
+
+        repo.renameWorkout(workoutId, "Typed up later")
+
+        val workout = buildWorkout(repo.allEvents(), workoutId)!!
+        assertEquals("Typed up later", workout.name)
+        assertEquals(past, workout.opDate)
+        assertEquals(1, workout.setCount)
+    }
+
+    /** A stale id does nothing rather than throwing at whichever screen still held it. */
+    @Test
+    fun `renaming a workout that is not there writes nothing`() = runTest {
+        val before = repo.eventCount()
+        assertNull(repo.renameWorkout(9999L, "Nowhere"))
+        assertEquals(before, repo.eventCount())
+    }
 }
