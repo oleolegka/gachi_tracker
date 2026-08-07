@@ -255,6 +255,34 @@ class WorkoutTest {
         assertNull(buildWorkout(listOf(start, aSet), aSet.id))
     }
 
+    // --- which day a set being logged belongs to ---------------------------------------
+
+    @Test
+    fun `a set logged with no workout open belongs to today`() {
+        assertEquals(today, loggingDay(null, today))
+    }
+
+    @Test
+    fun `a set logged into a workout belongs to the WORKOUT's day, not to today`() {
+        /*
+         * The bug this exists to make impossible. [buildWorkout] files a set under the
+         * workout's op_date whatever the payload says, so a form built with today's date
+         * while a June workout is open produces a row the workout shows and the calendar
+         * files under August. The journal is append-only: once written, the two views of
+         * that row disagree forever.
+         */
+        val start = started("2026-06-01", ts = "${today}T21:00:00")
+        val june = openWorkout(listOf(start), today)!!
+
+        assertEquals("2026-06-01", loggingDay(june, today))
+    }
+
+    @Test
+    fun `a workout of today logs under today, so nothing changes for the ordinary case`() {
+        val workout = openWorkout(listOf(started(today)), today)!!
+        assertEquals(today, loggingDay(workout, today))
+    }
+
     // --- sets recorded outside any workout -------------------------------------------
 
     @Test

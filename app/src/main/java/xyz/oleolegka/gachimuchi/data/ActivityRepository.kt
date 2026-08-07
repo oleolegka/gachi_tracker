@@ -83,12 +83,23 @@ class ActivityRepository(private val db: AppDatabase) {
      *
      * The DEMO SEED is excluded by author. Its sets are backdated synthetic history and
      * pressing "demo data" while a real workout is open must not pour them into it.
+     *
+     * [attachToWorkout] = false is the caller saying "this one is on its own". It exists
+     * because the app now offers "log a single entry" as a thing distinct from training, and
+     * without it that offer would be a lie whenever a workout happened to be open: the entry
+     * would be filed inside the workout and would show up as part of it. Silence is not
+     * available here — the entry lands somewhere either way, and only the caller knows which
+     * of the two the user asked for.
      */
-    suspend fun record(form: ActivityForm, authorId: Long = LOCAL_AUTHOR_ID): Long =
+    suspend fun record(
+        form: ActivityForm,
+        authorId: Long = LOCAL_AUTHOR_ID,
+        attachToWorkout: Boolean = true,
+    ): Long =
         db.events().insert(
             EventEntity(
                 ts = now(), authorId = authorId, type = form.type, payload = form.toPayload(),
-                workoutId = if (authorId == LOCAL_AUTHOR_ID) currentWorkoutId() else null,
+                workoutId = if (authorId == LOCAL_AUTHOR_ID && attachToWorkout) currentWorkoutId() else null,
             )
         )
 

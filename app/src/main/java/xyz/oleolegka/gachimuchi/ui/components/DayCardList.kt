@@ -1,0 +1,276 @@
+package xyz.oleolegka.gachimuchi.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.DayCard
+import xyz.oleolegka.gachimuchi.domain.DayCardAction
+import xyz.oleolegka.gachimuchi.domain.DayCardKind
+import xyz.oleolegka.gachimuchi.domain.DayCards
+import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import java.time.LocalDate
+
+/**
+ * The list of a day's cards — the one component behind both the Today tab and the day
+ * picked on the calendar.
+ *
+ * Which cards there are, in which order, and what each one says is decided in
+ * `domain/DayCards.kt` and tested there. This file only draws them, which is the whole
+ * reason the split exists: two screens showing the same list must not be able to disagree
+ * about it, and a Compose screen is the one part of this app nothing can test.
+ *
+ * ── One Add button, not two ─────────────────────────────────────────────────────
+ * The screen already carries cards with their own actions ("Start", "Continue"). Putting
+ * "Add workout" and "Add single entry" beside them as two more buttons makes four things to
+ * read before anything can be done. So there is one button, and it asks which.
+ *
+ * ── Editing the plan is the calendar's job ──────────────────────────────────────
+ * A planned card carries a pencil and a bin ONLY where those actions belong. Today is the
+ * screen you stand in the gym with; rewriting the schedule from it is not a thing anyone
+ * does mid-set, and a bin one mis-tap from "Start" is a bad trade. [DayActions] leaves both
+ * null there and no icons are drawn.
+ */
+@Immutable
+data class DayActions(
+    /** Begin a workout from a planned session, on the given day. */
+    val startFromPlan: (Long, LocalDate) -> Unit,
+
+    /** Begin a workout with no plan behind it. */
+    val startWorkout: (LocalDate) -> Unit,
+
+    /** Record something on its own, outside any workout. */
+    val logSingleEntry: (LocalDate) -> Unit,
+
+    /** Go back into the workout in progress. */
+    val continueWorkout: (Long) -> Unit,
+
+    /** Look inside a workout that is not running. */
+    val openWorkout: (Long) -> Unit,
+
+    /** Look at the history of one exercise — where a single-entry card leads. */
+    val openExercise: (Long) -> Unit,
+
+    /** The calendar's own two, absent everywhere else. */
+    val editSlot: ((Long) -> Unit)? = null,
+    val deleteSlot: ((Long) -> Unit)? = null,
+)
+
+/**
+ * Draws [day]. Not a lazy list: a day holds two or three cards and is nested inside the
+ * calendar's own scrolling list, where a second lazy column is not allowed anyway.
+ */
+@Composable
+fun DayCardList(
+    day: DayCards,
+    date: LocalDate,
+    actions: DayActions,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        if (day.isEmpty) {
+            DashedNote(
+                if (day.canRecord) {
+                    "Nothing planned and nothing recorded"
+                } else {
+                    // a day that has not happened cannot have "nothing recorded" held
+                    // against it, so it is not told that it does
+                    "Nothing planned for this day"
+                }
+            )
+        }
+
+        day.cards.forEach { card -> DayCardRow(card, date, actions) }
+
+        if (day.canRecord) {
+            AddMenuButton(
+                onWorkout = { actions.startWorkout(date) },
+                onSingleEntry = { actions.logSingleEntry(date) },
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
+}
+
+/**
+ * One card: a coloured spine, the name and its time, the subtitle that says what KIND of
+ * card this is, an optional record line, and the action.
+ *
+ * The kind is never said in colour alone — the spine follows it, but the subtitle underneath
+ * carries the same information in words, which is the rule everywhere else in this app.
+ */
+@Composable
+private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
+    val colors = LocalGachiColors.current
+    val onTap: (() -> Unit)? = when (card.action) {
+        DayCardAction.START -> card.slotId?.let { id -> { actions.startFromPlan(id, date) } }
+        DayCardAction.CONTINUE -> card.workoutId?.let { id -> { actions.continueWorkout(id) } }
+        DayCardAction.OPEN -> when (card.kind) {
+            DayCardKind.SINGLE -> card.exerciseId?.let { id -> { actions.openExercise(id) } }
+            else -> card.workoutId?.let { id -> { actions.openWorkout(id) } }
+        }
+
+        DayCardAction.NONE -> null
+    }
+    val spine = when (card.kind) {
+        DayCardKind.PLANNED -> colors.accent
+        DayCardKind.RUNNING -> colors.good
+        DayCardKind.DONE -> colors.inkSecondary
+        DayCardKind.SINGLE -> colors.inkMuted
+    }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+            .then(if (onTap != null) Modifier.clickable(onClick = onTap) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(4.dp)
+                .heightIn(min = 62.dp)
+                .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
+                .background(spine)
+        )
+        Column(
+            Modifier.weight(1f).padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    card.title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (card.timeLabel.isNotEmpty()) {
+                    Text(
+                        card.timeLabel,
+                        fontSize = 11.sp,
+                        color = colors.inkMuted,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
+            Text(card.subtitle, fontSize = 11.5.sp, color = colors.inkSecondary)
+            // a record is stated in words, never by colour alone
+            card.recordLine?.let {
+                Text(it, fontSize = 11.sp, color = colors.good, fontWeight = FontWeight.Medium)
+            }
+        }
+
+        val edit = actions.editSlot
+        val delete = actions.deleteSlot
+        val slotId = card.slotId
+        if (card.kind == DayCardKind.PLANNED && slotId != null && edit != null && delete != null) {
+            RowIcon(Icons.Filled.Edit, "Edit \"${card.title}\"", colors.inkSecondary) { edit(slotId) }
+            RowIcon(Icons.Filled.Delete, "Delete \"${card.title}\"", colors.critical) { delete(slotId) }
+        }
+
+        // only the two actions that BEGIN something get a button of their own; "open" is the
+        // card itself, and a button saying "open" next to a card that opens is noise
+        val label = when (card.action) {
+            DayCardAction.START -> "Start"
+            DayCardAction.CONTINUE -> "Continue"
+            DayCardAction.OPEN, DayCardAction.NONE -> null
+        }
+        if (label != null && onTap != null) {
+            Button(
+                onClick = onTap,
+                contentPadding = PaddingValues(horizontal = 14.dp),
+                modifier = Modifier.padding(end = 8.dp).heightIn(min = 40.dp),
+            ) { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        } else {
+            Box(Modifier.width(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun RowIcon(icon: ImageVector, description: String, tint: Color, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(38.dp)) {
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+/**
+ * "Add", and then the question of what.
+ *
+ * The two answers are not the same size of thing and the wording says so: a WORKOUT is the
+ * session you are about to do, a SINGLE ENTRY is one exercise recorded on its own — the
+ * stretching done in front of the television, which the model has always allowed and the
+ * screens used not to show as anything in particular.
+ */
+@Composable
+private fun AddMenuButton(
+    onWorkout: () -> Unit,
+    onSingleEntry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(
+            onClick = { open = true },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text("Add", modifier = Modifier.padding(start = 8.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Workout") },
+                onClick = {
+                    open = false
+                    onWorkout()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Single entry") },
+                onClick = {
+                    open = false
+                    onSingleEntry()
+                },
+            )
+        }
+    }
+}

@@ -1,9 +1,7 @@
 package xyz.oleolegka.gachimuchi.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import java.time.LocalDate
@@ -87,17 +85,10 @@ class FormatTest {
         assertEquals("0", fmtCount(0.0))
     }
 
-    @Test
-    fun `the primary button says what it records, not what it starts`() {
-        assertEquals("Log a set", LOG_BUTTON_LABEL)
-        // it names the act of recording, first word
-        assertTrue(LOG_BUTTON_LABEL.startsWith("Log"))
-        // "start" is what sent someone to the timer looking for the journal, and "continue"
-        // promised a difference between the first entry of the day and the rest that the
-        // button does not have
-        assertFalse(LOG_BUTTON_LABEL.contains("Start", ignoreCase = true))
-        assertFalse(LOG_BUTTON_LABEL.contains("Continue", ignoreCase = true))
-        assertFalse(LOG_BUTTON_LABEL.contains("another", ignoreCase = true))
-        assertFalse(LOG_BUTTON_LABEL.contains("workout", ignoreCase = true))
-    }
+    /*
+     * There used to be a test here pinning the wording of `LOG_BUTTON_LABEL`, the floating
+     * "Log a set" button. The button is gone: the primary action now lives on the card of
+     * the thing being done, so it is named by what it acts on rather than in general. See
+     * ui/Format.kt for the note that replaced the constant.
+     */
 }

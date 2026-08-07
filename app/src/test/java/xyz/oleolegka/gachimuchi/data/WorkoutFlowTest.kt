@@ -22,6 +22,7 @@ import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
+import xyz.oleolegka.gachimuchi.domain.loggingDay
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
@@ -230,6 +231,60 @@ class WorkoutFlowTest {
         assertEquals(1, workoutsOn(repo.allEvents(), past).size)
         assertEquals(0, workoutsOn(repo.allEvents(), day).size)
         assertEquals(1, buildSession(repo.allEvents(), past).setCount)
+    }
+
+    /**
+     * The seam the previous step warned about, closed and pinned.
+     *
+     * A form built with TODAY's date while a backdated workout is open produces a row the
+     * workout claims (it goes by `workout_id`) and the calendar files elsewhere (it reads
+     * the payload). Both readings are of the same row, the journal is append-only, and the
+     * disagreement is therefore permanent. `loggingDay` is what the caller has to go through
+     * to avoid it, so the test writes one set each way and shows the difference.
+     */
+    @Test
+    fun `a set typed into a backdated workout is dated by the workout, not by today`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val past = "2026-06-01"
+        val workoutId = repo.startWorkout(opDate = past)
+
+        val open = repo.currentWorkout()
+        assertEquals(past, loggingDay(open, day))
+        repo.record(strengthSetOf(bench, loggingDay(open, day), reps = 5, weightKg = 60.0))
+
+        val events = repo.allEvents()
+        // the workout has it, and so does the day it belongs to
+        assertEquals(1, buildWorkout(events, workoutId)!!.setCount)
+        assertEquals(1, buildSession(events, past).setCount)
+        // and today knows nothing about it — the two views agree
+        assertEquals(0, buildSession(events, day).setCount)
+        assertEquals(0, setsOutsideWorkouts(events, past).size)
+
+        /*
+         * What the old code did, kept as the counter-example: the same write with today's
+         * date lands in the workout AND in today's session, so the day it was trained shows
+         * one set and the day it was typed shows another. Nothing here is asserting that
+         * this is acceptable — it is asserting that it is what `loggingDay` prevents.
+         */
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5))
+        val after = repo.allEvents()
+        assertEquals(2, buildWorkout(after, workoutId)!!.setCount)
+        assertEquals(1, buildSession(after, past).setCount)
+        assertEquals(1, buildSession(after, day).setCount)
+    }
+
+    @Test
+    fun `an entry logged on its own is not swallowed by the workout that happens to be open`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val stretching = ref("Stretching", ExerciseForm.STRENGTH)
+        val workoutId = repo.startWorkout()
+
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+        repo.record(strengthSetOf(stretching, day, reps = 1, weightKg = 1.0), attachToWorkout = false)
+
+        assertEquals(1, buildWorkout(repo.allEvents(), workoutId)!!.setCount)
+        val loose = setsOutsideWorkouts(repo.allEvents(), day)
+        assertEquals(listOf(stretching.id), loose.map { it.form.exerciseId })
     }
 
     @Test

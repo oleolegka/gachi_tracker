@@ -299,31 +299,13 @@ class ScheduleTest {
         assertEquals(listOf(SlotState.MISS), statesOf(slots, listOf(act(1, monday, "21:01")), monday, late))
     }
 
-    // --- which slots offer a way in to logging ---
-
-    @Test
-    fun `only a slot of today that is not done offers logging`() {
-        val slots = listOf(
-            slot(1, "Gym", REPEAT_DAILY, monday, "08:00"),
-            slot(2, "Hangboard", REPEAT_DAILY, monday, "20:00"),
-        )
-        // the morning session is done, the evening one is not
-        val day = planVsFact(
-            slots, listOf(act(1, monday, "08:10")), monday, monday, at(monday, "12:00"),
-        ).single()
-        assertEquals(listOf(false, true), day.slots.map { it.offersLogging(monday) })
-
-        // the same rows read on another day offer nothing: the logging screen writes for
-        // today, so a button here would record the workout on the wrong date
-        assertTrue(day.slots.none { it.offersLogging(monday.plusDays(1)) })
-
-        // and a missed slot of a day gone by is exactly the row that must not offer it
-        val past = planVsFact(
-            slots, emptyList(), monday, monday, at(monday.plusDays(3), "09:00"),
-        ).single()
-        assertEquals(listOf(SlotState.MISS, SlotState.MISS), past.slots.map { it.state })
-        assertTrue(past.slots.none { it.offersLogging(monday.plusDays(3)) })
-    }
+    /*
+     * There used to be a test here for `offersLogging`, which allowed a way in to logging
+     * only on TODAY's outstanding slots. Both the rule and the test are gone: a workout now
+     * carries its own date, so a slot in the past starts a workout dated to that past day
+     * instead of writing today's date onto it. What a slot in the past offers is decided in
+     * domain/DayCards.kt and tested in DayCardsTest.
+     */
 
     // --- journal events turned into calendar facts ---
 

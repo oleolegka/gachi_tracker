@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -12,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
@@ -41,6 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
+import xyz.oleolegka.gachimuchi.domain.dayWatchDelayMs
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
 import xyz.oleolegka.gachimuchi.domain.holdSetsByExerciseId
@@ -56,6 +60,7 @@ import xyz.oleolegka.gachimuchi.domain.withUniqueNames
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 /**
  * Screen state: the whole journal, catalog, aliases and slot list, with the reducers
@@ -126,8 +131,24 @@ class MainViewModel(
             UiState(events, exercises, aliases, slots, loading = busy)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
-    /** One "today" for every screen: the calendar and the Today tab must not drift apart. */
-    val today: LocalDate = LocalDate.now()
+    /**
+     * One "today" for every screen: the calendar and the Today tab must not drift apart.
+     *
+     * A FLOW, not a value read at start-up. It used to be `LocalDate.now()` evaluated once
+     * when this class was built, which is correct until the app spends a night in a pocket:
+     * the ViewModel survives, the date does not move, and the next morning's first set is
+     * written under yesterday. The watcher re-reads the clock (domain/Today.kt says how
+     * often) and only the change is published, so nothing recomposes for a reading that
+     * said the same thing.
+     */
+    val today: StateFlow<LocalDate> = flow {
+        while (true) {
+            emit(LocalDate.now())
+            delay(dayWatchDelayMs(LocalDateTime.now()))
+        }
+    }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LocalDate.now())
 
     // --- logging a workout ------------------------------------------------------------
     //
@@ -163,23 +184,44 @@ class MainViewModel(
      * The duration is resolved AFTER the write, so the gap that has just been measured
      * (the pause before this very set) is part of what the offer is based on.
      */
-    fun addSet(form: ActivityForm) {
+    fun addSet(form: ActivityForm, attachToWorkout: Boolean = true) {
         viewModelScope.launch {
             val worthAPicture = celebratedByPicture(form)
             // BEFORE the write, or the set would be compared against itself and no set
             // would ever be a record
             val record = if (worthAPicture) recordBrokenBy(form) else null
-            repo.record(form)
+            repo.record(form, attachToWorkout = attachToWorkout)
             if (worthAPicture) {
                 _celebrations.tryEmit(
                     CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
                 )
             }
             val settings = timer.settings.value
-            if (timer.enabled.value && settings.autoStartRest && startsRest(form)) {
+            /*
+             * TRAINING TYPED UP AFTER THE FACT IS SILENT (§13.6). A rest that ended a
+             * fortnight ago is not something to wait out, and a countdown starting while
+             * somebody enters old notes on the sofa is pure noise. The date is the set's
+             * own, not this class's idea of today, so the rule holds however stale that is.
+             */
+            val live = form.opDate == LocalDate.now().toString()
+            if (live && timer.enabled.value && settings.autoStartRest && startsRest(form)) {
                 startRest(form.exerciseId)
             }
         }
+    }
+
+    // --- workouts (§13) -------------------------------------------------------------------
+
+    /**
+     * Opens a workout and hands its id back, because the caller's next move is to go inside
+     * the thing it just created and it has no other way to name it — the id IS the id of the
+     * event the repository just wrote.
+     *
+     * [slotId] is the plan it was started from, when it was started from one. The exercises
+     * ON that slot are NOT copied in yet; see the note at the call site in ui/GachiApp.kt.
+     */
+    fun startWorkout(day: LocalDate, slotId: Long? = null, then: (Long) -> Unit) {
+        viewModelScope.launch { then(repo.startWorkout(day.toString(), slotId)) }
     }
 
     // --- celebration -------------------------------------------------------------------
@@ -320,7 +362,7 @@ class MainViewModel(
         viewModelScope.launch {
             seeding.value = true
             _demoNote.value = when (prompt) {
-                DemoPrompt.Write -> runCatching { DemoSeed.seed(repo, today) }.fold(
+                DemoPrompt.Write -> runCatching { DemoSeed.seed(repo, LocalDate.now()) }.fold(
                     onSuccess = { "Demo data written: ${it.events} entries over ${it.activeDays} days." },
                     onFailure = { "The demo data could not be written. Nothing was changed." },
                 )
@@ -468,7 +510,7 @@ class MainViewModel(
     fun logRunSets(exercise: ExerciseRef, sets: List<CompletedSet>, addedKg: Double? = null) {
         val outcome = timer.outcome.value
         viewModelScope.launch {
-            val day = outcome?.opDate?.takeIf { it.isNotBlank() } ?: today.toString()
+            val day = outcome?.opDate?.takeIf { it.isNotBlank() } ?: LocalDate.now().toString()
             val written = ArrayList<Long>()
             /*
              * Wrapped, and the ids collected as they go, because the failure mode being

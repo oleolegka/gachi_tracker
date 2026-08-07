@@ -183,23 +183,17 @@ fun fmtRecordDate(d: LocalDate, today: LocalDate): String =
 /** A month for the heatmap ribbon: "Aug". */
 fun fmtShortMonth(d: LocalDate): String = d.format(shortMonthFormat)
 
-/**
- * The label on the app's primary button — the one that opens the logging screen.
+/*
+ * There used to be a `LOG_BUTTON_LABEL` here, for the floating button on Today, and a long
+ * note arguing about its wording — "Log a set" against "Start workout" — on the grounds that
+ * a session had no beginning and no end to start.
  *
- * It says LOG, and it says it first. The button used to read "Start workout" / "Continue
- * workout", which describes the wrong half of the app: it is pressed AFTER a set has been
- * done, to write it down, and "start" invites the reading "start the countdown" — which is
- * a real feature here, sitting on a tab of its own two icons away. Naming the button after
- * the thing it records rather than after a session it does not actually start also matches
- * the data model, where a session has no beginning and no end (see domain/Session.kt).
- *
- * ONE wording, always. It briefly had two — "Log a set" before the day's first entry and
- * "Log another set" after — which told the user something they could already see (the
- * entries are on the screen underneath) while implying a difference that does not exist:
- * both open the same screen in the same state. A control that rewords itself for no change
- * in behaviour makes the reader stop and look for the change.
+ * A session has one now (domain/Workout.kt), and the button is gone with the screen that
+ * carried it: the primary action is on the CARD of the thing being done, so it never has to
+ * be named generically. What replaced the argument is that each card names its own action —
+ * "Start" on a plan, "Continue" on the workout in progress — and each is unambiguous because
+ * the thing it acts on is right beside it.
  */
-const val LOG_BUTTON_LABEL = "Log a set"
 
 /** A rest between sets, in the compact "2:30" shape the session feed uses. */
 fun fmtRest(sec: Double): String {

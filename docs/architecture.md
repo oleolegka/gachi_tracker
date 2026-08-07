@@ -189,10 +189,9 @@ The cost of being honest about it: logging a session hours away from the time it
 planned for now leaves the slot missed and the entry unplanned, where the old day-level
 rule counted the whole day as done. That is the same information the old rule was hiding.
 
-The rule also decides where the "Log" button appears (`offersLogging`). The logging screen
-writes entries for TODAY, so only today's outstanding sessions offer it — a button on last
-Tuesday's missed slot would record the workout on the wrong day, which is the class of bug
-per-slot status exists to remove.
+A workout STARTED FROM a slot carries its id, and that link beats the heuristic: the plan
+stops offering to be started because something says outright that it was. The heuristic
+stays for everything logged without pressing start, which is still allowed.
 
 ## Celebration pictures are yours and are copied in
 
@@ -209,15 +208,21 @@ which is also why notifications, alarms and speech all go through plain platform
 
 ## Back is one function, not a stack
 
-There is no navigation library. The app is five tabs with three full-window modes over
-them (the logging screen, the form detail screen, the program editor), and which one is in
-front is three flags.
+There is no navigation library. The app is five tabs with four full-window modes over them
+(the logging screen, the workout screen, the form detail screen, the program editor), and
+which one is in front is four flags.
 
 Back is decided by one pure function over those same flags, `backStep` in
 `ui/Navigation.kt`, written in the same order the screen is drawn in: close the editor,
-else close the detail screen, else close the logging screen, else go to Today, else let the
-system background the app. Closing a mode leaves the tab underneath untouched, which is
-what makes "back out of logging" return to whichever tab opened it.
+else close the detail screen, else close the logging screen, else close the workout screen,
+else go to Today, else let the system background the app. Closing a mode leaves the tab
+underneath untouched, which is what makes "back out of logging" return to whichever tab
+opened it.
+
+Logging sits ABOVE the workout screen on purpose, and that pair is the only place the order
+carries a decision. A workout is opened to be read, and "Continue" leads from it into the
+entry card; backing out of the entry card therefore lands on the workout it was writing
+into, rather than skipping past it to a tab.
 
 Back goes to Today rather than to the previously visited tab. Tabs are switched idly and
 back and forth, so a tab history would mostly record glances nobody remembers making, and
@@ -227,20 +232,61 @@ This way it is at most two from anywhere.
 Dialogs and bottom sheets are not in the rule. Each is hosted in its own window and takes
 the gesture before the app sees it.
 
-## Logging is entered from anywhere, but only offered where it means something
+## A day is a short list of cards, built once and drawn twice
 
-The button lives on the Today tab alone. A screen that knows what would be recorded offers
-its own way in through `LocalOpenLogging`, so it needs no new parameter to do it — today
-that is the calendar, where tapping a planned session opens the entry card on the exercise
-it is about. Putting the button on all five tabs was tried and reverted: it turned the
-app's primary action into furniture that followed the user onto Settings and onto the
-yearly heatmap, where there is nothing to record.
+The Today tab and the day picked on the calendar show the same thing: two or three cards
+covering everything that day is about. A card is a WORKOUT or a group of entries recorded
+outside one — never "an exercise", which is what Today used to list and what turned a gym
+session into eleven rows.
+
+Which cards there are, in what order, and what each says is `domain/DayCards.kt`, a pure
+function over the journal and the plan; the screens only draw it (`DayCardList`). Two
+screens computing "what happened on this day" separately is two answers, and the day they
+disagree is the day the app stops being believed.
+
+Four kinds, told apart by their SUBTITLE rather than by colour, as everywhere else here:
+
+- a **planned** session with nothing against it yet, which offers to start a workout;
+- the workout **in progress**, which offers to continue and says how much is in it;
+- a **finished** workout, which opens;
+- entries logged outside a workout, GROUPED BY EXERCISE — five fingerboard sets on their
+  own are one card, not five.
+
+Everything is ordered by the clock, and a card the clock cannot place goes last: training
+typed up days later carries the time it was TYPED, and printing that would put a morning
+workout at the bottom of the evening, plausibly and wrongly.
+
+## Logging is entered from the thing being logged
+
+There is no floating "log a set" button any more. It was the app's primary action stated in
+the abstract: press it, and then work out which exercise it had decided the set was about.
+The way in is now the card — a plan starts a workout, a running workout continues, "Add"
+offers a workout or a single entry — so the action is always named by what it acts on.
+
+The consequence that matters is not cosmetic: the entry card is now always entered FOR A
+DAY, and usually for a workout, so it is told which day it writes under instead of assuming
+today. That is what makes typing up last Tuesday possible, and what stops a set logged into
+a backdated workout being filed under today by the calendar while the workout shows it —
+one row, two views, permanently disagreeing, in an append-only journal. The rule is
+`loggingDay` in `domain/Workout.kt`: the workout's day wins.
 
 The timer is the exception, and it is not a gap. A finished run does not open the logging
 screen at all: it raises an offer that already knows the sets, the exercise and the day,
 and confirming it writes them through the repository directly. Sending it through the
 entry card would mean re-typing four sets the app has just counted, which is the problem
 the offer exists to remove.
+
+## Today is watched, not read once
+
+"Today" used to be `LocalDate.now()` evaluated when the ViewModel was built. A phone left in
+a pocket overnight keeps its ViewModel, so the app woke up still believing it was yesterday
+and the first set of the morning went into the journal under the wrong date.
+
+It is a flow now, polling the date once a minute and shortening the wait as midnight
+approaches (`domain/Today.kt`). The poll is not laziness: a coroutine `delay` is not a
+promise about wall-clock time — the device dozes and the process is frozen — so a sleep
+timed to end exactly at midnight can come back hours late, while a date comparison every
+minute costs nothing and is right however the sleep behaves.
 
 ## Demo data is asked for, and can be taken back
 
@@ -274,3 +320,19 @@ Empty screens now say they are empty and name the button that fills them.
   a sibling edge or protocol in place; back closes the screen rather than stepping back
   through the siblings visited. That in-screen move is the one thing the navigation rule
   does not see.
+- **A workout has no name of its own.** It borrows the name of the slot it was started
+  from, resolved when the card is drawn, so renaming a planned session renames every
+  workout ever started from it — back through the history. A workout started off-plan has
+  no name at all and is shown by its time.
+- **A workout cannot be edited or deleted yet.** The workout screen shows what is in it and
+  nothing more. Correcting or removing an entry is a change the records, the statistics,
+  the calendar and the heatmap all have to honour at once (§13.6), which makes it a step of
+  its own rather than a control to add to a screen.
+- **The entry card still shows the whole day, not the workout.** It is the old logging
+  screen wired to the new frame: it is told which day it writes under, but the tape below it
+  is everything logged that day, so a day with two workouts shows both. Rebuilding it around
+  per-exercise cards with parallel rest countdowns is the next step.
+- **Starting from a plan does not copy the plan's exercises.** Slots carry one now, and the
+  copy is not implemented: a workout started from a plan arrives empty and is filled in as
+  it goes. Which rest wins when the slot names one and the catalog remembers another is
+  still open.
