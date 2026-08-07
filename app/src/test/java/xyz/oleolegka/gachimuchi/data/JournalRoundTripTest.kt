@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -30,6 +31,7 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.TYPE_TICK
 import xyz.oleolegka.gachimuchi.domain.Tick
 import xyz.oleolegka.gachimuchi.domain.activeDays
+import xyz.oleolegka.gachimuchi.domain.bodyweightAt
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
 import xyz.oleolegka.gachimuchi.domain.bodyweightSeries
 import xyz.oleolegka.gachimuchi.domain.buildSession
@@ -43,6 +45,8 @@ import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.tickOf
+import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
+import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import java.time.LocalDate
 
 /**
@@ -147,9 +151,27 @@ class JournalRoundTripTest {
         val bouldering = ref("Bouldering gym", ExerciseForm.TICK)
 
         val written = ArrayList<ActivityForm>()
+
+        /*
+         * WHAT IS EXPECTED BACK IS WHAT THE REPOSITORY STORED, NOT WHAT IT WAS HANDED.
+         *
+         * `record` ENRICHES an own-weight set on its way in: it stamps what the scales last
+         * said on or before that day, because the volume of a body-weight set cannot be
+         * recovered afterwards (see ActivityRepository.record and StrengthSet.bodyweightKg).
+         * That is a deliberate transformation with its own tests, so the expectation applies
+         * the same rule at the same moment against the same journal.
+         *
+         * The property this file is actually for survives untouched: every OTHER key still
+         * has to come back exactly as it went in, and one that does not shows up here.
+         */
         suspend fun write(form: ActivityForm) {
+            // read the journal only for the forms that can be stamped, exactly as the
+            // repository does — the lookup cannot happen inside the lambda, which is not
+            // a coroutine body
+            val journal = if (form.wantsBodyweightSnapshot) repo.allEvents() else emptyList()
+            val stored = form.withBodyweightSnapshot { day -> bodyweightAt(journal, day) }
             repo.record(form)
-            written += form
+            written += stored
         }
 
         days.forEachIndexed { index, day ->
@@ -189,6 +211,33 @@ class JournalRoundTripTest {
         // through the payload shows up here and nowhere else
         assertEquals(written, readBack)
     }
+
+    @Test
+    fun `the body-weight snapshot is stamped on the way in, from the day's own weigh-in`() =
+        runTest {
+            writeAMonth()
+            val events = repo.allEvents()
+            val ownWeight = strengthSetsOfExercise(events, linkOf("Bench press")).filter { it.ownWeight }
+            assertEquals(DAY_COUNT, ownWeight.size)
+
+            /*
+             * The fixture weighs in at the END of each day, so the very first day's set was
+             * written when the scales had said nothing yet: it carries no snapshot and is
+             * honestly worth nothing on the tonnage chart. Every day after it is stamped with
+             * the reading from the day before, which is the last one on or before its own day.
+             */
+            assertNull("nothing had been weighed yet", ownWeight.first().bodyweightKg)
+            assertTrue(
+                "every later own-weight set should carry what the scales last said",
+                ownWeight.drop(1).all { it.bodyweightKg != null },
+            )
+            assertEquals(74.0, ownWeight[1].bodyweightKg!!, 1e-9)
+
+            // and a set on an implement is never stamped: the bar does not weigh you
+            assertTrue(
+                strengthSetsOfExercise(events, linkOf("Squat")).all { it.bodyweightKg == null },
+            )
+        }
 
     @Test
     fun `all six forms are present, and each in the quantity it was written in`() = runTest {
