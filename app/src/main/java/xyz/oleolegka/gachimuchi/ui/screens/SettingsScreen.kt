@@ -44,11 +44,17 @@ import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.CelebrationPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicturePicker
+import xyz.oleolegka.gachimuchi.ui.components.rememberJournalTransfer
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
- * The settings tab: the celebration pictures, and at the foot of it the two things that
- * identify this copy of the app — which installation it is and which build it is.
+ * The settings tab: the celebration pictures, the backup, and at the foot of it the two
+ * things that identify this copy of the app — which installation it is and which build it is.
+ *
+ * The backup is here rather than on a screen of its own because it is read once, decided
+ * once, and then done from memory; and because "this app keeps no other copy of your journal"
+ * belongs next to the id and the version, which is where somebody looks when they are working
+ * out what this installation actually is.
  *
  * It exists as a tab of its own rather than as a section of another screen because the
  * settings that are still to come (and the timer's own, which live on the programs tab next
@@ -75,6 +81,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
     var note by remember { mutableStateOf<String?>(null) }
     val pick = rememberPicturePicker(gallery) { note = it.message() }
+    val journal = rememberJournalTransfer()
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -165,6 +172,44 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 gallery = gallery,
                 onDelete = { gallery.remove(picture.id) },
                 onToggleRecord = { gallery.setForRecords(picture.id, !picture.forRecords) },
+            )
+        }
+
+        item {
+            Text(
+                "Backup",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = journal.export) { Text("Export the journal") }
+                OutlinedButton(onClick = journal.restore) { Text("Restore") }
+            }
+        }
+
+        item {
+            /*
+             * Said plainly because the situation is: this app has no other copy of anything.
+             * The journal is in one database on one phone, the phone it is built for has no
+             * Google backup, and adb backup has not taken app data since this target SDK. A
+             * user who does not know that has no reason to press the button.
+             */
+            Text(
+                "The journal, the exercises, the plan, the programs and these settings, as one " +
+                    "JSON file. Nothing else keeps a copy of them - not the phone, not a cloud - " +
+                    "so this file is the only thing standing between a lost phone and a lost " +
+                    "history. Keep it somewhere that is not this phone. The celebration pictures " +
+                    "are not in it. Restoring merges a file into what is here and can be done " +
+                    "twice without doubling anything.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
             )
         }
 

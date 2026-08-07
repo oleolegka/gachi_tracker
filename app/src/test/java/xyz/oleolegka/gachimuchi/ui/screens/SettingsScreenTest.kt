@@ -123,6 +123,34 @@ class SettingsScreenTest : ScreenTest() {
         compose.onNodeWithText(version).assertIsDisplayed()
     }
 
+    /**
+     * The backup is on this tab, both buttons are wired, and restoring asks before it does
+     * anything.
+     *
+     * Worth a test for one reason: this section reaches for the database and for the two
+     * preference stores while the tab composes, and any of that failing takes the whole tab
+     * down on a device without ever failing to compile. What it deliberately does NOT check is
+     * the file picker or the merge — those are `data/JournalBackupTest.kt`, where there is a
+     * database to check them against.
+     */
+    @Test
+    fun `the backup section offers both directions, and restoring asks first`() {
+        screen { SettingsScreen() }
+
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Export the journal"))
+        compose.onNodeWithText("Export the journal").assertIsDisplayed().assertHasClickAction()
+        compose.onNodeWithText("Restore").assertIsDisplayed().assertHasClickAction()
+
+        compose.onNodeWithText("Restore").performClick()
+        settle()
+
+        // the question, not the picker: a merge and a settings overwrite are not things to
+        // discover afterwards
+        compose.onNodeWithText("Restore from a file?").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
+        settle()
+    }
+
     /** The row carrying [title], brought into the lazy list's window first. */
     private fun modeRow(title: String): SemanticsNodeInteraction {
         compose.onNode(hasScrollAction()).performScrollToNode(hasText(title))
