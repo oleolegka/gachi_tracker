@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
@@ -21,6 +22,25 @@ import kotlinx.coroutines.launch
  * or not. That split is what makes the timer testable — the counting, the transitions and
  * the recovery from process death are plain Kotlin, and this file has no logic to get
  * wrong.
+ *
+ * ── One service, two claimants ──────────────────────────────────────────────────
+ * It is up while EITHER a protocol run or a rest between sets is still counting, which is
+ * the single question [TimerController.serviceNeeded] answers. There is deliberately not a
+ * second service for the rests: a foreground service owns a notification, so two of them
+ * would mean two permanent entries in the shade for one app doing one thing, and they would
+ * take turns removing each other's.
+ *
+ * What that costs is that the two share a notification, and sharing needs an order of
+ * precedence. It is: THE RUN WINS. While a run exists the notification is the run's, and the
+ * rests do not draw. See TimerNotifications.ID_RUNNING and FloorController.refreshNotification
+ * for the whole of it.
+ *
+ * The lifecycle that follows from having two claimants is the part worth being careful about:
+ * the service is NOT taken down when a run ends, only when nothing at all is left. A run
+ * ending while rests are still counting used to be a stop followed immediately by a start,
+ * and the start would have been refused — Android 12 and later do not allow a foreground
+ * service to be started from the background, which is exactly where a program finishing with
+ * the phone in a pocket happens to be.
  *
  * ── Why FOREGROUND_SERVICE_SPECIAL_USE ──────────────────────────────────────────
  * From Android 14 every foreground service must declare a type, and the list is a list of
@@ -60,11 +80,12 @@ class TimerService : Service() {
         /*
          * startForeground MUST be called, even when there is nothing left to show.
          *
-         * The run can end in the gap between startForegroundService and this callback — a
-         * rest of a few seconds, or Stop pressed straight away. Bailing out with stopSelf
-         * alone leaves a service that was promised to the system and never delivered, and
-         * the platform answers that with a crash a few seconds later. So an empty run
-         * still goes foreground, with a placeholder, and is then taken down properly.
+         * The run — or the last rest — can end in the gap between startForegroundService and
+         * this callback: a rest of a few seconds, or Stop pressed straight away. Bailing out
+         * with stopSelf alone leaves a service that was promised to the system and never
+         * delivered, and the platform answers that with a crash a few seconds later. So an
+         * empty start still goes foreground, with a placeholder, and is then taken down
+         * properly.
          */
         val notification = controller.currentNotification()
             ?: TimerNotifications.alert(this, "Timer", singleStep = true)
@@ -86,7 +107,7 @@ class TimerService : Service() {
             return START_NOT_STICKY
         }
 
-        if (controller.run.value == null) {
+        if (!controller.serviceNeeded()) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -104,16 +125,30 @@ class TimerService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Takes the service down as soon as the controller reports the run is over. */
+    /**
+     * Takes the service down as soon as NEITHER claimant needs it any more.
+     *
+     * Both flows are watched, and the test is the controller's own, so there is one
+     * definition of "needed" rather than a copy here that could disagree with it. A run
+     * ending is no longer sufficient on its own — that is the whole change — and neither is
+     * the last rest maturing while a protocol is still going.
+     *
+     * This is a backstop rather than the mechanism: [TimerController.syncService] stops the
+     * service on every path that ends something. It stays because the two disagreeing is
+     * survivable in one direction only — a service that outlives its reason is a battery cost
+     * and a complaint from the platform, and this is the half that cannot be forgotten at a
+     * call site.
+     */
     private fun watchForEnd() {
         if (watcher?.isActive == true) return
         watcher = scope.launch {
-            controller.run.collectLatest { snapshot ->
-                if (snapshot == null) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+            combine(controller.run, controller.floors.floors) { _, _ -> controller.serviceNeeded() }
+                .collectLatest { needed ->
+                    if (!needed) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
                 }
-            }
         }
     }
 

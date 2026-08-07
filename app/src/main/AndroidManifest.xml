@@ -22,9 +22,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-        Keeps the process from being frozen while a run is live. Without a foreground
-        service Android suspends the app within about twenty seconds of the screen turning
-        off, which is the whole failure this feature exists to avoid.
+        Keeps the process from being frozen while a run OR a rest between sets is live.
+        Without a foreground service Android suspends the app within about twenty seconds of
+        the screen turning off, which is the whole failure this feature exists to avoid. One
+        service covers both; see TimerService.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
@@ -46,6 +47,11 @@
         the process being killed; it does not stop the device sleeping, and a Tabata
         interval is ten seconds long. Held only while the clock is moving, released on
         pause and stop, and always taken with a timeout.
+
+        Taken for the PROTOCOL RUN only, never for the rests between sets: a rest is minutes
+        long and says "not before", its wake-up alarm wakes the device by itself, and a lock
+        per rest would be a lock held for most of a ninety-minute session. See
+        FloorController.
     -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
