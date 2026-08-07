@@ -88,8 +88,19 @@ object ProgramFiles {
      * The cap is applied WHILE reading rather than to the finished result — a size read
      * from the provider beforehand can be a lie or absent, and by the time an oversized
      * file is in memory the damage is done.
+     *
+     * [maxBytes] and [what] are parameters because this reader is used for the journal backup
+     * as well (data/JournalBackup.kt), and a backup of years of training is legitimately
+     * megabytes: the program cap would refuse the very file it is most important to be able to
+     * read. Everything else about the two reads is identical, and one streaming cap that is
+     * right is better than two.
      */
-    fun read(context: Context, uri: Uri): FileText = runCatching {
+    fun read(
+        context: Context,
+        uri: Uri,
+        maxBytes: Int = MAX_BYTES,
+        what: String = "program export",
+    ): FileText = runCatching {
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val collected = ByteArrayOutputStream()
             val buffer = ByteArray(BUFFER_BYTES)
@@ -98,12 +109,12 @@ object ProgramFiles {
                 val read = stream.read(buffer)
                 if (read < 0) break
                 collected.write(buffer, 0, read)
-                oversized = collected.size() > MAX_BYTES
+                oversized = collected.size() > maxBytes
             }
             if (oversized) {
                 FileText.Failed(
-                    "That file is larger than ${MAX_BYTES / 1000} kB, which no program " +
-                        "export is. It was not read."
+                    "That file is larger than ${maxBytes / 1000} kB, which no $what is. " +
+                        "It was not read."
                 )
             } else {
                 FileText.Ok(collected.toString(Charsets.UTF_8.name()))
