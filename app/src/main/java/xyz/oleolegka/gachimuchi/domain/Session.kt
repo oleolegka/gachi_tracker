@@ -226,6 +226,60 @@ fun lastDuration(events: List<JournalEvent>, exercise: ExerciseLink): Duration? 
 /** The last weigh-in. Body weight has no exercise_id, so the whole series is used. */
 fun lastBodyweight(events: List<JournalEvent>): Bodyweight? = bodyweightSeries(events).lastOrNull()
 
+/**
+ * What the scales last said ON OR BEFORE [opDate], or null if they had said nothing yet.
+ *
+ * BY DAY AND NOT BY WRITE ORDER, which is the difference that matters for the one case this
+ * exists for: typing up training from a fortnight ago. [lastBodyweight] answers "the most
+ * recent weigh-in", and stamping that onto a backdated set would record today's weight as
+ * the weight of a day two weeks gone. The sort is stable, so several weigh-ins on one day
+ * resolve to the last one written that day.
+ */
+fun bodyweightAt(events: List<JournalEvent>, opDate: String): Double? =
+    bodyweightSeries(events)
+        .filter { it.opDate <= opDate }
+        .sortedBy { it.opDate }
+        .lastOrNull()
+        ?.weightKg
+
+/**
+ * The same form with its body-weight snapshot filled in, or unchanged when there is nothing
+ * to fill in — see [StrengthSet.bodyweightKg].
+ *
+ * ── Why this happens at the moment of recording and not on the entry card ───────
+ * The same reasoning [xyz.oleolegka.gachimuchi.data.ActivityRepository.record] gives for
+ * attaching the workout there: every screen that logs anything goes through one method, and a
+ * screen that forgot to stamp the weight would write a set that silently has no volume. It is
+ * also the only moment at which "the last weigh-in" is a defined quantity.
+ *
+ * A form that ALREADY carries a snapshot is left alone — a caller that knows better (an
+ * import, a set reconstructed from a finished interval run) is not overruled.
+ */
+/**
+ * Whether [withBodyweightSnapshot] would have anything to do.
+ *
+ * Exists so that a caller can skip FETCHING the journal for a write that will not use it —
+ * recording a set already folds the whole journal once to find the open workout, and a second
+ * read for a barbell set, which can never carry a snapshot, is work done for nothing on the
+ * one path the user is standing in a gym waiting for.
+ */
+val ActivityForm.wantsBodyweightSnapshot: Boolean
+    get() = when (this) {
+        is StrengthSet -> ownWeight && bodyweightKg == null
+        is HoldSet -> ownWeight && bodyweightKg == null
+        else -> false
+    }
+
+fun ActivityForm.withBodyweightSnapshot(weightAt: (String) -> Double?): ActivityForm = when {
+    this is StrengthSet && ownWeight && bodyweightKg == null ->
+        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
+
+    this is HoldSet && ownWeight && bodyweightKg == null ->
+        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
+
+    else -> this
+}
+
 // --- the session feed ----------------------------------------------------------------
 
 /**

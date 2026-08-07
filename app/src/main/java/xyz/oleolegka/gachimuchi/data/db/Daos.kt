@@ -79,6 +79,13 @@ interface ExerciseDao {
      */
     @Query("UPDATE exercises SET one_sided = :oneSided WHERE space_id = :spaceId AND id = :id")
     suspend fun setOneSided(id: Long, oneSided: Boolean, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Same, for what share of body weight the exercise lifts. Null puts it back to "nobody
+     * has said", which is not the same as zero — see [ExerciseEntity.bodyweightShare].
+     */
+    @Query("UPDATE exercises SET bodyweight_share = :share WHERE space_id = :spaceId AND id = :id")
+    suspend fun setBodyweightShare(id: Long, share: Double?, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 /**

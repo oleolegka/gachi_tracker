@@ -184,6 +184,28 @@ data class ExerciseEntity(
      * column with a DEFAULT a fresh install would not have (see MIGRATION_12_13).
      */
     @androidx.room.ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
+    /**
+     * What share of your body weight this exercise lifts (schema version 14): 1.0 for a
+     * pull-up, around 0.65 for a push-up, null for "nobody has said".
+     *
+     * ── What it is for ─────────────────────────────────────────────────────────
+     * Body-weight sets used to be worth ZERO on the tonnage chart, so a week of pull-ups
+     * looked like a week of doing nothing. With this and the weight recorded on the set
+     * itself ([xyz.oleolegka.gachimuchi.domain.StrengthSet.bodyweightKg]) a set is worth
+     * `share x body weight + added weight` per rep.
+     *
+     * ── Why null is a real answer and not a zero ────────────────────────────────
+     * Null means the volume of those sets is UNKNOWN, not that it is nothing, and the charts
+     * behave for such an exercise exactly as they did before this column existed — which is
+     * the point: a catalog nobody has filled in must not have its history redrawn. A default
+     * of, say, 1.0 would have been a guess applied silently to every push-up ever logged.
+     *
+     * The number is a rough share of a whole body and cannot exceed it: a value outside
+     * (0, 1] is treated as absent rather than used
+     * (see [xyz.oleolegka.gachimuchi.domain.usableShare]), on the same grounds as a
+     * non-positive edge on this row.
+     */
+    @androidx.room.ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
 )
 
 /**

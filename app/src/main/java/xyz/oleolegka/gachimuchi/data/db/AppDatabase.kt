@@ -35,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -803,6 +803,124 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 13 -> 14: what share of body weight an exercise lifts, and what every
+         * body-weight set already in the journal was lifted at.
+         *
+         * ── Two halves, and only one of them is a column ────────────────────────────
+         * `bodyweight_share` is nullable with no default, so a plain ALTER TABLE will do and
+         * every exercise comes through as "nobody has said" — which is true, and which keeps
+         * the charts of a catalog nobody has filled in exactly as they were.
+         *
+         * The other half is a payload backfill, and it is the reason this migration is not
+         * three lines. Every own-weight set is stamped with the body weight the scales last
+         * showed ON OR BEFORE that set's own day.
+         *
+         * ── Why the backfill is not optional ────────────────────────────────────────
+         * The snapshot is what makes a body-weight set worth anything on the tonnage chart.
+         * Leave the old rows empty and the first time somebody fills in a share for pull-ups
+         * their chart switches from counting reps to counting kilograms — and every day
+         * before the upgrade draws as ZERO, because those sets carry no weight to multiply.
+         * A history that reads as years of nothing followed by a sudden wall is worse than
+         * the flat rep count it replaced. So the old sets are given the number they were
+         * actually performed at, once, here.
+         *
+         * ── This is a lookup, not an invention ──────────────────────────────────────
+         * The weight comes from the user's own weigh-ins, matched BY DAY: the last one
+         * recorded on or before the set's `op_date`. A set logged before the scales were ever
+         * used gets nothing and stays worth nothing — there is no honest number to give it,
+         * and picking the earliest later weigh-in would be claiming to know what somebody
+         * weighed before they had ever weighed themselves.
+         *
+         * Matching by day rather than by write order is what makes back-dated training come
+         * out right: a session typed up a fortnight late must be stamped with what the scales
+         * said THEN, not with this morning's reading.
+         *
+         * Hold sets are stamped along with strength sets even though nothing computes a hold
+         * volume today. The snapshot is a fact about the set — what you weighed when you hung
+         * off that edge — and a field present on half the journal is the split-history problem
+         * [MIGRATION_9_10] exists to prevent, arriving later and harder to fix.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `bodyweight_share` REAL")
+
+                // the type strings are spelled out for the reason given in [MIGRATION_10_11]:
+                // a migration describes the database as it was and must not change meaning if
+                // a constant in today's code is renamed
+                val weighIns = ArrayList<Pair<String, Double>>()
+                db.query(
+                    "SELECT `payload` FROM `events` WHERE `type` = 'bodyweight' ORDER BY `id`"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val json = runCatching {
+                            kotlinx.serialization.json.Json.parseToJsonElement(c.getString(0))
+                        }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: continue
+                        val day = (json["op_date"] as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.contentOrNull ?: continue
+                        val kg = (json["weight_kg"] as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.contentOrNull?.toDoubleOrNull() ?: continue
+                        if (kg > 0) weighIns += day to kg
+                    }
+                }
+                if (weighIns.isEmpty()) return
+                // stable, so several weigh-ins on one day resolve to the last one written
+                val byDay = weighIns.sortedBy { it.first }
+
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `payload` FROM `events` " +
+                        "WHERE `type` IN ('strength_set', 'hold_set')"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withBodyweightSnapshot(c.getString(1), byDay)?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * One set payload with `bodyweight_kg` filled in from the weigh-ins, or null when there
+         * is nothing to do — not an own-weight set, a snapshot already there, no weigh-in on or
+         * before its day, or a payload that will not parse.
+         *
+         * "A snapshot already there" means a NUMBER already there and not a KEY already there,
+         * for the reason spelled out on [withExerciseUid]: `encodeDefaults` writes
+         * `"bodyweight_kg": null` for a build that knows the field and has nothing to put in
+         * it, and reading that as "done" would skip exactly the rows this exists for.
+         */
+        private fun withBodyweightSnapshot(
+            payload: String,
+            byDay: List<Pair<String, Double>>,
+        ): String? {
+            val json = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(payload)
+            }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+
+            val ownWeight = (json["own_weight"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toBooleanStrictOrNull() ?: false
+            if (!ownWeight) return null
+
+            val already = (json["bodyweight_kg"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toDoubleOrNull()
+            if (already != null) return null
+
+            val day = (json["op_date"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull ?: return null
+            val kg = byDay.lastOrNull { it.first <= day }?.second ?: return null
+
+            return kotlinx.serialization.json.JsonObject(
+                json + ("bodyweight_kg" to kotlinx.serialization.json.JsonPrimitive(kg))
+            ).toString()
+        }
+
+        /**
          * One `workout_started` payload with `name` filled in from the plan it names, or null
          * when there is nothing to do — no plan named, a name already there, a plan that is
          * gone, or a payload that will not parse.
@@ -955,7 +1073,7 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

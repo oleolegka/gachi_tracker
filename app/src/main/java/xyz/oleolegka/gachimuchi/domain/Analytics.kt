@@ -192,6 +192,41 @@ private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.f
     }
 }
 
+/**
+ * The share of body weight an exercise loads, as a number the arithmetic can trust, or null
+ * for "nothing was ever set".
+ *
+ * A stored value outside (0, 1] is treated as absent rather than used, on exactly the grounds
+ * [ExerciseRef.edge] gives for a zero edge: a catalog row can carry rubbish (a row that
+ * arrives from another journal, a value typed before the field was validated), and a chart
+ * quietly drawn from a share of 4.0 is worse than a chart that says nothing.
+ */
+internal fun usableShare(share: Double?): Double? = share?.takeIf { it > 0.0 && it <= 1.0 }
+
+/**
+ * The kilograms one strength set actually moved, or null when the set states no weight this
+ * app can put a number on.
+ *
+ * Three cases, and the third is the new one:
+ * - an absolute weight is the weight, and nothing else is consulted;
+ * - a body-weight set with no share stated, or none recorded at the time, has NO number. Not
+ *   zero — unknown. That is what it was before this existed and it stays that way, so a
+ *   catalog nobody has filled in draws exactly the charts it drew yesterday;
+ * - a body-weight set with both is worth `share x body weight + added weight`, which is what
+ *   makes a week of pull-ups stop reading as a week of doing nothing.
+ *
+ * The floor at zero is for assistance ([StrengthSet.addedKg] can be negative): a band taking
+ * more off you than the movement puts on is a set that lifted nothing, not one that lifted a
+ * negative amount and can be used to subtract from the week's tonnage.
+ */
+internal fun strengthLoadKg(set: StrengthSet, bodyweightShare: Double?): Double? {
+    set.weightKg?.let { return it }
+    if (!set.ownWeight) return null
+    val share = usableShare(bodyweightShare) ?: return null
+    val body = set.bodyweightKg ?: return null
+    return (share * body + (set.addedKg ?: 0.0)).coerceAtLeast(0.0)
+}
+
 /** Groups by day, ascending, applying [reduce] to each day's entries; empty days are dropped. */
 private fun byDay(
     events: List<ActivityEvent>,
@@ -286,13 +321,15 @@ fun trendSeries(
  * The VOLUME series of an exercise — how MUCH was done on a day — or null when the form
  * has no volume of its own.
  *
- * - strength: TONNAGE, sets x reps x weight (research_visual.md §4.2). An exercise whose
- *   history carries no weight at all (pull-ups, dips) would make that a flat zero, so
- *   those fall back to total REPS — the same shape of fallback the hold trend uses, and
- *   for the same reason: a chart of zeroes is worse than a chart of a different metric
- *   that is honestly labelled. A MIXED history (some weighted sets, some not) does use
- *   tonnage, and the body-weight sets then contribute nothing to the bar — an
- *   understatement this code does not currently correct;
+ * - strength: TONNAGE, sets x reps x weight (research_visual.md §4.2). A body-weight set
+ *   counts here as soon as the exercise says what share of you it lifts and the set knows
+ *   what you weighed (see [strengthLoadKg]) — which is the whole reason both of those exist,
+ *   since a week of pull-ups otherwise reads as a week of doing nothing. An exercise whose
+ *   history yields no weight at all still falls back to total REPS — the same shape of
+ *   fallback the hold trend uses, and for the same reason: a chart of zeroes is worse than a
+ *   chart of a different metric that is honestly labelled. A MIXED history does use tonnage,
+ *   and the sets with no computable load contribute nothing to the bar — an understatement
+ *   this code does not correct, now narrowed to sets logged before anybody weighed themselves;
  * - holds: number of SETS of the day (hangs are counted, not weighed — the weight is the
  *   trend axis);
  * - cardio: total distance of the day, falling back to total time when nothing was
@@ -309,16 +346,25 @@ fun volumeSeries(
     activities: List<ActivityEvent>,
     exercise: ExerciseLink,
     form: ExerciseForm,
+    /**
+     * What share of body weight this exercise loads, off the catalog row — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.bodyweightShare]. Null (the default)
+     * keeps the behaviour every caller had before the column existed: body-weight sets carry
+     * no tonnage and an all-body-weight history falls back to counting reps.
+     */
+    bodyweightShare: Double? = null,
 ): FormSeries? {
     val mine = working(formsOf(activities, exercise, form))
     return when (form) {
         ExerciseForm.STRENGTH -> {
             val sets = mine.mapNotNull { it.form as? StrengthSet }
-            if (sets.any { it.weightKg != null }) FormSeries(
+            if (sets.any { strengthLoadKg(it, bodyweightShare) != null }) FormSeries(
                 SeriesSpec("Volume, reps x weight", ValueFormat.KILOGRAMS, Aggregation.SUM),
                 byDay(mine) { ofDay ->
                     ofDay.sumOf { ev ->
-                        (ev.form as? StrengthSet)?.let { s -> (s.weightKg ?: 0.0) * s.reps } ?: 0.0
+                        (ev.form as? StrengthSet)
+                            ?.let { s -> (strengthLoadKg(s, bodyweightShare) ?: 0.0) * s.reps }
+                            ?: 0.0
                     }
                 },
             ) else FormSeries(
@@ -660,6 +706,11 @@ data class CatalogExercise(
     val uid: String? = null,
     /** Trained one limb at a time — see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided]. */
     val oneSided: Boolean = false,
+    /**
+     * What share of body weight this exercise loads — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.bodyweightShare].
+     */
+    val bodyweightShare: Double? = null,
 ) {
     val link: ExerciseLink get() = ExerciseLink(uid, id)
 }
@@ -684,7 +735,7 @@ fun doorTiles(
         val (id, name, form) = row
         val link = row.link
         val series = trendSeries(activities, link, form)
-            ?: volumeSeries(activities, link, form)
+            ?: volumeSeries(activities, link, form, row.bodyweightShare)
             ?: return@mapNotNull null
         val last = series.last ?: return@mapNotNull null
         DoorTile(

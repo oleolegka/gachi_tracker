@@ -2082,6 +2082,171 @@ class MigrationTest {
         assertTrue(records.single().text, records.single().text.contains("side not recorded"))
     }
 
+    // --- version 13 -> 14: the share of body weight, and the snapshots behind it -------------
+
+    /** A version 12 phone whose owner does pull-ups and sometimes stands on the scales. */
+    private data class PhoneWithScales(
+        val exerciseId: Long,
+        val beforeTheScales: Long,
+        val betweenWeighIns: Long,
+    )
+
+    /**
+     * A version 12 database holding a body-weight history that straddles two weigh-ins, plus
+     * one set from before the scales were ever used.
+     *
+     * The dates are the point. The backfill has to match a set to what the scales said ON OR
+     * BEFORE ITS OWN DAY, and a fixture where every set postdates every weigh-in would pass
+     * just as happily with a migration that stamped the latest reading onto everything.
+     */
+    private suspend fun writeVersion12WithScales(): PhoneWithScales {
+        val v12 = Room.databaseBuilder(context, SchemaV12Database::class.java, dbName).build()
+        opened = v12
+
+        val exerciseId = v12.catalog().insertExercise(
+            ExerciseEntityV12(
+                name = "Pull-ups", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-06-01T10:00:00",
+            )
+        )
+
+        fun pullUp(day: String) =
+            """{"exercise":"Pull-ups","reps":8,"own_weight":true,""" +
+                """"exercise_id":$exerciseId,"op_date":"$day","exercise_key":"pull ups"}"""
+
+        fun weighIn(kg: Double, day: String) = """{"weight_kg":$kg,"op_date":"$day"}"""
+
+        val beforeTheScales = v12.catalog().insertEvent(
+            EventEntity(ts = "2026-06-01T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-06-01"))
+        )
+        v12.catalog().insertEvent(
+            EventEntity(
+                ts = "2026-07-01T08:00:00",
+                type = xyz.oleolegka.gachimuchi.domain.TYPE_BODYWEIGHT,
+                payload = weighIn(72.0, "2026-07-01"),
+            )
+        )
+        val betweenWeighIns = v12.catalog().insertEvent(
+            EventEntity(ts = "2026-07-15T10:00:00", type = TYPE_STRENGTH_SET, payload = pullUp("2026-07-15"))
+        )
+        v12.catalog().insertEvent(
+            EventEntity(
+                ts = "2026-08-01T08:00:00",
+                type = xyz.oleolegka.gachimuchi.domain.TYPE_BODYWEIGHT,
+                payload = weighIn(69.0, "2026-08-01"),
+            )
+        )
+
+        v12.close()
+        opened = null
+        return PhoneWithScales(exerciseId, beforeTheScales, betweenWeighIns)
+    }
+
+    /** The [StrengthSet] one event carries, as the domain reads it back. */
+    private fun strengthPayload(events: List<JournalEvent>, id: Long): StrengthSet =
+        formFromEventOrNull(TYPE_STRENGTH_SET, events.single { it.id == id }.payload) as StrengthSet
+
+    @Test
+    fun `a set logged before the upgrade is stamped with what the scales said on its own day`() =
+        runTest {
+            val phone = writeVersion12WithScales()
+
+            val repo = ActivityRepository(openCurrent())
+            val events = repo.allEvents()
+
+            // 72 kg and not 69: the set is from July, and the August weigh-in had not happened
+            assertEquals(72.0, strengthPayload(events, phone.betweenWeighIns).bodyweightKg!!, 1e-9)
+        }
+
+    @Test
+    fun `a set older than every weigh-in is left without a snapshot`() = runTest {
+        val phone = writeVersion12WithScales()
+
+        val repo = ActivityRepository(openCurrent())
+
+        /*
+         * There is no honest number for it. Reaching forward to the first later weigh-in would
+         * be claiming to know what somebody weighed before they had ever weighed themselves,
+         * and the set stays worth nothing on the tonnage chart — exactly as it was.
+         */
+        assertNull(strengthPayload(repo.allEvents(), phone.beforeTheScales).bodyweightKg)
+    }
+
+    @Test
+    fun `the share column arrives empty, and until it is filled in nothing moves`() = runTest {
+        val phone = writeVersion12WithScales()
+
+        val repo = ActivityRepository(openCurrent())
+        assertNull(repo.exercise(phone.exerciseId)!!.bodyweightShare)
+
+        // no share, so the chart still counts reps, which is what it counted yesterday
+        val series = xyz.oleolegka.gachimuchi.domain.volumeSeries(
+            xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
+            ExerciseLink.ofId(phone.exerciseId),
+            ExerciseForm.STRENGTH,
+        )!!
+        assertEquals("Reps", series.spec.label)
+    }
+
+    @Test
+    fun `filling in the share turns the backfilled history into tonnage, not a wall of zeros`() =
+        runTest {
+            val phone = writeVersion12WithScales()
+
+            val repo = ActivityRepository(openCurrent())
+            repo.setBodyweightShare(phone.exerciseId, 1.0)
+            assertEquals(1.0, repo.exercise(phone.exerciseId)!!.bodyweightShare!!, 1e-9)
+
+            /*
+             * WHY THE BACKFILL IS NOT OPTIONAL. Without it this chart switches from counting
+             * reps to counting kilograms and every day before the upgrade draws as zero — a
+             * history that reads as nothing followed by a wall, which is worse than the flat
+             * rep count it replaced.
+             */
+            val series = xyz.oleolegka.gachimuchi.domain.volumeSeries(
+                xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
+                ExerciseLink.ofId(phone.exerciseId),
+                ExerciseForm.STRENGTH,
+                1.0,
+            )!!
+            assertEquals("Volume, reps x weight", series.spec.label)
+
+            val july = series.points.single { it.opDate == "2026-07-15" }
+            assertEquals(72.0 * 8, july.value, 1e-9)
+
+            // and the set from before the scales is still honestly worth nothing
+            val june = series.points.single { it.opDate == "2026-06-01" }
+            assertEquals(0.0, june.value, 1e-9)
+        }
+
+    @Test
+    fun `a set written after the upgrade is stamped without anybody asking`() = runTest {
+        writeVersion12WithScales()
+
+        val repo = ActivityRepository(openCurrent())
+        val exercise = repo.allExercises().single { it.name == "Pull-ups" }
+        val id = repo.record(
+            strengthSetOf(
+                exercise = exercise.toRef(), opDate = "2026-08-05", reps = 6, ownWeight = true,
+            ),
+            attachToWorkout = false,
+        )
+
+        // stamped in the repository rather than on the screen: one method sees every write
+        assertEquals(69.0, strengthPayload(repo.allEvents(), id).bodyweightKg!!, 1e-9)
+    }
+
+    @Test
+    fun `the share column passes Room's schema check on the next open`() = runTest {
+        writeVersion12WithScales()
+
+        openCurrent().close()
+        opened = null
+
+        val again = openCurrent()
+        assertEquals(1, again.exercises().all().size)
+    }
+
     @Test
     fun `a workout whose plan has been deleted keeps its number and gets no identity`() = runTest {
         val phone = writeVersion7()

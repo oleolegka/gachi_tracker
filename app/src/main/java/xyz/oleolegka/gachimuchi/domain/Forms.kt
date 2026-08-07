@@ -254,6 +254,25 @@ data class StrengthSet(
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
     /**
+     * WHAT YOU WEIGHED when this set was recorded, in kilograms, or null when nothing was
+     * known — a snapshot taken from the last weigh-in on or before [opDate].
+     *
+     * ── Why the set carries the number instead of pointing at the scales ────────
+     * Without it a body-weight set has no volume at all: a week of pull-ups shows up on the
+     * tonnage chart as a week of doing nothing. With it, and with a share stated on the
+     * exercise, the set is worth `share x body weight + added weight` per rep.
+     *
+     * A SNAPSHOT AND NOT A LOOKUP, which is the whole point. Reading the current weight at
+     * chart-draw time would let every new weigh-in rewrite the past: lose three kilograms and
+     * last year's pull-ups get cheaper overnight, on a chart whose whole job is to say
+     * whether last year was harder than this one. What you lifted on a day is what you
+     * weighed on that day, and that is a fact, so it is stored like one.
+     *
+     * Null stays legal and means the honest thing: nobody had stepped on the scales by then.
+     * Such a set contributes nothing to tonnage, exactly as it did before this field existed.
+     */
+    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    /**
      * Whether this was a WARM-UP set rather than a working one.
      *
      * ── What it changes, and what it deliberately does not ──────────────────────
@@ -282,6 +301,7 @@ data class StrengthSet(
     init {
         requirePos("reps", reps)
         requirePosOrNull("weight_kg", weightKg)
+        requirePosOrNull("bodyweight_kg", bodyweightKg)
         requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require(!(weightKg != null && ownWeight)) {
@@ -326,6 +346,8 @@ data class HoldSet(
     @SerialName("edge_mm") val edgeMm: Double? = null,
     @SerialName("added_kg") val addedKg: Double? = null,
     @SerialName("own_weight") val ownWeight: Boolean = false,
+    /** What you weighed when this hang was recorded — see [StrengthSet.bodyweightKg]. */
+    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
     /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
     @SerialName("warmup") val warmup: Boolean = false,
     /**
@@ -363,6 +385,7 @@ data class HoldSet(
         requirePosOrNull("work_sec", workSec)
         requirePosOrNull("rest_sec", restSec)
         requirePosOrNull("edge_mm", edgeMm)
+        requirePosOrNull("bodyweight_kg", bodyweightKg)
         requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)
         require((workSec == null) == (restSec == null)) {
