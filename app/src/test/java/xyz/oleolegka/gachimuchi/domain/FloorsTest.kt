@@ -443,4 +443,45 @@ class FloorsTest {
         assertNull(cue.signal)
         assertNull(cue.wakeAtMs)
     }
+
+    // --- the rest a floor actually measured ---------------------------------------------
+
+    @Test
+    fun `the actual rest is the wall-clock gap since the floor started`() {
+        val rest = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL + 90_000)
+        assertEquals(90.0, rest!!, 1e-9)
+    }
+
+    /** Standing at the doorway of the rest for two and a half minutes is not a rest of zero. */
+    @Test
+    fun `a set recorded the instant the floor started reads as zero rest, not no rest`() {
+        val rest = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL)
+        assertEquals(0.0, rest!!, 1e-9)
+    }
+
+    /**
+     * The same line [MAX_REST_SEC] draws for the DERIVED gap ([secondsBetween]): past twenty
+     * minutes this is a break in the workout, not a rest between sets of one exercise, however
+     * exactly the wall clock can measure it.
+     */
+    @Test
+    fun `right at twenty minutes it is still a rest, one second later it is a break`() {
+        val atTheLine = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL + (MAX_REST_SEC * 1000).toLong())
+        assertEquals(MAX_REST_SEC, atTheLine!!, 1e-9)
+
+        val overTheLine = floor(1, readyAt = 120_000)
+            .actualRestSec(nowWallMs = WALL + (MAX_REST_SEC * 1000).toLong() + 1_000)
+        assertNull("an hour standing around is a break, not a rest, however exactly it is measured", overTheLine)
+    }
+
+    /**
+     * The wall clock is the one clock a user or an NTP sync can move (see the note at the top
+     * of this file). A jump backwards between the floor starting and the next set landing must
+     * not be reported as a negative rest — there is nothing this reading can honestly say.
+     */
+    @Test
+    fun `a wall clock that jumped backwards reads as no measurement, not a negative rest`() {
+        val rest = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL - 5_000)
+        assertNull(rest)
+    }
 }
