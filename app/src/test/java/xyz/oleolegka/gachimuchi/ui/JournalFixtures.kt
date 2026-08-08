@@ -78,14 +78,24 @@ class Journal {
         workoutId,
     )
 
-    /** Puts an exercise into a workout before any set of it exists. */
-    fun addExercise(workoutId: Long, day: String, exercise: ExerciseRef, restSec: Int, at: String = "09:01") =
-        add(
-            TYPE_WORKOUT_EXERCISE_ADDED,
-            payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec)),
-            "${day}T$at:00",
-            workoutId,
-        )
+    /**
+     * Puts an exercise into a workout before any set of it exists — or, for one CARD of an
+     * exercise trained one limb at a time, [side] says which; a test wanting both writes this
+     * twice, the same way the app itself does (see [xyz.oleolegka.gachimuchi.data.ActivityRepository.copyPlannedExercises]).
+     */
+    fun addExercise(
+        workoutId: Long,
+        day: String,
+        exercise: ExerciseRef,
+        restSec: Int,
+        at: String = "09:01",
+        side: HoldSide? = null,
+    ) = add(
+        TYPE_WORKOUT_EXERCISE_ADDED,
+        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec, side = side?.code)),
+        "${day}T$at:00",
+        workoutId,
+    )
 
     /**
      * States the order the exercises of a workout are to be done in, WHOLE — the row a drag

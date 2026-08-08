@@ -33,13 +33,18 @@ class WorkoutTest {
         ts,
     )
 
-    private fun added(workoutId: Long, exerciseId: Long, restSec: Int, ts: String = "2026-08-07T09:01:00") =
-        row(
-            TYPE_WORKOUT_EXERCISE_ADDED,
-            payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exerciseId, restSec)),
-            ts,
-            workoutId,
-        )
+    private fun added(
+        workoutId: Long,
+        exerciseId: Long,
+        restSec: Int,
+        ts: String = "2026-08-07T09:01:00",
+        side: HoldSide? = null,
+    ) = row(
+        TYPE_WORKOUT_EXERCISE_ADDED,
+        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exerciseId, restSec, side = side?.code)),
+        ts,
+        workoutId,
+    )
 
     /** "That workout is over" — written by the button and by the start of the next one. */
     private fun finished(workoutId: Long, ts: String = "2026-08-07T20:00:00") =
@@ -369,6 +374,123 @@ class WorkoutTest {
         val workout = buildWorkout(events, start.id)!!
         assertEquals(listOf(bench.id, squat.id), workout.exercises.map { it.exerciseId })
         assertEquals(240, workout.exercises.first().restSec)
+    }
+
+    // --- two cards of an exercise trained one limb at a time --------------------------
+
+    private fun holdSet(
+        exercise: ExerciseRef,
+        opDate: String,
+        workoutId: Long? = null,
+        ts: String = "${opDate}T09:10:00",
+        side: HoldSide? = null,
+    ) = holdSetOf(exercise, opDate, reps = 5, side = side)
+        .let { row(it.type, it.toPayload(), ts, workoutId) }
+
+    /**
+     * The owner's decision (workspace/tasks): one exercise in the catalog, added to a workout as
+     * TWO "exercise added" rows — one per [HoldSide] — is TWO cards, not one that folds into a
+     * single block the way every other repeated "add" does.
+     */
+    @Test
+    fun `an exercise added once per side becomes two cards, not one`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.LEFT),
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(2, workout.exercises.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), workout.exercises.map { it.side })
+        assertTrue("both cards name the same catalog exercise", workout.exercises.all { it.exerciseId == hangs.id })
+        assertTrue(workout.exercises.all { it.isEmpty })
+    }
+
+    /** A set carrying a side lands under the card of that side, and only that one. */
+    @Test
+    fun `a set is filed under the card of its own side`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.LEFT),
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.RIGHT),
+            holdSet(hangs, today, workoutId = start.id, ts = "${today}T09:10:00", side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        val left = workout.exercises.single { it.side == HoldSide.LEFT }
+        val right = workout.exercises.single { it.side == HoldSide.RIGHT }
+        assertTrue("the untouched hand stays empty", left.isEmpty)
+        assertEquals(1, right.sets.size)
+        assertEquals(1, workout.setCount)
+    }
+
+    /**
+     * Removing one card is removing its OWN "added" rows and its OWN sets — the other card, and
+     * the sets belonging to it, are a different block entirely and are left standing. This is
+     * what `WorkoutExercise.addedEventIds` + `.sets` already gives a caller for free, once the
+     * two cards fold into two separate blocks.
+     */
+    @Test
+    fun `removing one card leaves the other card of the same exercise untouched`() {
+        val start = started(today)
+        val leftAdded = added(start.id, hangs.id, restSec = 180, side = HoldSide.LEFT)
+        val rightAdded = added(start.id, hangs.id, restSec = 180, side = HoldSide.RIGHT, ts = "${today}T09:02:00")
+        val rightSet = holdSet(hangs, today, workoutId = start.id, ts = "${today}T09:10:00", side = HoldSide.RIGHT)
+        val events = listOf(start, leftAdded, rightAdded, rightSet)
+
+        val right = buildWorkout(events, start.id)!!.exercises.single { it.side == HoldSide.RIGHT }
+        assertEquals(listOf(rightAdded.id), right.addedEventIds)
+        assertEquals(listOf(rightSet.id), right.sets.map { it.id })
+
+        val deletion = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = rightAdded.uid)),
+            rightAdded.ts,
+        )
+        val deleteRightSet = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = rightSet.uid)),
+            rightSet.ts,
+        )
+        val afterRemoval = buildWorkout(events + deletion + deleteRightSet, start.id)!!
+
+        assertEquals(listOf(HoldSide.LEFT), afterRemoval.exercises.map { it.side })
+        assertEquals(0, afterRemoval.setCount)
+    }
+
+    /**
+     * The append-only journal remembers nothing about a removed card: the same exercise added
+     * to another workout arrives with both cards again, whichever one was ever removed from an
+     * earlier session. There is no per-exercise "do not offer the right hand" flag anywhere.
+     */
+    @Test
+    fun `a card removed from one workout comes back whole the next time the exercise is added`() {
+        val first = started(today, ts = "${today}T08:00:00")
+        val firstLeft = added(first.id, hangs.id, restSec = 180, side = HoldSide.LEFT, ts = "${today}T08:01:00")
+        val firstRight = added(first.id, hangs.id, restSec = 180, side = HoldSide.RIGHT, ts = "${today}T08:02:00")
+        val removeRight = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = firstRight.uid)),
+            firstRight.ts,
+        )
+        val second = started(today, ts = "${today}T19:00:00")
+        val secondLeft = added(second.id, hangs.id, restSec = 180, side = HoldSide.LEFT, ts = "${today}T19:01:00")
+        val secondRight = added(second.id, hangs.id, restSec = 180, side = HoldSide.RIGHT, ts = "${today}T19:02:00")
+        val events = listOf(first, firstLeft, firstRight, removeRight, second, secondLeft, secondRight)
+
+        assertEquals(
+            "the earlier workout kept the removal",
+            listOf(HoldSide.LEFT),
+            buildWorkout(events, first.id)!!.exercises.map { it.side },
+        )
+        assertEquals(
+            "the later one was never told about it",
+            listOf(HoldSide.LEFT, HoldSide.RIGHT),
+            buildWorkout(events, second.id)!!.exercises.map { it.side },
+        )
     }
 
     @Test
