@@ -86,13 +86,12 @@ You need JDK 21 and the Android SDK (compileSdk 37).
 The SDK path goes into `local.properties` (`sdk.dir=...`); that file is not part of the
 repository.
 
-The launcher icon is generated rather than hand-drawn — it is a 32x32 pixel-art map
-inside `tools/pixel_icon.py`. Edit the map or the palette there and run:
-
-```
-python3 tools/pixel_icon.py                            # rewrites the icon resources
-python3 tools/pixel_icon.py --preview /tmp/icon.png    # and renders what it made
-```
+The launcher icon in `res/` is generated output, not something to edit by hand: the
+drawables are a few hundred path commands each. It came from a 32x32 pixel-art map in a
+throwaway script, `tools/pixel_icon.py`, which lived here until commit `aad4c36` and was
+then dropped — the app builds with JDK and the Android SDK alone, and a one-off generator
+in a language nothing else here uses did not earn its place in the tree. Recover it with
+`git show aad4c36:tools/pixel_icon.py` if the icon ever needs redrawing.
 
 ## How it is built
 
