@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 import xyz.oleolegka.gachimuchi.data.WriteTime
 import xyz.oleolegka.gachimuchi.data.opDateOfPayload
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.fmtNum
 import xyz.oleolegka.gachimuchi.domain.freeExerciseName
 import xyz.oleolegka.gachimuchi.domain.newUid
 
@@ -39,7 +40,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1131,6 +1132,144 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 17 -> 18: the hangboard edge (the lip width, in mm) leaves the domain model
+         * entirely, and the §12-A sibling switcher that compared exercises by it leaves with it.
+         *
+         * ── What was wrong ───────────────────────────────────────────────────────
+         * Nothing was wrong with the column; the owner simply does not want it any more. It is
+         * a climbing-specific value with no comparison this app has any business making — "it
+         * lives in the name, I don't need edge-based comparison" — and keeping a column, an
+         * identity dimension and a whole switcher screen around for a fact the app no longer
+         * cares to model would be dead weight pretending to be a feature.
+         *
+         * ── Why FOLDING rather than DROPPING ─────────────────────────────────────
+         * An edge on file is a number the user hand-recorded standing at the hangboard, and
+         * dropping the column outright would erase it as though it had never been said. So
+         * before the column goes, every row that has one gets it folded into its own NAME —
+         * "Hangs" with a 20 mm edge becomes "Hangs 20mm" — unconditionally, for every row with
+         * a non-null edge and not only the ones that are about to collide. It is a fact the user
+         * recorded and it stays legible even for a row whose edge nothing else on the phone
+         * shares. The number goes through [xyz.oleolegka.gachimuchi.domain.fmtNum] for the same
+         * reason the old edge field's own comment gave: "20" rather than "20.0", an edge is
+         * written the way it is spoken.
+         *
+         * ── Why RENAMING beats MERGING here too ──────────────────────────────────
+         * Folding the edge into two different names can still produce a collision under the new
+         * identity rule — a row already called "Hangs 20mm" with no edge of its own, and another
+         * called "Hangs" with a 20 mm edge that has just been folded to the same words. Exactly
+         * the argument [MIGRATION_14_15] makes for its own duplicates applies again: merging
+         * would repoint sets inside payloads with nobody watching, and leaving one row's key
+         * silently different from what it displays would hide a duplicate rather than resolve
+         * it. So a collision here is broken the same way — by [freeExerciseName] appending
+         * " (2)" — reusing [fillIdentityKeys] rather than a second mechanism, because "how a
+         * clash is broken" is a rule this schema already has exactly one implementation of.
+         *
+         * ── Sequence, and why it is in this order ────────────────────────────────
+         * 1. While `edge_mm` still exists, every row's `name` is updated in place, for every row
+         *    where `edge_mm IS NOT NULL` — this has to happen before the column carrying the
+         *    value is gone.
+         * 2. The `exercises` table is rebuilt without `edge_mm`, following the exact
+         *    `_new_exercises` pattern [MIGRATION_14_15] uses (temp `sqlite_sequence`
+         *    preservation, `INSERT INTO _new_exercises SELECT ...`, `DROP TABLE`, rename,
+         *    recreate indices, restore `sqlite_sequence`).
+         * 3. [fillIdentityKeys] recomputes `identity_key` for every row under the NEW rule
+         *    (name + form + protocol, no edge), resolving any collision the fold produced.
+         *
+         * ── What is deliberately NOT done here, and why ──────────────────────────
+         * NO PAYLOAD REWRITE. [xyz.oleolegka.gachimuchi.domain.HoldSet.edgeMm] and
+         * `PortableExercise.edgeMm` are removed from their Kotlin classes in this same change,
+         * which stops this app from writing or reading `edge_mm` going forward; both JSON
+         * configs already set `ignoreUnknownKeys`, so an event payload or a backup file still
+         * carrying an `"edge_mm"` key from before this migration decodes exactly as before,
+         * minus a field that is no longer asked for — inert, not corrupted. Unlike `hold_sec` in
+         * [MIGRATION_16_17], nothing here reads that snapshot back out to compute anything, so
+         * there is no defect to backfill and no honest number this migration could write into a
+         * payload that was already complete for what it recorded.
+         *
+         * A separate Python bot is documented ([xyz.oleolegka.gachimuchi.domain.HoldSet]'s own
+         * KDoc, before this change) to read and write this same payload shape; this app's own
+         * exports diverging from what it still expects is a known, accepted consequence and is
+         * out of scope for this repository.
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val edged = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `name`, `edge_mm` FROM `exercises` WHERE `edge_mm` IS NOT NULL"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val name = c.getString(1)
+                        val edge = c.getDouble(2)
+                        edged += id to "$name ${fmtNum(edge)}mm"
+                    }
+                }
+                for ((id, name) in edged) {
+                    db.execSQL("UPDATE `exercises` SET `name` = ? WHERE `id` = ?", arrayOf<Any>(name, id))
+                }
+
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v18` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'exercises'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`one_sided` INTEGER NOT NULL, " +
+                        "`bodyweight_share` REAL, " +
+                        "`hidden` INTEGER NOT NULL, " +
+                        "`identity_key` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`, `bodyweight_share`, `hidden`, " +
+                        "`identity_key`) " +
+                        "SELECT `id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`, `bodyweight_share`, `hidden`, '' " +
+                        "FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+
+                fillIdentityKeys(db)
+
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_uid` ON `exercises` (`uid`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_space_id_identity_key` " +
+                        "ON `exercises` (`space_id`, `identity_key`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v18`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v18`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v18`")
+            }
+        }
+
+        /**
          * One `hold_set` payload with `hold_sec` filled in from its own `work_sec` snapshot, or
          * null when there is nothing to do — `hold_sec` already stated, no protocol snapshot to
          * copy from, or a payload that will not parse.
@@ -1165,6 +1304,12 @@ abstract class AppDatabase : RoomDatabase() {
          * In id order, so that the row that has been there longest keeps its name and the later
          * one is the one that is marked. Keys are tracked per profile because the index is, and
          * because two profiles are not each other's duplicates.
+         *
+         * Reads `name`, `form`, `protocol_work_sec` and `protocol_rest_sec` ONLY — no `edge_mm`,
+         * since schema version 18 (see [MIGRATION_17_18]). That is [exerciseIdentityKey]'s
+         * signature today, and this function's whole point is to key every row by TODAY's rule;
+         * see [MIGRATION_14_15]'s own KDoc for why that is deliberate rather than pinned to
+         * whatever the calling migration's version happened to look like.
          */
         private fun fillIdentityKeys(db: SupportSQLiteDatabase) {
             data class Row(
@@ -1172,14 +1317,13 @@ abstract class AppDatabase : RoomDatabase() {
                 val spaceId: Long,
                 val name: String,
                 val form: Int,
-                val edge: Double?,
                 val work: Double?,
                 val rest: Double?,
             )
 
             val rows = ArrayList<Row>()
             db.query(
-                "SELECT `id`, `space_id`, `name`, `form`, `edge_mm`, `protocol_work_sec`, " +
+                "SELECT `id`, `space_id`, `name`, `form`, `protocol_work_sec`, " +
                     "`protocol_rest_sec` FROM `exercises` ORDER BY `id`"
             ).use { c ->
                 while (c.moveToNext()) {
@@ -1188,9 +1332,8 @@ abstract class AppDatabase : RoomDatabase() {
                         spaceId = c.getLong(1),
                         name = c.getString(2),
                         form = c.getInt(3),
-                        edge = if (c.isNull(4)) null else c.getDouble(4),
-                        work = if (c.isNull(5)) null else c.getDouble(5),
-                        rest = if (c.isNull(6)) null else c.getDouble(6),
+                        work = if (c.isNull(4)) null else c.getDouble(4),
+                        rest = if (c.isNull(5)) null else c.getDouble(5),
                     )
                 }
             }
@@ -1198,8 +1341,8 @@ abstract class AppDatabase : RoomDatabase() {
             val taken = HashMap<Long, MutableSet<String>>()
             for (row in rows) {
                 val used = taken.getOrPut(row.spaceId) { HashSet() }
-                val name = freeExerciseName(row.name, row.form, row.edge, row.work, row.rest, used)
-                val key = exerciseIdentityKey(name, row.form, row.edge, row.work, row.rest)
+                val name = freeExerciseName(row.name, row.form, row.work, row.rest, used)
+                val key = exerciseIdentityKey(name, row.form, row.work, row.rest)
                 used += key
                 db.execSQL(
                     "UPDATE `exercises` SET `name` = ?, `identity_key` = ? WHERE `id` = ?",
@@ -1397,7 +1540,7 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-            MIGRATION_16_17,
+            MIGRATION_16_17, MIGRATION_17_18,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

@@ -164,20 +164,26 @@ data class EventEntity(
  * A canonical exercise (§11): statistics and records aggregate by `id` rather than by the
  * word an entry happens to carry, so "squat" and "squats" cannot end up as two histories.
  *
- * [edgeMm], [protocolWorkSec] and [protocolRestSec] are an EXTENSION over the server
- * table (which has five columns). The reason is §12-A: hangboard identity is
- * name + edge + protocol, so edge and protocol belong to the exercise, not to the set.
- * That refactor has not been done on the server yet (it is waiting for the design to
- * settle), so the schema here is DELIBERATELY ahead — when sync arrives, the server
- * will have to add these fields, otherwise identity will drift apart.
+ * [protocolWorkSec] and [protocolRestSec] are an EXTENSION over the server table (which has
+ * five columns). The reason is §12-A: hangboard identity is name + protocol, so the protocol
+ * belongs to the exercise, not to the set. That refactor has not been done on the server yet
+ * (it is waiting for the design to settle), so the schema here is DELIBERATELY ahead — when
+ * sync arrives, the server will have to add these fields, otherwise identity will drift apart.
+ *
+ * ── `edge_mm` used to be a third column here, and is gone (schema version 18) ────
+ * The hangboard edge (the hangboard lip width, in mm) was a climbing-specific attribute the
+ * owner decided this app no longer models, and the sibling switcher built on comparing it
+ * (`toHoldSibling`, `HoldSibling`, `holdSiblings`) left with it. See `MIGRATION_17_18` below
+ * for what happened to it: it is folded into the exercise NAME for every row that had one, not
+ * discarded, because it is a value the user hand-recorded.
  *
  * ── The identity is a constraint now, not a convention (schema version 15) ──────
  * §12-A was a rule written in documentation and obeyed by the readers, while the writer —
  * the one place that creates rows — looked an exercise up by NAME and handed back whatever
- * it found. Hangs on a 15 mm edge added while 20 mm hangs existed became 20 mm hangs, and
- * two histories merged for good, silently. [identityKey] closes it in the schema itself:
- * the four values that make an exercise what it is are folded into one string and carry a
- * UNIQUE index, so a second row of one identity is not something a bug can create.
+ * it found. Hangs added on a 10:5 protocol while a 7:3 "Hangs" existed became the 7:3 row,
+ * and two histories merged for good, silently. [identityKey] closes it in the schema itself:
+ * the values that make an exercise what it is are folded into one string and carry a UNIQUE
+ * index, so a second row of one identity is not something a bug can create.
  */
 @Entity(
     tableName = "exercises",
@@ -194,7 +200,6 @@ data class ExerciseEntity(
     /** Form code, the values of Python's `flow.FORM_*` (see ExerciseForm). */
     val form: Int,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
-    @androidx.room.ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
     @androidx.room.ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
     @androidx.room.ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
     /**
@@ -272,8 +277,8 @@ data class ExerciseEntity(
      *
      * The number is a rough share of a whole body and cannot exceed it: a value outside
      * (0, 1] is treated as absent rather than used
-     * (see [xyz.oleolegka.gachimuchi.domain.usableShare]), on the same grounds as a
-     * non-positive edge on this row.
+     * (see [xyz.oleolegka.gachimuchi.domain.usableShare]), on the same grounds a non-positive
+     * protocol on this row is treated as absent.
      */
     @androidx.room.ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
     /**
@@ -299,7 +304,7 @@ data class ExerciseEntity(
      * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity] (schema version 15).
      *
      * ── Derived state, and how it is kept from drifting ────────────────────────
-     * This is not an independent fact: it is [name], [form], [edgeMm], [protocolWorkSec] and
+     * This is not an independent fact: it is [name], [form], [protocolWorkSec] and
      * [protocolRestSec] folded together, and a row whose key disagrees with its own columns
      * would be invisible to the lookup that prevents duplicates. Two things hold it in place.
      *
@@ -316,7 +321,7 @@ data class ExerciseEntity(
      * declared before it.
      */
     @androidx.room.ColumnInfo(name = "identity_key")
-    val identityKey: String = exerciseIdentityKey(name, form, edgeMm, protocolWorkSec, protocolRestSec),
+    val identityKey: String = exerciseIdentityKey(name, form, protocolWorkSec, protocolRestSec),
 )
 
 /**
@@ -353,8 +358,8 @@ data class ProgramEntity(
      * The catalog exercise this program trains, when it is exactly one (schema version 3).
      *
      * Nullable and deliberately WITHOUT a foreign key. A program is reference data that
-     * outlives the catalog row it points at — an exercise renamed, split by edge (§12-A) or
-     * deleted must not take a hand-written protocol down with it, which `ON DELETE CASCADE`
+     * outlives the catalog row it points at — an exercise renamed, split by protocol (§12-A)
+     * or deleted must not take a hand-written protocol down with it, which `ON DELETE CASCADE`
      * would, and `ON DELETE SET NULL` would still make deleting an exercise silently edit
      * programs. A dangling id simply reads as "no link" and the offer asks again.
      */
@@ -456,8 +461,8 @@ data class SlotEntity(
  * ON DELETE CASCADE against `slots`, so deleting a plan cannot leave its composition behind
  * as rows nothing can reach. That is the ONLY foreign key here, and the omission of the
  * other one is the decision worth writing down: there is deliberately no key on
- * [exerciseId]. The catalog is editable and §12-A can split a hangboard exercise by edge — a
- * cascade would let deleting an exercise silently rewrite a plan, and `SET NULL` would leave
+ * [exerciseId]. The catalog is editable and §12-A can split a hangboard exercise by protocol —
+ * a cascade would let deleting an exercise silently rewrite a plan, and `SET NULL` would leave
  * a planned line pointing at nothing while claiming to be intact. A dangling id simply reads
  * as "that exercise is gone", which the editor can say out loud.
  *

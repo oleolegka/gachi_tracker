@@ -579,20 +579,19 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun exercise(id: Long): ExerciseEntity? = db.exercises().byId(id)
 
     /**
-     * The exercise with this IDENTITY, creating it if there is none: name, form, edge and
-     * work:rest protocol together (see [ExerciseIdentity]), not the name on its own.
+     * The exercise with this IDENTITY, creating it if there is none: name, form and work:rest
+     * protocol together (see [ExerciseIdentity]), not the name on its own.
      *
      * ── What this used to do, and what it cost ─────────────────────────────────
-     * It looked for a row with the same normalized NAME and returned it, dropping the edge
-     * and the protocol it had been handed without a word. §12-A says those are part of what a
-     * hangboard exercise IS, so adding hangs on a 15 mm edge while 20 mm hangs existed handed
-     * back the 20 mm row: two exercises became one, every set went into one history, and
-     * nothing anywhere said so. The only thing that ever prevented it was the user's habit of
-     * typing the edge into the name.
+     * It looked for a row with the same normalized NAME and returned it, dropping the protocol
+     * it had been handed without a word. §12-A says the protocol is part of what a hangboard
+     * exercise IS, so adding hangs on a different protocol while another "Hangs" existed handed
+     * back the old row: two exercises became one, every set went into one history, and nothing
+     * anywhere said so.
      *
-     * Now a different edge, a different protocol or a different form is a DIFFERENT EXERCISE
-     * and gets a row of its own — which is also what the UNIQUE index added in schema version
-     * 15 enforces, so this lookup and the constraint cannot disagree.
+     * Now a different protocol or a different form is a DIFFERENT EXERCISE and gets a row of
+     * its own — which is also what the UNIQUE index added in schema version 15 enforces, so
+     * this lookup and the constraint cannot disagree.
      *
      * ── What a found row does and does not pick up ──────────────────────────────
      * Nothing about its identity, because a row can only be found by matching it exactly.
@@ -609,12 +608,11 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun ensureExercise(
         name: String,
         form: ExerciseForm,
-        edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
         defaultRestSec: Int? = null,
     ): Long {
-        val key = exerciseIdentityKey(name, form.code, edgeMm, workSec, restSec)
+        val key = exerciseIdentityKey(name, form.code, workSec, restSec)
         db.exercises().byIdentityKey(key)?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
             if (found.hidden) setHidden(found.id, false)
@@ -623,32 +621,32 @@ class ActivityRepository(private val db: AppDatabase) {
         return db.exercises().insert(
             ExerciseEntity(
                 name = name, form = form.code, createdAt = now(),
-                edgeMm = edgeMm, protocolWorkSec = workSec, protocolRestSec = restSec,
+                protocolWorkSec = workSec, protocolRestSec = restSec,
                 defaultRestSec = defaultRestSec,
             )
         )
     }
 
     /**
-     * Corrects what an exercise is: the name it was given, the edge it is done on, the
-     * protocol it is run at. The form is deliberately absent — see below.
+     * Corrects what an exercise is: the name it was given, the protocol it is run at. The
+     * form is deliberately absent — see below.
      *
      * ── What this does to the history, said out loud ───────────────────────────
      * Nothing is rewritten, and the sets do not move. Every set names its exercise by uid, so
      * they all stay with this row and its records, charts and totals are computed over the
      * same sets as before.
      *
-     * What DOES change is what those sets mean. A hangboard set carries a SNAPSHOT of the edge
-     * and protocol it was performed at (see HoldSet), so after correcting an edge from 20 to 15
-     * the row says 15 mm while sets recorded before the correction still say 20. That is the
-     * honest record of a typo being fixed: the sets were performed on whatever the user
+     * What DOES change is what those sets mean. A hangboard set carries a SNAPSHOT of the
+     * protocol it was performed at (see HoldSet), so after correcting a protocol from 7:3 to
+     * 10:5 the row says 10:5 while sets recorded before the correction still say 7:3. That is
+     * the honest record of a typo being fixed: the sets were performed under whatever the user
      * actually used, and the app was never told. It is also the record of a genuine mistake if
-     * the edit is wrong — an exercise really trained on 20 mm, relabelled 15, now has a history
-     * that claims a harder edge than was ever hung on.
+     * the edit is wrong — an exercise really trained at 7:3, relabelled 10:5, now has a history
+     * that claims a protocol it was never run at.
      *
      * The app cannot tell those two apart, so it does neither automatically. THIS EDIT IS FOR
      * CORRECTING WHAT THE CATALOG SAYS, not for recording a change of training. An exercise
-     * that has genuinely moved to a different edge is a different exercise under §12-A and
+     * that has genuinely moved to a different protocol is a different exercise under §12-A and
      * should be created as one; it will then have its own history from that day, which is what
      * actually happened.
      *
@@ -663,22 +661,21 @@ class ActivityRepository(private val db: AppDatabase) {
      * already an exercise like that" is a normal answer the user has to be given rather than
      * a crash.
      *
-     * NONE OF THE THREE NUMBERS HAS A DEFAULT, deliberately. Null here means "this exercise
-     * has no edge / no protocol", not "leave whatever is stored alone", and a default would
-     * make forgetting an argument the way to silently strip a hangboard exercise of the two
-     * values that decide which sets are its own.
+     * NEITHER NUMBER HAS A DEFAULT, deliberately. Null here means "this exercise has no
+     * protocol", not "leave whatever is stored alone", and a default would make forgetting an
+     * argument the way to silently strip a hangboard exercise of the values that decide which
+     * sets are its own.
      */
     suspend fun editExercise(
         id: Long,
         name: String,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
     ): ExerciseEdit {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return ExerciseEdit.Blank
         val stored = db.exercises().byId(id) ?: return ExerciseEdit.Gone
-        val key = exerciseIdentityKey(trimmed, stored.form, edgeMm, workSec, restSec)
+        val key = exerciseIdentityKey(trimmed, stored.form, workSec, restSec)
         // asked before it is attempted, so the ordinary collision is an answer rather than a
         // caught exception; the constraint is still there underneath as the thing that makes
         // the answer true
@@ -686,7 +683,7 @@ class ActivityRepository(private val db: AppDatabase) {
             if (clash.id != id) return ExerciseEdit.Taken(clash.name)
         }
         val touched = db.exercises().editIdentity(
-            id = id, name = trimmed, edgeMm = edgeMm, workSec = workSec, restSec = restSec,
+            id = id, name = trimmed, workSec = workSec, restSec = restSec,
             identityKey = key,
         )
         return if (touched == 0) ExerciseEdit.Gone else ExerciseEdit.Saved

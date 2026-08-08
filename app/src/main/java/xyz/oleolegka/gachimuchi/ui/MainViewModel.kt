@@ -443,9 +443,9 @@ class MainViewModel(
     }
 
     /**
-     * Creates a catalog exercise and immediately points the entry card at it. For holds,
-     * edge and protocol are part of the identity (§12-A) and are stored on the exercise
-     * rather than asked for on every set.
+     * Creates a catalog exercise and immediately points the entry card at it. For holds, the
+     * protocol is part of the identity (§12-A) and is stored on the exercise rather than asked
+     * for on every set.
      *
      * [then] receives the new row's id. It exists because creating an exercise mid-workout is
      * never the last step — the workout then asks what rest it should get, and that question
@@ -455,13 +455,12 @@ class MainViewModel(
     fun createExercise(
         name: String,
         form: ExerciseForm,
-        edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
         then: ((Long) -> Unit)? = null,
     ) {
         viewModelScope.launch {
-            val id = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            val id = repo.ensureExercise(name.trim(), form, workSec, restSec)
             _activeExerciseId.value = id
             then?.invoke(id)
         }

@@ -63,8 +63,8 @@ interface ExerciseDao {
     suspend fun byIdentityKey(key: String, spaceId: Long = LOCAL_SPACE_ID): ExerciseEntity?
 
     /**
-     * Corrects what an exercise IS: its name, its edge and its work:rest protocol, and with
-     * them the key those three and the form are folded into.
+     * Corrects what an exercise IS: its name and its work:rest protocol, and with them the key
+     * those two and the form are folded into.
      *
      * ── Why this is one statement and Room's `@Update` is gone ─────────────────
      * The whole-entity update used to exist here and was called from nowhere, which is how an
@@ -72,22 +72,21 @@ interface ExerciseDao {
      * have been worse than leaving it unused: a caller holding a stale entity would write back
      * `default_rest_sec`, `one_sided`, `hidden` and the rest from whatever it happened to be
      * holding, and — since `identity_key` is a constructor default — would silently recompute
-     * the key from the values in ITS copy. So the edit is a column list: the four things the
-     * editor owns, plus the key, in one write that cannot leave them disagreeing.
+     * the key from the values in ITS copy. So the edit is a column list: the things the editor
+     * owns, plus the key, in one write that cannot leave them disagreeing.
      *
      * Returns the number of rows touched, so a caller can tell "saved" from "that exercise is
      * gone". A key that is already taken raises a constraint failure rather than merging two
      * exercises; the repository turns that into a sentence.
      */
     @Query(
-        "UPDATE exercises SET name = :name, edge_mm = :edgeMm, protocol_work_sec = :workSec, " +
+        "UPDATE exercises SET name = :name, protocol_work_sec = :workSec, " +
             "protocol_rest_sec = :restSec, identity_key = :identityKey " +
             "WHERE space_id = :spaceId AND id = :id"
     )
     suspend fun editIdentity(
         id: Long,
         name: String,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         identityKey: String,
@@ -103,7 +102,7 @@ interface ExerciseDao {
      *
      * A one-column update rather than Room's @Update of a whole entity, for the same reason
      * [SlotDao.updateFields] is one: the caller here is "the user picked 2:30 while adding
-     * this to a workout" and it has no business rewriting the name, the edge or the protocol.
+     * this to a workout" and it has no business rewriting the name or the protocol.
      * Writing the entity back would overwrite those with whatever the caller happened to be
      * holding, which for a hangboard exercise means overwriting its IDENTITY (§12-A).
      */

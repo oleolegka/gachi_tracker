@@ -15,7 +15,7 @@ import kotlin.math.roundToInt
  *   weight at THAT SAME rep count. Strictly greater than the previous best, otherwise
  *   it is not a record. The first weighted set of an exercise is a baseline, not a
  *   record (no need to be noisy);
- * - holds: §12-A — edge and protocol are fixed by the exercise itself, so the tracked
+ * - holds: §12-A — the protocol is fixed by the exercise itself, so the tracked
  *   variable and the record are ADDED WEIGHT ([HoldSet.addedKg]). The "hung longer"
  *   axis ([HoldSet.holdSec]) is kept as a fallback for unweighted holds (a plank),
  *   where the weight never changes.
@@ -134,8 +134,8 @@ fun evaluateStrengthRecord(
 
 /**
  * Whether a new hold set breaks a record relative to the PREVIOUS sets of THE SAME
- * exercise (§12-A: one exercise = one edge and one protocol, which makes comparing
- * weights honest). Added weight wins; the seconds axis is for unweighted holds.
+ * exercise (§12-A: one exercise = one protocol, which makes comparing weights honest).
+ * Added weight wins; the seconds axis is for unweighted holds.
  */
 fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
     if (hold.warmup) return null

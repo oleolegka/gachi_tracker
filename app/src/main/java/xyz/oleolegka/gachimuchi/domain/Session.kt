@@ -21,8 +21,8 @@ import java.time.temporal.ChronoUnit
 
 /**
  * The catalog attributes the entry card needs, without dragging Room types into the
- * domain. For holds this carries the §12-A identity (edge and protocol), which is why
- * those two are never asked for per set: they belong to the exercise.
+ * domain. For holds this carries the §12-A identity (the protocol), which is why it is
+ * never asked for per set: it belongs to the exercise.
  */
 data class ExerciseRef(
     val id: Long,
@@ -38,7 +38,6 @@ data class ExerciseRef(
      * and cannot be merged with another device's, which is the honest consequence.
      */
     val uid: String? = null,
-    val edgeMm: Double? = null,
     val workSec: Double? = null,
     val restSec: Double? = null,
     /**
@@ -77,9 +76,6 @@ data class ExerciseRef(
             null
         }
 
-    /** Same rule for the edge: a non-positive one was never filled in. */
-    val edge: Double? = edgeMm?.takeIf { it > 0 }
-
     /** How the journal names this exercise — see [ExerciseLink]. */
     val link: ExerciseLink = ExerciseLink(uid, id)
 }
@@ -97,7 +93,7 @@ fun ActivityForm.activityName(): String = when (this) {
 // --- building a form out of what the entry card collected -----------------------------
 //
 // The builders exist so that a screen never constructs a payload by hand: an exercise
-// knows its own identity (id, name and — for holds — edge and protocol), and forgetting
+// knows its own identity (id, name and — for holds — the protocol), and forgetting
 // to pass one of those would silently split the history of one exercise in two.
 
 /**
@@ -131,8 +127,8 @@ fun strengthSetOf(
 }
 
 /**
- * A hold set. §12-A: edge and protocol come FROM THE EXERCISE and are written into the
- * payload as a snapshot — the entry card never asks for them.
+ * A hold set. §12-A: the protocol comes FROM THE EXERCISE and is written into the payload
+ * as a snapshot — the entry card never asks for it.
  */
 fun holdSetOf(
     exercise: ExerciseRef,
@@ -153,8 +149,8 @@ fun holdSetOf(
      *
      * NOT validated against that flag, deliberately. This builder runs inside the Add
      * button's own click handler, and a `require` here would come out as a crash on the one
-     * button the app is built around — the same reasoning the edge and the protocol are
-     * sanitised for rather than rejected. A one-sided exercise logged without a side is a
+     * button the app is built around — the same reasoning the protocol is sanitised for
+     * rather than rejected. A one-sided exercise logged without a side is a
      * defect the READERS report, out loud, where nobody is mid-set (see [holdRecord]).
      */
     side: HoldSide? = null,
@@ -166,10 +162,6 @@ fun holdSetOf(
     holdSec = holdSec?.takeIf { it > 0 },
     workSec = exercise.protocol?.first,
     restSec = exercise.protocol?.second,
-    // through [ExerciseRef.edge], for the same reason the reps above go through takeIf:
-    // a zero on the catalog row would be rejected by the validator and take the screen
-    // down at the moment the Add button is pressed
-    edgeMm = exercise.edge,
     // the sign survives: a hang off a band is recorded as a negative added weight, and
     // stripping it would silently turn "helped by 15 kg" into an unweighted hang
     addedKg = addedKg?.takeIf { it != 0.0 },

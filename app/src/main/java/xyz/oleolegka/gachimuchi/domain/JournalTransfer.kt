@@ -124,6 +124,14 @@ data class PortableEvent(
  * exercise comes back, and one thing about it is quietly the default. Every field is optional
  * with the same default the entity has, so that a file written before a column existed still
  * reads and lands on the same value a fresh row would.
+ *
+ * ── `edge_mm` used to be one of these fields, and is gone (schema version 18) ────
+ * The hangboard edge is no longer part of the domain model at all (see `MIGRATION_17_18` in
+ * `data/db/AppDatabase.kt`), so it is not written here any more either. A backup file that
+ * still carries an `"edge_mm"` key from before decodes fine and simply drops it —
+ * [journalFileJson] sets `ignoreUnknownKeys`. No payload rewrite was written for old files on
+ * disk; there was nothing to migrate, because a file is read once, on import, through exactly
+ * this class, and a class with no `edgeMm` field cannot read one back out.
  */
 @Serializable
 data class PortableExercise(
@@ -132,7 +140,6 @@ data class PortableExercise(
     /** Form code, the values of [ExerciseForm]. */
     @SerialName("form") val form: Int,
     @SerialName("created_at") val createdAt: String,
-    @SerialName("edge_mm") val edgeMm: Double? = null,
     @SerialName("protocol_work_sec") val protocolWorkSec: Double? = null,
     @SerialName("protocol_rest_sec") val protocolRestSec: Double? = null,
     @SerialName("default_rest_sec") val defaultRestSec: Int? = null,
@@ -475,7 +482,7 @@ data class ImportReport(
  * definition living in the file format would be a second thing to keep in step.
  */
 fun PortableExercise.identity(): ExerciseIdentity =
-    exerciseIdentity(name, form, edgeMm, protocolWorkSec, protocolRestSec)
+    exerciseIdentity(name, form, protocolWorkSec, protocolRestSec)
 
 /**
  * The backup's view of a catalog row — see [CatalogRow] for why this is one of four narrow
@@ -488,7 +495,6 @@ fun CatalogRow.toPortable(): PortableExercise = PortableExercise(
     name = name,
     form = form,
     createdAt = createdAt,
-    edgeMm = edgeMm,
     protocolWorkSec = protocolWorkSec,
     protocolRestSec = protocolRestSec,
     defaultRestSec = defaultRestSec,
