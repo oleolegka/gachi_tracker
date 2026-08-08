@@ -36,6 +36,7 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
@@ -43,8 +44,11 @@ import xyz.oleolegka.gachimuchi.domain.formFromEvent
 import xyz.oleolegka.gachimuchi.domain.toJsonObject
 import xyz.oleolegka.gachimuchi.domain.Workout
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.cardKey
 import xyz.oleolegka.gachimuchi.domain.bodyweightAt
 import xyz.oleolegka.gachimuchi.domain.ExerciseIdentity
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
@@ -268,6 +272,65 @@ class ActivityRepository(private val db: AppDatabase) {
             )
         )
     }
+
+    /**
+     * Marks one CARD of a workout done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. The per-card
+     * sibling of [finishWorkout]: a status, not a lock, and undone by
+     * [unfinishWorkoutExercise] rather than by a re-open, because there is nothing here to
+     * re-open.
+     *
+     * ── The second write ─────────────────────────────────────────────────────────
+     * Also states a fresh [TYPE_WORKOUT_ORDER_SET] that puts this card right after every card
+     * already finished and ahead of every one still active — see the note on
+     * [Workout.exercises]. That is what makes the finished group read in the order the cards
+     * were actually finished in: a plain fold of the flat order would only get that right by
+     * coincidence (the order the exercises happened to be added in), so the completion order
+     * is written down here the same way any other order this app cares about is — as an
+     * explicit event, not inferred.
+     *
+     * Skipped when [workoutId] names no live workout, or when [exercise] (at [side]) names no
+     * live card of it — the finish event is still written either way, exactly as
+     * [setWorkoutExerciseOrder] would be called with nothing to say if it ran off a workout
+     * that no longer exists; there is simply no order left to restate.
+     */
+    suspend fun finishWorkoutExercise(workoutId: Long, exercise: ExerciseLink, side: HoldSide? = null): Long {
+        val before = buildWorkout(allEvents(), workoutId)
+        val workoutUid = db.events().byId(workoutId)?.uid
+        val exerciseUid = exercise.uid ?: exercise.id?.let { db.exercises().byId(it)?.uid }
+        val id = db.events().insert(
+            event(
+                type = TYPE_WORKOUT_EXERCISE_FINISHED,
+                payload = payloadJson.encodeToString(
+                    WorkoutExerciseFinished(
+                        workoutId = workoutId, exerciseId = exercise.id, exerciseUid = exerciseUid,
+                        workoutUid = workoutUid, side = side?.code,
+                    )
+                ),
+                workoutId = workoutId,
+                workoutUid = workoutUid,
+            )
+        )
+        val target = before?.exercises?.firstOrNull { it.exercise.matches(exercise) && it.side == side }
+        if (before != null && target != null) {
+            val (doneAlready, stillActive) = before.exercises.partition { it.finished }
+            val newOrder = doneAlready + target + stillActive.filterNot { it.cardKey == target.cardKey }
+            setWorkoutExerciseOrder(workoutId, newOrder.map { OrderedCard(it.exercise, it.side) })
+        }
+        return id
+    }
+
+    /**
+     * Undoes [finishWorkoutExercise]: deletes its "card finished" event, the same reversal
+     * every other entry in this app gets ([deleteEntry]). No re-finish event and no restored
+     * position beyond whatever the flat order already says — the card rejoins the active
+     * group wherever [buildWorkout] now folds it to, which is right where it was left: at the
+     * top of the active group, since that is where a card sits immediately after the last one
+     * finished before it.
+     *
+     * Returns the id of the deletion, or null when [eventId] names no row here — the same
+     * "nothing to undo" answer [deleteEntry] gives.
+     */
+    suspend fun unfinishWorkoutExercise(eventId: Long): Long? = deleteEntry(eventId)
 
     /**
      * Opens a workout and returns its id, which IS the id of the event just written.
