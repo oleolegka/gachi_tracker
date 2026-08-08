@@ -104,9 +104,9 @@ class RunLoggingChainTest {
     private fun newController(): TimerController =
         TimerController(context).also { controllers += it }
 
-    private suspend fun hangs() = repo.exercise(
-        repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
-    )!!.toRef()
+    private suspend fun hangs() = repo.toRef(
+        repo.exercise(repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0))!!
+    )
 
     /** Lets the whole program elapse and delivers the alarm that notices it has. */
     private fun elapse(timer: TimerController, seconds: Int) {

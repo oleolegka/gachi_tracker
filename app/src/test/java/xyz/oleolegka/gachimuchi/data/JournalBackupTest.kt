@@ -117,9 +117,9 @@ class JournalBackupTest {
         repo.setOneSided(oneArmId, true)
         repo.setBodyweightShare(oneArmId, 0.65)
         repo.setLedByProtocol(oneArmId, false)
-        val bench = repo.exercise(benchId)!!.toRef()
-        val hangs = repo.exercise(hangsId)!!.toRef()
-        val boulder = repo.exercise(boulderId)!!.toRef()
+        val bench = repo.toRef(repo.exercise(benchId)!!)
+        val hangs = repo.toRef(repo.exercise(hangsId)!!)
+        val boulder = repo.toRef(repo.exercise(boulderId)!!)
 
         for ((index, day) in days.withIndex()) {
             repeat(3) { set ->
@@ -192,7 +192,9 @@ class JournalBackupTest {
             assertEquals(0, report.eventsAlreadyHere)
             assertEquals(4, report.exercisesAdded)
             assertEquals(1, report.slotsAdded)
-            assertEquals(1, report.programsAdded)
+            // three: the hand-written "Hangboard repeaters 7:3", plus the two minimal programs
+            // ensureExercise folded "Hangs" and "One-arm hang"'s own protocols into
+            assertEquals(3, report.programsAdded)
             assertEquals(0, report.plannedLinesSkipped)
             assertTrue(report.notes.isEmpty())
 
@@ -201,8 +203,9 @@ class JournalBackupTest {
             // and said once in the open, because the file text agreeing is a proof that reads
             // as an accident: every optional column of a catalog row came back as it was
             val oneArm = other.exercises().all().single { it.name == "One-arm hang" }
-            assertEquals(10.0, oneArm.protocolWorkSec!!, 1e-9)
-            assertEquals(5.0, oneArm.protocolRestSec!!, 1e-9)
+            val oneArmRef = ActivityRepository(other).toRef(oneArm)
+            assertEquals(10.0, oneArmRef.workSec!!, 1e-9)
+            assertEquals(5.0, oneArmRef.restSec!!, 1e-9)
             assertEquals(240, oneArm.defaultRestSec)
             assertEquals(false, oneArm.ledByProtocol)
             assertTrue(oneArm.oneSided)
@@ -345,7 +348,10 @@ class JournalBackupTest {
             assertEquals(listOf("Bench press", "Hangs"), named)
             assertEquals(listOf(150, null), slot.exercises.map { it.restSec })
 
-            val program = ProgramRepository(other).allPrograms().single()
+            // not the only program any more: ensureExercise now folds each hold exercise's own
+            // protocol into a library program too (see ActivityRepository's find-or-create
+            // logic), so "Hangboard repeaters 7:3" is picked out by name among the three
+            val program = ProgramRepository(other).allPrograms().single { it.name == "Hangboard repeaters 7:3" }
             assertEquals("Hangboard repeaters 7:3", program.name)
             assertEquals("Hangboard", program.category)
             assertEquals(15, program.prepareSec)
@@ -463,8 +469,14 @@ class JournalBackupTest {
         try {
             val report = JournalBackup(other, null).restore(gutted)
 
-            assertEquals(1, report.programsAdded)
-            assertNull(ProgramRepository(other).allPrograms().single().exerciseId)
+            // three programs still arrive (the library is not filtered by whether its exercise
+            // survived the gutting), and TWO of them named "Hangs" — the hand-written
+            // "Hangboard repeaters 7:3" and the one ensureExercise folded "Hangs"'s own protocol
+            // into — so both come back unlinked; "One-arm hang"'s own protocol program is
+            // unaffected, since that exercise was not removed
+            assertEquals(3, report.programsAdded)
+            val unlinked = ProgramRepository(other).allPrograms().filter { it.exerciseId == null }
+            assertEquals(2, unlinked.size)
             assertTrue(report.notes.any { it.contains("unlinked") })
         } finally {
             other.close()
@@ -491,11 +503,23 @@ class JournalBackupTest {
             )
             JournalBackup(other, null).restore(accepted(text))
 
+            // four now, not two: the phone's export also carries the minimal programs
+            // ensureExercise folded "Hangs" and "One-arm hang"'s own protocols into, which name
+            // nothing this phone already has and arrive unremarkably — the point of this test is
+            // only the two that DO clash by name
             val names = ProgramRepository(other).allPrograms().map { it.name }
             assertEquals(
-                listOf("Hangboard repeaters 7:3", "Hangboard repeaters 7:3 (imported)"),
-                names,
+                "the local hand-tuned program must not be overwritten",
+                1,
+                names.count { it == "Hangboard repeaters 7:3" },
             )
+            assertTrue(
+                "the clashing import is kept apart rather than merged over it",
+                "Hangboard repeaters 7:3 (imported)" in names,
+            )
+            assertTrue("Hangs protocol" in names)
+            assertTrue("One-arm hang protocol" in names)
+            assertEquals(4, names.size)
         } finally {
             other.close()
         }

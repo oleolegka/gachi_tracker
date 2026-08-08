@@ -6,10 +6,16 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.robolectric.annotation.Config
+import xyz.oleolegka.gachimuchi.data.ActivityRepository
+import xyz.oleolegka.gachimuchi.data.ProgramRepository
+import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import java.time.LocalDate
@@ -38,19 +44,37 @@ class FormDetailScreenTest : ScreenTest() {
 
     private val today = LocalDate.parse("2026-08-07")
 
-    private val hangs = ExerciseEntity(
-        id = 1,
-        name = "Hangs",
-        form = ExerciseForm.HOLD.code,
-        createdAt = "2026-08-01T10:00:00",
-        protocolWorkSec = 7.0,
-        protocolRestSec = 3.0,
-    )
+    /**
+     * `rememberExerciseEditor()` reaches for the PROCESS-WIDE database directly (see its own
+     * KDoc: a documented deviation from the callback architecture the rest of the app uses), so
+     * a screen test that wants the correction dialog to open on real values has to put them in
+     * THAT database, not only in the [UiState] this screen is handed. Written through the real
+     * repositories rather than by hand, so the row is exactly what a live app would have built —
+     * `ensureExercise` is what folds "Hangs"'s protocol into a library program in the first
+     * place, the same as it would on a phone.
+     */
+    private val realDb by lazy { AppDatabase.get(ApplicationProvider.getApplicationContext()) }
+
+    private val hangs: ExerciseEntity by lazy {
+        runBlocking {
+            val repo = ActivityRepository(realDb)
+            val id = repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+            repo.exercise(id)!!
+        }
+    }
+
+    private val hangsProgram: WorkoutProgram by lazy {
+        runBlocking { ProgramRepository(realDb).programById(hangs.protocolProgramId!!)!! }
+    }
 
     private fun detail(exercise: ExerciseEntity = hangs) {
         screen {
             FormDetailScreen(
-                state = UiState(exercises = listOf(exercise), loading = false),
+                state = UiState(
+                    exercises = listOf(exercise),
+                    programsById = mapOf(hangs.protocolProgramId!! to hangsProgram),
+                    loading = false,
+                ),
                 exerciseId = exercise.id,
                 today = today,
                 onClose = {},

@@ -26,6 +26,8 @@ import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.exerciseEntity
+import xyz.oleolegka.gachimuchi.ui.protocolProgram
+import xyz.oleolegka.gachimuchi.ui.protocolProgramIdFor
 import xyz.oleolegka.gachimuchi.ui.slot
 import java.time.LocalDate
 
@@ -484,6 +486,10 @@ class SlotEditorTest : ScreenTest() {
                     exercises = listOf(
                         exerciseEntity(1, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0),
                         exerciseEntity(2, "Hangs", ExerciseForm.HOLD, workSec = 10.0, restSec = 5.0),
+                    ),
+                    programsById = mapOf(
+                        protocolProgramIdFor(1) to protocolProgram(1, "Hangs", 7.0, 3.0),
+                        protocolProgramIdFor(2) to protocolProgram(2, "Hangs", 10.0, 5.0),
                     ),
                     loading = false,
                 ),

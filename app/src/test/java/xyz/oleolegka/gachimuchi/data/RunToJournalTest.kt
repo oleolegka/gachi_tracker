@@ -61,9 +61,9 @@ class RunToJournalTest {
     @After
     fun tearDown() = db.close()
 
-    private suspend fun hangs() = repo.exercise(
-        repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
-    )!!.toRef()
+    private suspend fun hangs() = repo.toRef(
+        repo.exercise(repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0))!!
+    )
 
     // --- a run becoming a journal entry ----------------------------------------------------
 

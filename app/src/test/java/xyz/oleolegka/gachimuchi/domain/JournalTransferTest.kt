@@ -33,15 +33,14 @@ class JournalTransferTest {
         uid: String,
         name: String = "Bench press",
         form: Int = ExerciseForm.STRENGTH.code,
-        work: Double? = null,
-        rest: Double? = null,
+        /** The protocol program's uid, or null for no protocol — see [PortableExercise]. */
+        programUid: String? = null,
     ) = PortableExercise(
         uid = uid,
         name = name,
         form = form,
         createdAt = "2026-08-01T09:00:00",
-        protocolWorkSec = work,
-        protocolRestSec = rest,
+        protocolProgramUid = programUid,
     )
 
     private fun program(uid: String, name: String = "Tabata 20:10") = PortableProgramRow(
@@ -286,10 +285,21 @@ class JournalTransferTest {
      */
     @Test
     fun `a different protocol or form keeps two histories apart`() {
-        val stored = listOf(exercise("0198c2ef-0000-7000-8000-000000000001", "Hangs", ExerciseForm.HOLD.code, work = 7.0, rest = 3.0))
+        val stored = listOf(
+            exercise(
+                "0198c2ef-0000-7000-8000-000000000001", "Hangs", ExerciseForm.HOLD.code,
+                programUid = "0198c2ef-0000-7000-8000-0000000000e1",
+            )
+        )
 
-        val otherProtocol = exercise("0198c2ef-0000-7000-8000-000000000003", "Hangs", ExerciseForm.HOLD.code, work = 10.0, rest = 5.0)
-        val otherForm = exercise("0198c2ef-0000-7000-8000-000000000004", "Hangs", ExerciseForm.DURATION.code, work = 7.0, rest = 3.0)
+        val otherProtocol = exercise(
+            "0198c2ef-0000-7000-8000-000000000003", "Hangs", ExerciseForm.HOLD.code,
+            programUid = "0198c2ef-0000-7000-8000-0000000000e2",
+        )
+        val otherForm = exercise(
+            "0198c2ef-0000-7000-8000-000000000004", "Hangs", ExerciseForm.DURATION.code,
+            programUid = "0198c2ef-0000-7000-8000-0000000000e1",
+        )
 
         val merge = mergeExercises(listOf(otherProtocol, otherForm), stored)
 

@@ -68,7 +68,7 @@ class WorkoutFlowTest {
     fun tearDown() = db.close()
 
     private suspend fun ref(name: String, form: ExerciseForm, work: Double? = null, rest: Double? = null) =
-        repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!.toRef()
+        repo.toRef(repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!)
 
     @Test
     fun `start, add two exercises, log sets, and the workout folds back out of the journal`() = runTest {
@@ -309,7 +309,7 @@ class WorkoutFlowTest {
         val stored = repo.exercise(bench.id)!!
         assertEquals(150, stored.defaultRestSec)
         // and it is what the next workout would be offered, ahead of anything derived
-        assertEquals(150, restHintSec(TimerSettings(), repo.allEvents(), stored.toRef()))
+        assertEquals(150, restHintSec(TimerSettings(), repo.allEvents(), repo.toRef(stored)))
     }
 
     @Test
@@ -331,7 +331,7 @@ class WorkoutFlowTest {
         assertEquals(240, stored.defaultRestSec)
         assertEquals(ExerciseForm.HOLD.code, stored.form)
         assertEquals("Hangs", stored.name)
-        assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
+        assertEquals(7.0, repo.toRef(stored).workSec!!, 1e-9)
 
         // and saying nothing about the rest leaves the remembered one alone
         repo.ensureExercise("hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
@@ -348,9 +348,9 @@ class WorkoutFlowTest {
         repo.setLedByProtocol(hangs.id, false)
         val stored = repo.exercise(hangs.id)!!
         assertEquals(false, stored.ledByProtocol)
-        assertFalse(ledByProtocol(stored.toRef()))
+        assertFalse(ledByProtocol(repo.toRef(stored)))
         // the protocol itself is untouched — it is still part of the exercise's identity
-        assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
+        assertEquals(7.0, repo.toRef(stored).workSec!!, 1e-9)
     }
 
     // --- the plan a workout was started from, and the name it was started under -----------

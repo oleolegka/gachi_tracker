@@ -72,8 +72,8 @@ class ExerciseCatalogTest {
         val tenFive = hangs(10.0, 5.0)
         assertNotEquals("the second protocol got the first protocol's row", sevenThree, tenFive)
 
-        val sevenThreeRef = repo.exercise(sevenThree)!!.toRef()
-        val tenFiveRef = repo.exercise(tenFive)!!.toRef()
+        val sevenThreeRef = repo.toRef(repo.exercise(sevenThree)!!)
+        val tenFiveRef = repo.toRef(repo.exercise(tenFive)!!)
         repeat(3) { repo.record(holdSetOf(sevenThreeRef, "2026-08-01", addedKg = 20.0, holdSec = 7.0)) }
         repo.record(holdSetOf(tenFiveRef, "2026-08-01", addedKg = 5.0, holdSec = 10.0))
 
@@ -118,14 +118,15 @@ class ExerciseCatalogTest {
     fun `a stored row carries the key its own columns say it should`() = runTest {
         val id = hangs()
         val stored = repo.exercise(id)!!
+        val programUid = db.programs().programById(stored.protocolProgramId!!)!!.uid
 
         assertEquals(
-            exerciseIdentityKey("Hangs", ExerciseForm.HOLD.code, 7.0, 3.0),
+            exerciseIdentityKey("Hangs", ExerciseForm.HOLD.code, programUid),
             stored.identityKey,
         )
         // and the normalized name is what is in it, so spelling cannot split a history
         assertEquals(
-            exerciseIdentityKey("  hangs  ", ExerciseForm.HOLD.code, 7.0, 3.0),
+            exerciseIdentityKey("  hangs  ", ExerciseForm.HOLD.code, programUid),
             stored.identityKey,
         )
     }
@@ -135,7 +136,7 @@ class ExerciseCatalogTest {
     @Test
     fun `renaming an exercise keeps every set it had`() = runTest {
         val id = repo.ensureExercise("Bencj press", ExerciseForm.STRENGTH)
-        val ref = repo.exercise(id)!!.toRef()
+        val ref = repo.toRef(repo.exercise(id)!!)
         repeat(4) { repo.record(strengthSetOf(ref, "2026-08-01", reps = 5, weightKg = 70.0)) }
 
         assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Bench press", null, null))
@@ -144,7 +145,7 @@ class ExerciseCatalogTest {
         assertEquals("Bench press", stored.name)
         assertEquals(exerciseIdentityKey("Bench press", ExerciseForm.STRENGTH.code), stored.identityKey)
         // the sets never moved: they name the row by uid, and the uid did not change
-        assertEquals(4, strengthSetsOfExercise(repo.allEvents(), stored.toRef().link).size)
+        assertEquals(4, strengthSetsOfExercise(repo.allEvents(), repo.toRef(stored).link).size)
         // and the corrected name is findable, while the typo is not
         assertEquals(id, repo.ensureExercise("Bench press", ExerciseForm.STRENGTH))
         assertNotEquals(id, repo.ensureExercise("Bencj press", ExerciseForm.STRENGTH))
@@ -163,15 +164,16 @@ class ExerciseCatalogTest {
     @Test
     fun `correcting a protocol moves the catalog and leaves the sets saying what they said`() = runTest {
         val id = hangs(7.0, 3.0)
-        val before = repo.exercise(id)!!.toRef()
+        val before = repo.toRef(repo.exercise(id)!!)
         repo.record(holdSetOf(before, "2026-08-01", addedKg = 10.0, holdSec = 7.0))
 
         assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Hangs", workSec = 10.0, restSec = 5.0))
 
         val after = repo.exercise(id)!!
-        assertEquals(10.0, after.protocolWorkSec!!, 1e-9)
-        assertEquals(5.0, after.protocolRestSec!!, 1e-9)
-        val sets = holdSetsOfExercise(repo.allEvents(), after.toRef().link)
+        val afterRef = repo.toRef(after)
+        assertEquals(10.0, afterRef.workSec!!, 1e-9)
+        assertEquals(5.0, afterRef.restSec!!, 1e-9)
+        val sets = holdSetsOfExercise(repo.allEvents(), afterRef.link)
         assertEquals("the set has to stay with the exercise", 1, sets.size)
         assertEquals("the snapshot on the set is not rewritten", 7.0, sets.single().workSec!!, 1e-9)
     }
@@ -186,7 +188,7 @@ class ExerciseCatalogTest {
         assertTrue("expected a refusal, got $result", result is ExerciseEdit.Taken)
         assertEquals("Hangs", (result as ExerciseEdit.Taken).name)
         // and nothing moved
-        assertEquals(7.0, repo.exercise(sevenThree)!!.protocolWorkSec!!, 1e-9)
+        assertEquals(7.0, repo.toRef(repo.exercise(sevenThree)!!).workSec!!, 1e-9)
         assertEquals(2, repo.allExercises().size)
     }
 
@@ -216,7 +218,7 @@ class ExerciseCatalogTest {
     @Test
     fun `hiding an exercise keeps the row and everything logged against it`() = runTest {
         val id = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH)
-        val ref = repo.exercise(id)!!.toRef()
+        val ref = repo.toRef(repo.exercise(id)!!)
         repeat(3) { repo.record(strengthSetOf(ref, "2026-08-01", reps = 5, weightKg = 70.0)) }
 
         repo.setHidden(id, true)
@@ -224,7 +226,7 @@ class ExerciseCatalogTest {
         val stored = repo.exercise(id)!!
         assertTrue(stored.hidden)
         assertEquals(1, repo.allExercises().size)
-        assertEquals(3, strengthSetsOfExercise(repo.allEvents(), stored.toRef().link).size)
+        assertEquals(3, strengthSetsOfExercise(repo.allEvents(), repo.toRef(stored).link).size)
 
         repo.setHidden(id, false)
         assertFalse(repo.exercise(id)!!.hidden)
