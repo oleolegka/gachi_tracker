@@ -225,8 +225,12 @@ data class WorkoutLogActions(
      * (§13.5): the plate goes on before you get under the cable, so that is when the app can
      * ask without being in the way. Null means nothing was asked — see [WorkoutLogScreen] for
      * the rule that decides.
+     *
+     * [side] names the CARD that was tapped, the same as [addExercise] does — a one-sided
+     * exercise led by its protocol still draws two cards, and this is what stops both of them
+     * leading to one run that cannot say which hand it counted.
      */
-    val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?) -> Unit,
+    val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?, side: HoldSide?) -> Unit,
 
     /** Go back to the set already running. It has never stopped; this only shows it again. */
     val openConductor: () -> Unit,
@@ -315,6 +319,8 @@ fun WorkoutLogScreen(
     var entrySide by rememberSaveable { mutableStateOf<String?>(null) }
     /** The exercise whose protocol-led set is waiting on the weight question, or null. */
     var weighingFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** Which CARD [weighingFor] was raised from — the same idea as [entrySide], for the other tap. */
+    var weighingSide by rememberSaveable { mutableStateOf<String?>(null) }
     /**
      * The card whose removal is being confirmed, by [WorkoutExercise.cardKey] rather than by
      * catalog id: a block can be there for an exercise this phone has no catalog row for, and
@@ -507,10 +513,12 @@ fun WorkoutLogScreen(
                          * carries a protocol and is still led by weight — §13.2), and the
                          * protocol has to actually be there for a run to be built out of it.
                          *
-                         * NOT side-aware: which hand a protocol-led set was done with is out of
-                         * scope for this change (the program-running path keeps its own side, or
-                         * lack of one, for another day) — both of a one-sided exercise's cards
-                         * that also carry a protocol lead to the same run.
+                         * NOW side-aware: `exercise.side` is which of the two cards this tap
+                         * landed on, and it is passed straight through to the run — the same
+                         * value the manual entry form below is handed as `entrySide` — so a
+                         * one-sided exercise's two protocol-led cards lead to two runs that
+                         * each know which hand they counted, instead of one run that knows
+                         * neither.
                          */
                         ledByProtocol(ref) && ref.protocol != null -> {
                             {
@@ -521,9 +529,10 @@ fun WorkoutLogScreen(
                                  * and no screens at all.
                                  */
                                 if (lastAddedKg(state, ref) == null) {
-                                    actions.startProtocolSet(ref, null)
+                                    actions.startProtocolSet(ref, null, exercise.side)
                                 } else {
                                     weighingFor = ref.id
+                                    weighingSide = exercise.side?.code
                                 }
                             }
                         }
@@ -664,10 +673,11 @@ fun WorkoutLogScreen(
             exerciseName = ref.name,
             initialKg = lastAddedKg(state, ref),
             onConfirm = { kg ->
-                actions.startProtocolSet(ref, kg)
+                actions.startProtocolSet(ref, kg, weighingSide?.let(HoldSide::fromCode))
                 weighingFor = null
+                weighingSide = null
             },
-            onDismiss = { weighingFor = null },
+            onDismiss = { weighingFor = null; weighingSide = null },
         )
     } }
 
