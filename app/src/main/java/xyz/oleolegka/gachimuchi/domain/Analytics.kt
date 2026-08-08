@@ -325,8 +325,7 @@ private fun formsOf(
  */
 private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.filter { ev ->
     when (val form = ev.form) {
-        is StrengthSet -> !form.warmup
-        is HoldSet -> !form.warmup
+        is LoadedSet -> !form.warmup
         else -> true
     }
 }
@@ -852,8 +851,7 @@ private val SET_TYPES: List<String> = listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET)
  * it would let a cautious session outscore a hard one.
  */
 fun isWorkingSet(form: ActivityForm): Boolean = when (form) {
-    is StrengthSet -> !form.warmup
-    is HoldSet -> !form.warmup
+    is LoadedSet -> !form.warmup
     else -> false
 }
 

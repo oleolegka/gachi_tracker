@@ -285,6 +285,23 @@ sealed interface ActivityForm {
 }
 
 /**
+ * Common interface of the two forms that carry a WEIGHT — [StrengthSet] and [HoldSet]. The five
+ * members below are identical in name and type on both (see each field's own doc, on either
+ * form, for what it means); this interface exists so that code which only cares "is this set
+ * loaded, and if so how much" can match ONE branch instead of two hand-paired `is StrengthSet,
+ * is HoldSet ->` branches. The payoff is at the type checker: a future change to the weight
+ * model that touches this interface turns every one of those call sites into a compile error
+ * instead of a branch nobody remembered to update.
+ */
+sealed interface LoadedSet : ActivityForm {
+    val addedKg: Double?
+    val ownWeight: Boolean
+    val bodyweightKg: Double?
+    val warmup: Boolean
+    val restAfterSec: Double?
+}
+
+/**
  * A strength set, weight x reps. ONE EVENT = ONE SET.
  *
  * [weightKg] is the absolute weight of the implement and is incompatible with
@@ -316,8 +333,8 @@ data class StrengthSet(
      * Zero is not storable (see [requireNonZeroOrNull]): a clean body-weight set says so by
      * leaving the field out.
      */
-    @SerialName("added_kg") val addedKg: Double? = null,
-    @SerialName("own_weight") val ownWeight: Boolean = false,
+    @SerialName("added_kg") override val addedKg: Double? = null,
+    @SerialName("own_weight") override val ownWeight: Boolean = false,
     /**
      * WHAT YOU WEIGHED when this set was recorded, in kilograms, or null when nothing was
      * known — a snapshot taken from the last weigh-in on or before [opDate].
@@ -336,7 +353,7 @@ data class StrengthSet(
      * Null stays legal and means the honest thing: nobody had stepped on the scales by then.
      * Such a set contributes nothing to tonnage, exactly as it did before this field existed.
      */
-    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    @SerialName("bodyweight_kg") override val bodyweightKg: Double? = null,
     /**
      * Whether this was a WARM-UP set rather than a working one.
      *
@@ -353,13 +370,13 @@ data class StrengthSet(
      * Defaulted to false, so every entry written before this field existed reads as a
      * working set — which is what it was, since there was no way to say otherwise.
      */
-    @SerialName("warmup") val warmup: Boolean = false,
+    @SerialName("warmup") override val warmup: Boolean = false,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
-    @SerialName("rest_after_sec") val restAfterSec: Double? = null,
+    @SerialName("rest_after_sec") override val restAfterSec: Double? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("exercise_key") val exerciseKey: String = requireKey("exercise", exercise),
-) : ActivityForm {
+) : LoadedSet {
     override val type: String get() = TYPE_STRENGTH_SET
     override val key: String get() = exerciseKey
 
@@ -409,12 +426,12 @@ data class HoldSet(
     @SerialName("work_sec") val workSec: Double? = null,
     @SerialName("rest_sec") val restSec: Double? = null,
     @SerialName("edge_mm") val edgeMm: Double? = null,
-    @SerialName("added_kg") val addedKg: Double? = null,
-    @SerialName("own_weight") val ownWeight: Boolean = false,
+    @SerialName("added_kg") override val addedKg: Double? = null,
+    @SerialName("own_weight") override val ownWeight: Boolean = false,
     /** What you weighed when this hang was recorded — see [StrengthSet.bodyweightKg]. */
-    @SerialName("bodyweight_kg") val bodyweightKg: Double? = null,
+    @SerialName("bodyweight_kg") override val bodyweightKg: Double? = null,
     /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
-    @SerialName("warmup") val warmup: Boolean = false,
+    @SerialName("warmup") override val warmup: Boolean = false,
     /**
      * Which hand (or foot) this set was done with — one of [HoldSide]'s codes, or null for a
      * set done with both.
@@ -431,10 +448,10 @@ data class HoldSet(
     @SerialName("side") val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
-    @SerialName("rest_after_sec") val restAfterSec: Double? = null,
+    @SerialName("rest_after_sec") override val restAfterSec: Double? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
-) : ActivityForm {
+) : LoadedSet {
     override val type: String get() = TYPE_HOLD_SET
     override val key: String get() = activityKey
 

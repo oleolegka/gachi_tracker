@@ -28,6 +28,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
@@ -328,10 +329,15 @@ class MainViewModel(
         val exercise = form.exerciseLink() ?: return null
         val events = repo.allEvents()
         return when (form) {
-            is StrengthSet ->
-                evaluateStrengthRecord(strengthSetsOfExercise(events, exercise), form.weightKg, form.reps)
+            // outward one branch — LoadedSet is the only pair with a record model; which record
+            // function applies still depends on the concrete form, so that stays nested
+            is LoadedSet -> when (form) {
+                is StrengthSet ->
+                    evaluateStrengthRecord(strengthSetsOfExercise(events, exercise), form.weightKg, form.reps)
 
-            is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
+                is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
+            }
+
             else -> null
         }
     }
