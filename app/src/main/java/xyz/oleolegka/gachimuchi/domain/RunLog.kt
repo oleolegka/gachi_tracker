@@ -312,6 +312,12 @@ private fun isoDateOf(wallMs: Long, zone: ZoneId): String =
  * Sets edited down to zero reps are dropped: that is how the offer says "this one did not
  * happen". The pause is written on every set but the last, because there is no pause after
  * the last one, and an empty [ExerciseRef] form other than a hold yields nothing at all.
+ *
+ * [CompletedSet.workSec] is written as [HoldSet.holdSec] on every set, not left for the
+ * catalog's protocol snapshot to stand in for later. It is the ONE source that is exact here —
+ * the run counted this many seconds of this many hangs, not "whatever the exercise is set to
+ * today" — and unlike the entry card, this path always knows it: there is no length left for
+ * the user to type in.
  */
 fun holdSetsFromRun(
     exercise: ExerciseRef,
@@ -327,6 +333,7 @@ fun holdSetsFromRun(
             opDate = opDate,
             addedKg = addedKg,
             reps = set.reps,
+            holdSec = set.workSec.toDouble(),
             restAfterSec = if (index < live.lastIndex) set.restAfterSec?.toDouble() else null,
         )
     }

@@ -42,6 +42,7 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
 import xyz.oleolegka.gachimuchi.domain.dayWatchDelayMs
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.actualRestSec
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
 import xyz.oleolegka.gachimuchi.domain.exerciseLink
@@ -184,8 +185,21 @@ class MainViewModel(
      * side by side, and starting one for an exercise that already has one replaces only that
      * one.
      *
-     * The duration is resolved AFTER the write, so the gap that has just been measured (the
-     * pause before this very set) is part of what the offer is based on.
+     * The new floor's duration is resolved AFTER the write, so the gap that has just been
+     * measured (the pause before this very set) is part of what the offer is based on.
+     *
+     * ── The OLD floor closes the loop on the set BEFORE this one ────────────────
+     * If an exercise already had a floor running, that floor's [xyz.oleolegka.gachimuchi.domain.RestFloor.startedAtWallMs]
+     * is the wall-clock moment its own previous set was recorded — the one honest reading of
+     * how long the rest between them actually was, rather than [xyz.oleolegka.gachimuchi.domain.secondsBetween]'s
+     * guess from two write times. It is read and turned into an amendment BEFORE the write
+     * below, because after it the new set would itself become "the previous set" and
+     * [ActivityRepository.recordActualRest] would target the wrong row.
+     *
+     * This deliberately does NOT require [TimerSettings.autoStartRest] to still be on: that
+     * setting only decides whether a NEW floor starts, further down. A floor already running
+     * is a fact about a rest that genuinely happened, and turning autoStartRest off between two
+     * sets is not a reason to stop believing the clock that already ran.
      */
     fun addSet(form: ActivityForm, attachToWorkout: Boolean = true, intoWorkoutId: Long? = null) {
         viewModelScope.launch {
@@ -193,13 +207,7 @@ class MainViewModel(
             // BEFORE the write, or the set would be compared against itself and no set
             // would ever be a record
             val record = if (worthAPicture) recordBrokenBy(form) else null
-            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
-            if (worthAPicture) {
-                _celebrations.tryEmit(
-                    CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
-                )
-            }
-            val settings = timer.settings.value
+
             /*
              * TRAINING TYPED UP AFTER THE FACT IS SILENT (§13.6). A rest that ended a
              * fortnight ago is not something to wait out, and a countdown starting while
@@ -207,6 +215,7 @@ class MainViewModel(
              * own, not this class's idea of today, so the rule holds however stale that is.
              */
             val live = form.opDate == LocalDate.now().toString()
+            val settings = timer.settings.value
             /*
              * A floor belongs to an exercise: it is drawn under that exercise's card and it
              * says that exercise's name out loud. A set recorded against nothing has nowhere
@@ -215,6 +224,18 @@ class MainViewModel(
              * form which one day does not cannot produce a floor called "null".
              */
             val exerciseId = form.exerciseId
+            if (live && timer.enabled.value && startsRest(form) && exerciseId != null) {
+                timer.floors.floors.value.firstOrNull { it.exerciseId == exerciseId }
+                    ?.actualRestSec(System.currentTimeMillis())
+                    ?.let { repo.recordActualRest(form.exerciseLink()!!, it) }
+            }
+
+            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
+            if (worthAPicture) {
+                _celebrations.tryEmit(
+                    CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
+                )
+            }
             if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
                 val exercise = repo.exercise(exerciseId)
                 /*

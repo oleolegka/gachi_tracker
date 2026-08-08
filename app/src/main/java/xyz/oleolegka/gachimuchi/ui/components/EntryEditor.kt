@@ -93,6 +93,7 @@ fun EntryEditorDialog(
     var pace by remember(entry) { mutableStateOf(initialPace(entry)) }
     var warmup by remember(entry) { mutableStateOf(initialWarmup(entry)) }
     var side by remember(entry) { mutableStateOf((entry as? HoldSet)?.sideOf) }
+    var holdSeconds by remember(entry) { mutableStateOf(initialHoldSec(entry)) }
 
     /*
      * The whole validation story in one expression: build what would be written, and let the
@@ -100,7 +101,7 @@ fun EntryEditorDialog(
      * is exactly the question the confirm button needs answered.
      */
     val candidate = runCatching {
-        amended(entry, day, weight, reps, minutes, km, pace, warmup, side)
+        amended(entry, day, weight, reps, minutes, km, pace, warmup, side, holdSeconds)
     }.getOrNull()
 
     AlertDialog(
@@ -148,6 +149,14 @@ fun EntryEditorDialog(
                             onValueChange = { reps = it },
                             steps = listOf(1.0),
                             decimal = false,
+                        )
+                        // the length of one hold — see [HoldSet.holdSec] and the note on the
+                        // same field in ui/screens/LogScreen.kt's HoldEntry
+                        StepperField(
+                            label = "Hold time, s",
+                            value = holdSeconds,
+                            onValueChange = { holdSeconds = it },
+                            steps = listOf(1.0, 5.0),
                         )
                         if (oneSided || entry.sideOf != null) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -304,6 +313,10 @@ private fun initialWarmup(entry: ActivityForm): Boolean = when (entry) {
     else -> false
 }
 
+/** The length of one hold, or blank for anything else — [HoldSet] is the only form that has one. */
+private fun initialHoldSec(entry: ActivityForm): String =
+    (entry as? HoldSet)?.holdSec?.let(::formatNumber).orEmpty()
+
 /**
  * The entry as the drafts would have it.
  *
@@ -326,6 +339,7 @@ private fun amended(
     pace: String,
     warmup: Boolean,
     side: HoldSide?,
+    holdSeconds: String = "",
 ): ActivityForm {
     val weightValue = parseNumber(weight)
     val repsValue = parseCount(reps)
@@ -347,6 +361,7 @@ private fun amended(
         is HoldSet -> entry.copy(
             addedKg = weightValue?.takeIf { it != 0.0 },
             reps = repsValue?.takeIf { it > 0 },
+            holdSec = parseNumber(holdSeconds)?.takeIf { it > 0 },
             warmup = warmup,
             side = side?.code,
             opDate = day,

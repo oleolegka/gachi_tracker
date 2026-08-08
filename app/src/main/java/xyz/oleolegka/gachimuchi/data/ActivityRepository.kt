@@ -25,6 +25,8 @@ import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
+import xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET
+import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
@@ -43,6 +45,8 @@ import xyz.oleolegka.gachimuchi.domain.OrderedExercise
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_ORDER_SET
 import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.exerciseLink
+import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
@@ -178,6 +182,38 @@ class ActivityRepository(private val db: AppDatabase) {
                 // both links, and the uid is the one the reducers believe: see EventEntity
                 workoutId = workout?.id, workoutUid = workout?.uid,
             )
+        )
+    }
+
+    /**
+     * Writes the ACTUALLY MEASURED rest onto the previous live set of [exercise], as an
+     * amendment — see [xyz.oleolegka.gachimuchi.domain.actualRestSec] for what "actually
+     * measured" means and where the number comes from (a rest floor's wall-clock start).
+     *
+     * ── Why this refuses to be part of [record] ──────────────────────────────────
+     * The set this corrects is not the one being written — it is the ONE BEFORE IT, already in
+     * the journal. [record] appends; this amends, and folding the two into one method would
+     * make one call do two different kinds of write to two different rows, which is exactly the
+     * confusion [amendEntry] exists to keep separate from ordinary recording.
+     *
+     * ── MUST be called before the set that measured it is written ─────────────────
+     * "The previous set" is found by asking for the LAST live set of this exercise right now.
+     * Call this after the new set has already landed and that search finds the new set instead
+     * — the one this call is trying to correct rests BEFORE, not the one it is itself the rest
+     * after. See [xyz.oleolegka.gachimuchi.ui.MainViewModel.addSet], the only caller, for the
+     * order that keeps this true.
+     *
+     * Returns the id of the amendment, or null when [exercise] has no live set yet to amend —
+     * its very first set of a session, which is the honest case where there is nothing to
+     * correct because nothing was rested for.
+     */
+    suspend fun recordActualRest(exercise: ExerciseLink, actualRestSec: Double): Long? {
+        val target = readActivities(allEvents(), listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET))
+            .lastOrNull { it.form.exerciseLink()?.matches(exercise) == true }
+            ?: return null
+        return amendEntry(
+            target.id,
+            JsonObject(mapOf("rest_after_sec" to JsonPrimitive(actualRestSec))),
         )
     }
 

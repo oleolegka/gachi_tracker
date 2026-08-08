@@ -24,6 +24,7 @@ import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
 import xyz.oleolegka.gachimuchi.domain.loggingDay
+import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
@@ -548,5 +549,60 @@ class WorkoutFlowTest {
         val before = repo.eventCount()
         assertNull(repo.renameWorkout(9999L, "Nowhere"))
         assertEquals(before, repo.eventCount())
+    }
+
+    // --- the actual rest a floor measured, written onto the set it was the rest AFTER --------
+    //
+    // [ActivityRepository.recordActualRest] stands in for [MainViewModel.addSet] reading a
+    // rest floor and turning its elapsed wall-clock time into a number - the floor itself
+    // (domain/Floors.kt) is Android timer state and does not belong in a Room test, but what
+    // it produces (a number of seconds) and where that number lands both do.
+
+    @Test
+    fun `a floor's measured rest lands on the set before it, not on the gap between writes`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val firstId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+
+        /*
+         * Standing in for MainViewModel.addSet: a floor had genuinely been counting down for
+         * 90 seconds when the next set was about to be recorded. The two repository calls
+         * below happen back to back with no real pause between them, so the gap the OLD
+         * mechanism would have derived from the two write times is a few milliseconds - nothing
+         * like 90 seconds. If this test read the wrong number, it would read close to zero.
+         */
+        repo.recordActualRest(bench.link, 90.0)
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5))
+
+        val first = readActivities(repo.allEvents()).single { it.id == firstId }.form as StrengthSet
+        assertEquals(90.0, first.restAfterSec!!, 1e-9)
+
+        // and the session feed - what the screen actually draws - reads the same number,
+        // through the EXPLICIT rest path rather than the derived one (see [explicitRestAfter]);
+        // buildSession prefers it first and only falls back to the write-time gap otherwise
+        val sets = buildSession(repo.allEvents(), day).groups.single().sets
+        assertEquals(2, sets.size)
+        assertEquals(90.0, sets[1].restBeforeSec!!, 1e-9)
+    }
+
+    /** The first set of an exercise has no earlier set of its own to have rested after. */
+    @Test
+    fun `an exercise's first set has nothing to measure a rest against`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        assertNull(repo.recordActualRest(bench.link, 45.0))
+        assertEquals(0, repo.eventCount())
+    }
+
+    /** A floor belongs to one exercise; it must never amend a set of a different one. */
+    @Test
+    fun `a floor for one exercise never amends another exercise's set`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val squat = ref("Squat", ExerciseForm.STRENGTH)
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+
+        // a floor was running for squat, which has no set yet - there is nothing of squat's
+        // to amend, and bench's set (the only live set in the journal) must stay untouched
+        assertNull(repo.recordActualRest(squat.link, 60.0))
+        val benchSet = readActivities(repo.allEvents()).single().form as StrengthSet
+        assertNull("a floor that was never bench's must not touch bench's set", benchSet.restAfterSec)
     }
 }

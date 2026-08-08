@@ -39,7 +39,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1085,6 +1085,80 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 16 -> 17: the length of ONE hold is now recorded on the set that used it.
+         *
+         * [xyz.oleolegka.gachimuchi.domain.HoldSet.holdSec] existed in the payload from the
+         * start, but nothing ever wrote it — the entry card asked for added weight and reps and
+         * never for how long a hang lasted, so every hold set in every journal has always
+         * carried a null there. The cost was quiet: a protocol-led hold could still get a
+         * length by falling back to its exercise's work:rest snapshot ([HoldSet.workSec], see
+         * [xyz.oleolegka.gachimuchi.domain.holdSecondsUnderTension]), but the record axis
+         * ([xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord]) reads `hold_sec` ALONE and
+         * never that fallback, so "hung longer" could not fire, ever, for any hold in any
+         * journal — and a hold with no protocol at all (a plank) had no length recorded
+         * anywhere, not even for the volume chart.
+         *
+         * ── The backfill, and its one honest limit ───────────────────────────────────
+         * No column changes here — `hold_sec` is a payload field, not a table column — so this
+         * is a payload rewrite exactly like [MIGRATION_13_14]'s body-weight snapshot. Every
+         * existing `hold_set` row that carries a protocol snapshot (`work_sec`) and no
+         * `hold_sec` of its own gets `hold_sec` set to that snapshot: for a protocol-led hold
+         * the two ARE the same number by definition (§12-A), so this invents nothing.
+         *
+         * A hold with no protocol snapshot — the unweighted plank, an old hangboard set logged
+         * before the exercise carried a protocol at all — is left exactly as it was. There is no
+         * honest number to give it: nobody recorded how long that hold lasted, and inventing an
+         * average would be training data the user never produced.
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `payload` FROM `events` WHERE `type` = 'hold_set'"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withHoldSecFromProtocol(c.getString(1))?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * One `hold_set` payload with `hold_sec` filled in from its own `work_sec` snapshot, or
+         * null when there is nothing to do — `hold_sec` already stated, no protocol snapshot to
+         * copy from, or a payload that will not parse.
+         *
+         * "Already stated" means a NUMBER already there, for the reason spelled out on
+         * [withExerciseUid]: `encodeDefaults` writes `"hold_sec": null` for a build that knows
+         * the field and has nothing to put in it, and reading that key's mere presence as "done"
+         * would skip every row this migration exists for.
+         */
+        private fun withHoldSecFromProtocol(payload: String): String? {
+            val json = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(payload)
+            }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+
+            val already = (json["hold_sec"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toDoubleOrNull()
+            if (already != null) return null
+
+            val work = (json["work_sec"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toDoubleOrNull()
+            if (work == null || work <= 0) return null
+
+            return kotlinx.serialization.json.JsonObject(
+                json + ("hold_sec" to kotlinx.serialization.json.JsonPrimitive(work))
+            ).toString()
+        }
+
+        /**
          * Gives every catalog row the key its own columns say it should have, renaming the
          * second row of a colliding pair so that the unique index can be created at all.
          *
@@ -1323,6 +1397,7 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+            MIGRATION_16_17,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

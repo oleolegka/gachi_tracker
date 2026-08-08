@@ -552,13 +552,15 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
+    var holdSeconds by remember(exercise.id, last) { mutableStateOf(last?.holdSec?.let(::formatNumber) ?: "") }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
     var side by remember(exercise.id, last) { mutableStateOf<HoldSide?>(null) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
+    val holdSecValue = parseNumber(holdSeconds)
     val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
-        warmup == last.warmup && side == last.sideOf
+        holdSecValue == last.holdSec && warmup == last.warmup && side == last.sideOf
     // only a one-sided exercise owes an answer; on any other one a null side is what "both
     // hands" has always meant and always will
     val sideMissing = exercise.oneSided && side == null
@@ -575,6 +577,19 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         onValueChange = { reps = it },
         steps = listOf(1.0),
         decimal = false,
+    )
+    /*
+     * THE LENGTH OF ONE HOLD, in seconds — see [HoldSet.holdSec]. Nothing else here can supply
+     * it: the catalog's work:rest protocol is a plan, not a record of what this set actually
+     * did, and a hold with no protocol at all (a plank) has no other source for it whatsoever.
+     * Left blank the set is stored exactly as it always was — nothing invented for a length
+     * nobody stated.
+     */
+    StepperField(
+        label = "Hold time, s",
+        value = holdSeconds,
+        onValueChange = { holdSeconds = it },
+        steps = listOf(1.0, 5.0),
     )
     if (exercise.oneSided) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -607,7 +622,7 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         onAddSet(
             holdSetOf(
                 exercise = exercise, opDate = opDate, addedKg = weightValue, reps = repsValue,
-                warmup = warmup, side = side,
+                holdSec = holdSecValue, warmup = warmup, side = side,
             )
         )
     }
