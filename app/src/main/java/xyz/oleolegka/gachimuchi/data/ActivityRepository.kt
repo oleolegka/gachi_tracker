@@ -644,64 +644,39 @@ class ActivityRepository(private val db: AppDatabase) {
     }
 
     /**
-     * Corrects what an exercise is: the name it was given, the protocol it is run at. The
-     * form is deliberately absent — see below.
+     * Corrects what an exercise is CALLED. The protocol and the form are both absent — see
+     * below for the protocol, and the class-level note above [editExercise] used to carry for
+     * the form (that reasoning is unchanged: a payload's shape must not move under history that
+     * was already written in it).
+     *
+     * ── Why the protocol left this method entirely ───────────────────────────────
+     * It used to be a parameter here, resolved through the same find-or-create logic
+     * [ensureExercise] uses and then repointed onto the row — "correcting a typo in the
+     * catalog's claim about itself". The owner's rule closes that door: "such a thing cannot
+     * happen: it breaks the statistics. If yesterday it was one protocol and today another,
+     * that is a NEW exercise." An existing exercise's protocol — INCLUDING having none at all —
+     * is therefore not a value this method can be handed; [ExerciseEntity.protocolProgramId] is
+     * carried across UNCHANGED, exactly as [stored] already has it.
      *
      * ── What this does to the history, said out loud ───────────────────────────
      * Nothing is rewritten, and the sets do not move. Every set names its exercise by uid, so
-     * they all stay with this row and its records, charts and totals are computed over the
-     * same sets as before.
-     *
-     * What DOES change is what those sets mean. A hangboard set carries a SNAPSHOT of the
-     * protocol it was performed at (see HoldSet), so after correcting a protocol from 7:3 to
-     * 10:5 the row says 10:5 while sets recorded before the correction still say 7:3. That is
-     * the honest record of a typo being fixed: the sets were performed under whatever the user
-     * actually used, and the app was never told. It is also the record of a genuine mistake if
-     * the edit is wrong — an exercise really trained at 7:3, relabelled 10:5, now has a history
-     * that claims a protocol it was never run at.
-     *
-     * The app cannot tell those two apart, so it does neither automatically. THIS EDIT IS FOR
-     * CORRECTING WHAT THE CATALOG SAYS, not for recording a change of training. An exercise
-     * that has genuinely moved to a different protocol is a different exercise under §12-A and
-     * should be created as one; it will then have its own history from that day, which is what
-     * actually happened.
-     *
-     * ── Why the form cannot be changed ─────────────────────────────────────────
-     * The form decides the SHAPE of the payload a set is written in. Changing it would leave
-     * every set already logged in the old shape, read by a screen expecting the new one — a
-     * strength history that the hold reducers cannot read, in the one place where being able
-     * to read the history is the whole product. Getting the form wrong means creating the
-     * exercise again and hiding the mistake.
+     * they all stay with this row and its records, charts and totals are computed over the same
+     * sets as before — same as it always was, minus the one door this method used to open onto
+     * the protocol underneath them.
      *
      * Returns what happened, because the identity is unique in the schema and "there is
-     * already an exercise like that" is a normal answer the user has to be given rather than
-     * a crash.
-     *
-     * NEITHER NUMBER HAS A DEFAULT, deliberately. Null here means "this exercise has no
-     * protocol", not "leave whatever is stored alone", and a default would make forgetting an
-     * argument the way to silently strip a hangboard exercise of the values that decide which
-     * sets are its own.
+     * already an exercise like that" is a normal answer the user has to be given rather than a
+     * crash — a rename CAN still collide: two exercises created on the identical protocol pair
+     * share one library program (see `resolveOrCreateProtocolProgram`'s "found" rule), and
+     * renaming one to the other's name collides on (name, form, program uid) exactly as it
+     * always could.
      */
-    suspend fun editExercise(
-        id: Long,
-        name: String,
-        workSec: Double?,
-        restSec: Double?,
-    ): ExerciseEdit {
+    suspend fun editExercise(id: Long, name: String): ExerciseEdit {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return ExerciseEdit.Blank
         val stored = db.exercises().byId(id) ?: return ExerciseEdit.Gone
-        /*
-         * Found-or-created exactly as [ensureExercise] does it — and never the program the
-         * exercise used to point at. A correction repoints [ExerciseEntity.protocolProgramId]
-         * to whatever this resolves to; the OLD program's blocks are never touched here, which
-         * is what keeps "correcting the catalog's claim about itself, old sets keep their
-         * historical snapshot" true without ever mutating a program another exercise might
-         * share (see the long comment on why protocol correction is allowed at all, in
-         * ui/components/ExerciseEditor.kt's EditExerciseDialog).
-         */
-        val program = resolveOrCreateProtocolProgram(trimmed, workSec, restSec)
-        val key = exerciseIdentityKey(trimmed, stored.form, program?.uid)
+        val programUid = stored.protocolProgramId?.let { programRepo.programById(it)?.uid }
+        val key = exerciseIdentityKey(trimmed, stored.form, programUid)
         // asked before it is attempted, so the ordinary collision is an answer rather than a
         // caught exception; the constraint is still there underneath as the thing that makes
         // the answer true
@@ -709,10 +684,9 @@ class ActivityRepository(private val db: AppDatabase) {
             if (clash.id != id) return ExerciseEdit.Taken(clash.name)
         }
         val touched = db.exercises().editIdentity(
-            id = id, name = trimmed, programId = program?.id,
+            id = id, name = trimmed, programId = stored.protocolProgramId,
             identityKey = key,
         )
-        if (touched != 0) linkProtocolProgramIfUnclaimed(program, id)
         return if (touched == 0) ExerciseEdit.Gone else ExerciseEdit.Saved
     }
 

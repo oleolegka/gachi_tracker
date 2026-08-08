@@ -88,6 +88,8 @@ fun TimerScreen(
     onRunProgram: (WorkoutProgram) -> Unit,
     onEditProgram: (WorkoutProgram?) -> Unit,
     onDeleteProgram: (Long) -> Unit,
+    /** Hides a program from the list below, or brings a hidden one back into it. */
+    onToggleHiddenProgram: (WorkoutProgram) -> Unit,
     onImportPrograms: (List<WorkoutProgram>) -> Unit,
     onSettings: (TimerSettings) -> Unit,
     onEnable: () -> Unit,
@@ -97,8 +99,18 @@ fun TimerScreen(
     val colors = LocalGachiColors.current
     // owns the pickers and the dialogs of exporting and importing; see ProgramTransfer.kt
     val transfer = rememberProgramTransfer(onImported = onImportPrograms)
-    val sections = remember(programs) { programSections(programs) }
+    /*
+     * Hidden programs are dropped HERE and only here, the same boundary
+     * ExercisePicker.kt's PickExisting draws for a hidden exercise: this is the list read
+     * while looking for something to run or file, and a program stopped being reached for is
+     * clutter in it and nowhere else. The row itself keeps running exactly as before — see
+     * ProgramEntity.hidden — and stays reachable in the tray at the bottom of this screen.
+     */
+    val visiblePrograms = remember(programs) { programs.filter { !it.hidden } }
+    val hiddenPrograms = remember(programs) { programs.filter { it.hidden } }
+    val sections = remember(visiblePrograms) { programSections(visiblePrograms) }
     var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var hiddenTrayOpen by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -145,7 +157,7 @@ fun TimerScreen(
             }
         }
 
-        if (programs.isEmpty()) {
+        if (visiblePrograms.isEmpty() && hiddenPrograms.isEmpty()) {
             item {
                 /*
                  * A heading with two buttons under it and nothing in between reads as a
@@ -200,6 +212,39 @@ fun TimerScreen(
                         onEdit = { onEditProgram(program) },
                         onExport = { transfer.export(listOf(program)) },
                         onDelete = { onDeleteProgram(program.id) },
+                        onToggleHidden = { onToggleHiddenProgram(program) },
+                    )
+                }
+            }
+        }
+
+        /*
+         * Hidden programs are still here, collapsed by default — the same "$count hidden -
+         * show" idea [SectionHeader] already draws for a closed category, reused so a program
+         * put away is never a program nobody can find again. Unlike an exercise (brought back
+         * only from FormDetailScreen, reached from its own history) a program has no other
+         * screen it lives on, so the tray has to be it.
+         */
+        if (hiddenPrograms.isNotEmpty()) {
+            item(key = "hidden-programs-header") {
+                SectionHeader(
+                    title = "Hidden",
+                    count = hiddenPrograms.size,
+                    collapsed = !hiddenTrayOpen,
+                    onToggle = { hiddenTrayOpen = !hiddenTrayOpen },
+                )
+            }
+            if (hiddenTrayOpen) {
+                items(hiddenPrograms, key = { "hidden-${it.id}" }) { program ->
+                    ProgramCard(
+                        program = program,
+                        enabled = state.enabled,
+                        exerciseName = exerciseNames[program.exerciseId],
+                        onRun = { onRunProgram(program) },
+                        onEdit = { onEditProgram(program) },
+                        onExport = { transfer.export(listOf(program)) },
+                        onDelete = { onDeleteProgram(program.id) },
+                        onToggleHidden = { onToggleHiddenProgram(program) },
                     )
                 }
             }
@@ -390,6 +435,7 @@ private fun ProgramCard(
     onEdit: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
+    onToggleHidden: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
     Card(Modifier.fillMaxWidth().clickable(onClick = onEdit)) {
@@ -415,6 +461,7 @@ private fun ProgramCard(
                 }
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onExport) { Text("Export") }
+                TextButton(onClick = onToggleHidden) { Text(if (program.hidden) "Show" else "Hide") }
                 TextButton(onClick = onDelete) { Text("Delete") }
             }
         }

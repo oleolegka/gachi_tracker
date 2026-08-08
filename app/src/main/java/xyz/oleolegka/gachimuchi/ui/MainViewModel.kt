@@ -629,6 +629,11 @@ class MainViewModel(
         viewModelScope.launch { programRepo.delete(id) }
     }
 
+    /** Keeps a program out of the library list, or brings it back — see `ProgramEntity.hidden`. */
+    fun setProgramHidden(id: Long, hidden: Boolean) {
+        viewModelScope.launch { programRepo.setHidden(id, hidden) }
+    }
+
     /**
      * Stores programs read out of a file. Nothing is replaced: a name that is already taken
      * gets a mark rather than overwriting the program that has it (see [withUniqueNames]).
