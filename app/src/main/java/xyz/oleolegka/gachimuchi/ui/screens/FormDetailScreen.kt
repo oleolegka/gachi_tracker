@@ -30,12 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
+import xyz.oleolegka.gachimuchi.data.toSibling
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRecord
 import xyz.oleolegka.gachimuchi.domain.FormSeries
 import xyz.oleolegka.gachimuchi.domain.Granularity
-import xyz.oleolegka.gachimuchi.domain.HoldSibling
 import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
@@ -490,11 +489,5 @@ private fun historySpanDays(trend: FormSeries?, volume: FormSeries?, today: Loca
     return ChronoUnit.DAYS.between(LocalDate.parse(first.opDate), today).toInt().coerceAtLeast(0)
 }
 
-/** Catalog row -> the sibling record the §12-A switcher is built from. */
-private fun ExerciseEntity.toSibling() = HoldSibling(
-    exerciseId = id,
-    name = name,
-    edgeMm = edgeMm,
-    workSec = protocolWorkSec,
-    restSec = protocolRestSec,
-)
+// ExerciseEntity.toSibling() has moved to data/CatalogMapping.kt: a screen is not the place
+// to describe how the table is read (see domain/Catalog.kt's CatalogRow).

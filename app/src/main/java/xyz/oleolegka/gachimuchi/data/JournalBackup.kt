@@ -13,7 +13,6 @@ import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.ImportReport
 import xyz.oleolegka.gachimuchi.domain.JournalFile
 import xyz.oleolegka.gachimuchi.domain.PortableEvent
-import xyz.oleolegka.gachimuchi.domain.PortableExercise
 import xyz.oleolegka.gachimuchi.domain.PortablePlannedExercise
 import xyz.oleolegka.gachimuchi.domain.PortableProgramRow
 import xyz.oleolegka.gachimuchi.domain.PortableSettings
@@ -382,20 +381,8 @@ class JournalBackup(
     }
 }
 
-private fun ExerciseEntity.toPortable(): PortableExercise = PortableExercise(
-    uid = uid,
-    name = name,
-    form = form,
-    createdAt = createdAt,
-    edgeMm = edgeMm,
-    protocolWorkSec = protocolWorkSec,
-    protocolRestSec = protocolRestSec,
-    defaultRestSec = defaultRestSec,
-    ledByProtocol = ledByProtocol,
-    oneSided = oneSided,
-    bodyweightShare = bodyweightShare,
-    hidden = hidden,
-)
+// ExerciseEntity.toPortable() has moved to data/CatalogMapping.kt, alongside the rest of the
+// catalog row's views.
 
 /**
  * Where the preferences in a backup come from and go to.

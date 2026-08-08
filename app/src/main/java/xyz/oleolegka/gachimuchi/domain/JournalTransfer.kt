@@ -478,6 +478,27 @@ fun PortableExercise.identity(): ExerciseIdentity =
     exerciseIdentity(name, form, edgeMm, protocolWorkSec, protocolRestSec)
 
 /**
+ * The backup's view of a catalog row — see [CatalogRow] for why this is one of four narrow
+ * views built off the one place that reads the entity, rather than a fifth place that reads it
+ * again. [id] is dropped: it is local plumbing (domain/Catalog.kt), and the file refers to
+ * everything by [CatalogRow.uid] instead.
+ */
+fun CatalogRow.toPortable(): PortableExercise = PortableExercise(
+    uid = uid,
+    name = name,
+    form = form,
+    createdAt = createdAt,
+    edgeMm = edgeMm,
+    protocolWorkSec = protocolWorkSec,
+    protocolRestSec = protocolRestSec,
+    defaultRestSec = defaultRestSec,
+    ledByProtocol = ledByProtocol,
+    oneSided = oneSided,
+    bodyweightShare = bodyweightShare,
+    hidden = hidden,
+)
+
+/**
  * How the catalog in a file lines up with the catalog on this phone.
  *
  * [aliases] maps a uid in the FILE to the uid already stored that it turned out to mean. It is
