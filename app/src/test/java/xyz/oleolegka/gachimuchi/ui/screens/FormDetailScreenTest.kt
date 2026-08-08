@@ -143,7 +143,9 @@ class FormDetailScreenTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Fixed.", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("create it as a new", substring = true).assertIsDisplayed()
+        // the screen opens the sentence, so the C is capital - and this matcher is case
+        // sensitive, which is what made the lower-cased version of this line fail
+        compose.onNodeWithText("Create it as a new", substring = true).assertIsDisplayed()
         // and the form is stated as the thing that cannot move either
         compose.onNodeWithText("The form stays holds", substring = true).assertIsDisplayed()
     }

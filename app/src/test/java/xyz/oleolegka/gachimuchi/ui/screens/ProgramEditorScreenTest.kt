@@ -1,15 +1,13 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
@@ -23,7 +21,15 @@ import xyz.oleolegka.gachimuchi.ui.ScreenTest
  * The refusal itself is enforced in `ProgramRepository.save` (see `ProgramFreezeTest`, `data`
  * package); what this checks is that the screen does not even OFFER the controls that would
  * then silently do nothing — see [ProgramEditorScreen]'s own KDoc on `locked`.
+ *
+ * ── Why this class gets a window taller than the base one ───────────────────────
+ * The unlocked editor is longer than a phone screen, and "Add a group" sits under the fold.
+ * Scrolling to it is not an option here: [ScreenTest] holds the animation clock still on
+ * purpose, and a scroll is an animation — `performScrollToNode` then waits for a scroll that
+ * can never finish and the test hangs forever rather than failing. A window tall enough to
+ * hold the whole editor asks the same question without the animation.
  */
+@Config(sdk = [34], qualifiers = "w600dp-h1600dp-xhdpi")
 class ProgramEditorScreenTest : ScreenTest() {
 
     private val repeaters = WorkoutProgram(
@@ -87,8 +93,6 @@ class ProgramEditorScreenTest : ScreenTest() {
         compose.onNodeWithText(
             "Get ready before the first effort, seconds", substring = true,
         ).assertIsDisplayed()
-        // below the fold in the lazy list; bring it into existence before asserting on it
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Add a group"))
         compose.onNodeWithText("Add a group").assertIsDisplayed()
     }
 }
