@@ -6,14 +6,17 @@ import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.OrderedExercise
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_ORDER_SET
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
 import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
+import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
@@ -80,6 +83,24 @@ class Journal {
             "${day}T$at:00",
             workoutId,
         )
+
+    /**
+     * States the order the exercises of a workout are to be done in, WHOLE — the row a drag
+     * writes. By exercise number, which is what a journal this app wrote on one phone carries.
+     */
+    fun setExerciseOrder(
+        workoutId: Long,
+        day: String,
+        vararg exercises: ExerciseRef,
+        at: String = "09:20",
+    ) = add(
+        TYPE_WORKOUT_ORDER_SET,
+        payloadJson.encodeToString(
+            WorkoutOrder(workoutId, exercises.map { OrderedExercise(exerciseId = it.id) })
+        ),
+        "${day}T$at:00",
+        workoutId,
+    )
 
     fun strengthSet(
         exercise: ExerciseRef,

@@ -73,7 +73,8 @@ val EyebrowStyle = TextStyle(
     fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
 )
 
-private val CardRadius = 14.dp
+/** Public because anything drawing its own shadow behind a card has to match its corner. */
+val CardRadius = 14.dp
 private val PanelRadius = 18.dp
 
 /**

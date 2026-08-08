@@ -77,6 +77,86 @@ data class WorkoutFinished(
     @SerialName("workout_uid") val workoutUid: String? = null,
 )
 
+/**
+ * "This is the order I want the exercises of that workout in."
+ *
+ * A SERVICE event like [TYPE_WORKOUT_FINISHED]: it records no training, it is absent from
+ * [ACTIVITY_TYPES], and every reducer that folds sets ignores it.
+ *
+ * ── Why the order needs an event at all ─────────────────────────────────────────
+ * It did not have one, and the order was the order the exercises were ADDED in — recovered
+ * from the journal rather than stored anywhere. That is a sound default and a wrong fact: a
+ * machine is taken while you are warming up, you do the next thing instead, and the list on
+ * the phone now disagrees with the session being done. The journal is append-only, so the
+ * order cannot be fixed by editing the past. It has to be said again, later, in a new row.
+ *
+ * ── Why the WHOLE order and not "move this one after that one" ──────────────────
+ * Both would work with one device. Only this one is safe with two:
+ *
+ *  - LAST WRITER WINS, with nothing to resolve. Two phones that both reordered the same
+ *    workout merge into one list — the later row's — instead of into a sequence of moves whose
+ *    result depends on which order they are replayed in.
+ *  - THE ORDER CANNOT BE PARTIAL. A move names a neighbour, and a neighbour can have been
+ *    removed from the workout by the time the move is read; the result is then undefined and
+ *    every reader gets to invent it. A full list has no neighbours to lose.
+ *  - The fold is one pass and a list lookup, rather than a replay with its own history.
+ *
+ * What it costs, stated: the row records a RESULT and not an intention, so nothing in the
+ * journal knows that "bench moved to the top" — only that the order became this. And the
+ * payload grows with the number of exercises in the workout, which at one row per drag and a
+ * handful of exercises per session is nothing worth optimising.
+ *
+ * ── An exercise added afterwards goes to the END ────────────────────────────────
+ * Decided in [buildWorkout] and by the row NUMBERS rather than by the payload: an exercise
+ * whose first row in this workout is newer than the order event could not have been meant by
+ * it, so it lands after everything the event named. That covers the ordinary case (add an
+ * exercise mid-session, it appears at the bottom where "add" always puts things) and the awkward
+ * one (an exercise removed and later added back returns to the end rather than teleporting into
+ * the slot it used to hold).
+ */
+const val TYPE_WORKOUT_ORDER_SET = "workout_order_set"
+
+/**
+ * Payload of [TYPE_WORKOUT_ORDER_SET] — the workout, and its exercises in the wanted order.
+ *
+ * The workout is named here as well as in the columns for the reason spelled out on
+ * [WorkoutExerciseAdded]: an exported or merged journal is a stream of events with none of this
+ * app's columns, and the row still has to land in the right workout.
+ *
+ * [order] may name exercises this workout does not (or no longer) contain, and may leave out
+ * exercises it does. Neither is an error — see [buildWorkout] — because the journal it describes
+ * keeps changing after it is written and there is nothing to go back and correct.
+ */
+@Serializable
+data class WorkoutOrder(
+    @SerialName("workout_id") val workoutId: Long,
+    @SerialName("order") val order: List<OrderedExercise>,
+    @SerialName("workout_uid") val workoutUid: String? = null,
+)
+
+/**
+ * One exercise named by an order event, said the same two ways every other row names one.
+ *
+ * [exerciseUid] is the identity and [exerciseId] the local row number it replaced; the readers
+ * go through [ExerciseLink] and believe the identity, for the reason on [ExerciseLink.matches].
+ * An entry naming NEITHER identifies nothing, and a payload carrying one is refused here rather
+ * than silently shifting every exercise after it by one place.
+ */
+@Serializable
+data class OrderedExercise(
+    @SerialName("exercise_id") val exerciseId: Long? = null,
+    @SerialName("exercise_uid") val exerciseUid: String? = null,
+) {
+    init {
+        require(exerciseId != null || exerciseUid != null) {
+            "workout_order_set: an entry must name an exercise by uid or by id"
+        }
+    }
+}
+
+/** The pair read as one reference, so no reader picks for itself which half wins. */
+fun OrderedExercise.link(): ExerciseLink = ExerciseLink(exerciseUid, exerciseId)
+
 /** One exercise inside a workout, with the rest chosen for it and the sets it collected. */
 data class WorkoutExercise(
     /** Which exercise this is, said as fully as the rows that mentioned it managed to. */
@@ -151,7 +231,14 @@ data class Workout(
      * head a card with fall back to the time of day rather than to the plan's current name.
      */
     val name: String?,
-    /** Exercises IN THE ORDER THEY WERE ADDED, including ones with no sets yet. */
+    /**
+     * Exercises IN THE ORDER THEY ARE TO BE DONE, including ones with no sets yet.
+     *
+     * Which is the order they were added in until somebody says otherwise, and the order the
+     * last [TYPE_WORKOUT_ORDER_SET] row states once they have — a machine being occupied is not
+     * a reason to do the session in the order it was sketched in. Folded by [buildWorkout], so
+     * every screen showing a workout shows the same one.
+     */
     val exercises: List<WorkoutExercise>,
     /**
      * Entries recorded during the workout that name no exercise — in practice a weigh-in,
@@ -232,8 +319,9 @@ data class Workout(
 fun JournalEvent.workoutRef(): WorkoutRef? {
     val added = workoutExerciseAddedOrNull()
     val done = workoutFinishedOrNull()
-    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid
-    val id = workoutId ?: added?.workoutId ?: done?.workoutId
+    val ordered = workoutOrderOrNull()
+    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid ?: ordered?.workoutUid
+    val id = workoutId ?: added?.workoutId ?: done?.workoutId ?: ordered?.workoutId
     return if (uid == null && id == null) null else WorkoutRef(uid, id)
 }
 
@@ -251,6 +339,21 @@ fun JournalEvent.workoutFinishedOrNull(): WorkoutFinished? =
         null
     } else {
         runCatching { payloadJson.decodeFromString<WorkoutFinished>(payload) }.getOrNull()
+    }
+
+/**
+ * Payload of an order row, or null for any other row and for an unreadable one.
+ *
+ * Null for a DAMAGED one on purpose, same rule as everywhere else here: an order that will not
+ * parse leaves the workout in the order it was added in, which is the answer the app gave before
+ * this event existed. The alternative — throwing — takes down the screen somebody is holding in
+ * a gym over a row that only decides which card is drawn first.
+ */
+fun JournalEvent.workoutOrderOrNull(): WorkoutOrder? =
+    if (type != TYPE_WORKOUT_ORDER_SET) {
+        null
+    } else {
+        runCatching { payloadJson.decodeFromString<WorkoutOrder>(payload) }.getOrNull()
     }
 
 /**
@@ -337,15 +440,21 @@ private fun isFinished(events: List<JournalEvent>, startRow: JournalEvent): Bool
  * Folds one workout out of the journal, or null when [workoutId] names no start event here.
  *
  * ── The order of the exercises ──────────────────────────────────────────────────
- * The order they were ADDED IN, which is the order the workout is meant to be done in and
- * the order the screen has to show. An exercise enters the list on its first appearance,
- * whether that is an explicit "added" event or simply the first set recorded under it — a
- * set logged for an exercise nobody added is real training and cannot be left out of the
- * workout it happened in.
+ * The order they were ADDED IN, unless somebody has said otherwise — see
+ * [TYPE_WORKOUT_ORDER_SET]. Added order is the default and not the rule: it is what a workout
+ * nobody has reordered means, and it stays the answer for every exercise the last order event
+ * did not name. An exercise enters the list on its first appearance, whether that is an explicit
+ * "added" event or simply the first set recorded under it — a set logged for an exercise nobody
+ * added is real training and cannot be left out of the workout it happened in.
  *
  * Adding an exercise that is already in the list does not reorder it; it only updates the
  * rest, last one winning. That is how changing your mind about the pause is expressed in an
  * append-only journal — there is nothing to edit, so you say it again.
+ *
+ * The LAST live order event wins, by journal order — the same "say it again" rule the rest
+ * uses. Live, because the fold below runs on [liveEvents]: deleting an order event brings the
+ * one before it back, and deleting them all brings back the order things were added in. There
+ * is no separate "undo the reordering", for the same reason there is no "re-open the workout".
  *
  * ── The date ────────────────────────────────────────────────────────────────────
  * A set inside a workout is understood to belong to the WORKOUT's op_date, so a backdated
@@ -378,12 +487,22 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val rests = HashMap<String, Int>()
     val addedRows = HashMap<String, MutableList<Long>>()
     val unkeyed = ArrayList<ActivityEvent>()
+    /*
+     * The FIRST row that put each exercise in this workout, which is what decides whether an
+     * order event could have meant it — see [reordered]. The first and not the last: adding an
+     * exercise again to change its rest must not make it look newly arrived and send it to the
+     * bottom of a list the user has just arranged.
+     */
+    val firstRow = HashMap<String, Long>()
     var finished = false
+    var order: WorkoutOrder? = null
+    var orderRowId = 0L
 
-    fun remember(link: ExerciseLink): String {
+    fun remember(link: ExerciseLink, rowId: Long): String {
         val key = link.key
         links[key] = links[key]?.mergedWith(link) ?: link
         sets.getOrPut(key) { mutableListOf() }
+        firstRow.putIfAbsent(key, rowId)
         return key
     }
 
@@ -395,16 +514,27 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             finished = true
             continue
         }
+        val stated = row.workoutOrderOrNull()
+        if (stated != null) {
+            // last one wins, and an unreadable one is simply not the last one
+            order = stated
+            orderRowId = row.id
+            continue
+        }
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
-            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId))
+            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id)
             rests[key] = added.restSec
             addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
         val activity = live[row.id] ?: continue
         val link = activity.form.exerciseLink()
-        if (link == null) unkeyed += activity else sets.getValue(remember(link)) += activity
+        if (link == null) unkeyed += activity else sets.getValue(remember(link, row.id)) += activity
+    }
+
+    val blocks = sets.map { (key, ofExercise) ->
+        WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty())
     }
 
     return Workout(
@@ -416,12 +546,55 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         // a name of nothing but spaces is nobody having named it, decided here rather than
         // in each screen that would otherwise draw a blank heading
         name = started?.name?.takeIf { it.isNotBlank() },
-        exercises = sets.map { (key, ofExercise) ->
-            WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty())
-        },
+        exercises = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks,
         entriesWithoutExercise = unkeyed,
         finished = finished,
     )
+}
+
+/**
+ * [blocks] rearranged to match [wanted], with everything [wanted] could not have meant left in
+ * the order it was added in, at the end.
+ *
+ * ── Every way an order event can be out of date, and what each does ─────────────
+ * The event describes a workout that keeps changing after the row is written, and the journal
+ * cannot go back and correct it. So all four cases are ordinary rather than exceptional, and
+ * none of them may cost the reader a card:
+ *
+ *  - an entry naming an exercise that has since been REMOVED from the workout matches no block
+ *    and is skipped — the exercise drops out of the order the way it dropped out of the workout;
+ *  - an entry naming an exercise this workout never held (a merged journal, a hand-edited row)
+ *    is the same case and is skipped for the same reason, rather than being allowed to throw;
+ *  - a block the event does not name at all keeps its place at the END, in added order. That is
+ *    what an exercise added since is, and it is also what an order event that named only half
+ *    the workout leaves behind;
+ *  - a block whose first row is NEWER than the order row could not have been meant by it, even
+ *    if an entry names it. That is the exercise removed and later added back: the stale entry
+ *    would otherwise pull it into the slot it used to have, and "added" has always meant "at
+ *    the bottom".
+ *
+ * A duplicate entry (the same exercise twice) claims a block once — [taken] — so the second
+ * mention finds nothing and is skipped. Nothing this app writes contains one; a merged journal
+ * might, and duplicating the card would be the one answer that invents training.
+ */
+private fun reordered(
+    blocks: List<WorkoutExercise>,
+    wanted: List<OrderedExercise>,
+    orderRowId: Long,
+    firstRow: Map<String, Long>,
+): List<WorkoutExercise> {
+    val movable = blocks.filter { (firstRow[it.exercise.key] ?: Long.MAX_VALUE) < orderRowId }
+    if (movable.isEmpty()) return blocks
+    val taken = HashSet<String>()
+    val head = ArrayList<WorkoutExercise>(blocks.size)
+    for (entry in wanted) {
+        val link = entry.link()
+        val block = movable.firstOrNull { it.exercise.key !in taken && it.exercise.matches(link) }
+            ?: continue
+        taken += block.exercise.key
+        head += block
+    }
+    return head + blocks.filterNot { it.exercise.key in taken }
 }
 
 /**

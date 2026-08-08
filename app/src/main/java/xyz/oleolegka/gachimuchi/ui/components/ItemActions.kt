@@ -2,6 +2,7 @@ package xyz.oleolegka.gachimuchi.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,13 +17,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
 /**
@@ -61,6 +67,42 @@ data class ItemAction(
 )
 
 /**
+ * A long press that PICKS THE ITEM UP instead of opening the menu.
+ *
+ * ── One gesture, two meanings, told apart by whether the finger moved ───────────
+ * The long press was already spoken for: it is how the menu is raised, and the menu is how an
+ * exercise is taken out of a workout. Reordering was asked for on the same gesture, and the
+ * honest reading is that they are the same intention at different lengths — "I want to do
+ * something with this card" followed by either a move or a release. So the press lifts the card,
+ * and letting go without having moved it is what raises the menu. Nothing is lost: every action
+ * the menu had is still one long press away, and the press that used to open it still does.
+ *
+ * The alternative was a "Reorder" entry inside the menu, turning the drag on. It is more certain
+ * — there is no threshold to get wrong — and it costs a tap on every reorder, on a screen whose
+ * whole layout is an argument about taps between sets. The threshold is [DRAG_INTENT_SLOP], and
+ * it is deliberately small: below it a finger has not moved, and above it nothing else on this
+ * card was ever going to happen.
+ *
+ * The menu keeps a written way to reorder as well (WorkoutLogScreen offers "Move up" and "Move
+ * down"), which is not a fallback for indecisive fingers but the version that works with a
+ * screen reader, where a drag has nothing to report.
+ */
+@Immutable
+data class ItemDrag(
+    /** The long press has fired and the card is now in the hand. */
+    val onStart: () -> Unit,
+    /** The finger has moved this many pixels down the screen since the last report. */
+    val onDrag: (deltaY: Float) -> Unit,
+    /** Released after moving: this is where it goes. */
+    val onDrop: () -> Unit,
+    /** Released without moving, or taken away by the system. Put everything back. */
+    val onCancel: () -> Unit,
+)
+
+/** Below this, a finger has not moved and the long press meant the menu. */
+private val DRAG_INTENT_SLOP = 6.dp
+
+/**
  * Wraps [content] so that a long press on it raises [actions].
  *
  * [content] is handed the modifier carrying the gesture rather than having it applied for it,
@@ -70,6 +112,11 @@ data class ItemAction(
  *
  * The modifier is EMPTY when there is neither a tap nor an action, so an element with nothing
  * to offer does not become clickable and does not announce a click action it cannot honour.
+ *
+ * [drag] hands the long press to something else — see [ItemDrag]. The tap is still
+ * `combinedClickable`'s, and its long press is still declared (as an empty one) so that a press
+ * held and released does not ALSO fire the tap: what that press meant is decided below, by the
+ * detector that knows whether the finger moved.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -78,19 +125,59 @@ fun ItemActions(
     actions: List<ItemAction>,
     modifier: Modifier = Modifier,
     onTap: (() -> Unit)? = null,
+    drag: ItemDrag? = null,
     content: @Composable (Modifier) -> Unit,
 ) {
     val colors = LocalGachiColors.current
     var open by remember { mutableStateOf(false) }
 
-    val press = if (onTap == null && actions.isEmpty()) {
+    val slopPx = with(LocalDensity.current) { DRAG_INTENT_SLOP.toPx() }
+    // read at gesture time rather than captured, so a drag in flight is not cut off by the
+    // recomposition that the drag itself causes
+    val current by rememberUpdatedState(drag)
+    val travelled = remember { mutableFloatStateOf(0f) }
+
+    val press = if (onTap == null && actions.isEmpty() && drag == null) {
         Modifier
     } else {
-        Modifier.combinedClickable(
-            onClick = { onTap?.invoke() },
-            onLongClick = if (actions.isEmpty()) null else ({ open = true }),
-            onLongClickLabel = "Actions for $title",
-        )
+        Modifier
+            .combinedClickable(
+                onClick = { onTap?.invoke() },
+                onLongClick = when {
+                    drag != null -> ({ /* the drag detector below decides what it meant */ })
+                    actions.isEmpty() -> null
+                    else -> ({ open = true })
+                },
+                onLongClickLabel = "Actions for $title",
+            )
+            .then(
+                if (drag == null) {
+                    Modifier
+                } else {
+                    Modifier.pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                travelled.floatValue = 0f
+                                current?.onStart?.invoke()
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                travelled.floatValue += abs(amount.y)
+                                current?.onDrag?.invoke(amount.y)
+                            },
+                            onDragEnd = {
+                                if (travelled.floatValue >= slopPx) {
+                                    current?.onDrop?.invoke()
+                                } else {
+                                    current?.onCancel?.invoke()
+                                    if (actions.isNotEmpty()) open = true
+                                }
+                            },
+                            onDragCancel = { current?.onCancel?.invoke() },
+                        )
+                    }
+                }
+            )
     }
 
     Box(modifier) {

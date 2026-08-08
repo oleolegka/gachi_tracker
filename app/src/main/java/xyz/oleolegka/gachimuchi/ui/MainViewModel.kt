@@ -283,6 +283,17 @@ class MainViewModel(
     }
 
     /**
+     * States the order the exercises of a workout are to be done in — see
+     * [ActivityRepository.setWorkoutExerciseOrder].
+     *
+     * The WHOLE order, every time, because that is what the event carries: the screen hands over
+     * the arrangement it is showing and does not have to describe a move.
+     */
+    fun setWorkoutExerciseOrder(workoutId: Long, order: List<ExerciseLink>) {
+        viewModelScope.launch { repo.setWorkoutExerciseOrder(workoutId, order) }
+    }
+
+    /**
      * Says a workout is over.
      *
      * It is not an undo and not a lock: the workout keeps everything it has, can be opened
