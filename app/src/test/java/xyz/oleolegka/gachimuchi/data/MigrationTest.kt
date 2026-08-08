@@ -34,6 +34,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.formsOfExercise
 import xyz.oleolegka.gachimuchi.domain.formFromEventOrNull
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET
 import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
@@ -833,6 +834,35 @@ interface LegacyEventDaoV15 {
 )
 abstract class SchemaV15Database : RoomDatabase() {
     abstract fun events(): LegacyEventDaoV15
+}
+
+/**
+ * Version 16: every table is already today's shape. The 16 -> 17 step ([MIGRATION_16_17])
+ * rewrites payload strings, not a single column, so EVERY entity here is the current one —
+ * the rule at the top of this file doing its job rather than a shortcut, exactly as
+ * [SchemaV15Database] notes for its own untouched tables.
+ */
+@Dao
+interface LegacyEventDaoV16 {
+    @Insert
+    suspend fun insert(event: xyz.oleolegka.gachimuchi.data.db.EventEntity): Long
+}
+
+@Database(
+    entities = [
+        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 16,
+    exportSchema = false,
+)
+abstract class SchemaV16Database : RoomDatabase() {
+    abstract fun events(): LegacyEventDaoV16
 }
 
 /**
@@ -2729,4 +2759,97 @@ class MigrationTest {
         val again = openCurrent()
         assertEquals(4, again.events().all().size)
     }
+
+    // --- version 16 -> 17: the length of one hold, backfilled from the protocol it was under ---
+
+    private data class PhoneV16(val protocolLedId: Long, val plankId: Long)
+
+    /**
+     * A version 16 journal with two hold sets nobody had a chance to state a length for: one
+     * under a work:rest protocol (the length IS the protocol's work half, §12-A), and one with
+     * no protocol at all — a plank, which has never had anything to fall back to.
+     *
+     * Neither payload carries `hold_sec` — this is what every hold set has looked like since
+     * the field existed and nothing wrote it, which is the defect [MIGRATION_16_17] closes.
+     */
+    private suspend fun writeVersion16(): PhoneV16 {
+        val v16 = Room.databaseBuilder(context, SchemaV16Database::class.java, dbName).build()
+        opened = v16
+
+        val protocolLedId = v16.events().insert(
+            EventEntity(
+                ts = "2026-07-01T10:00:00", type = TYPE_HOLD_SET,
+                payload = """{"activity":"Hangs 20 mm","reps":6,"work_sec":7.0,"rest_sec":3.0,""" +
+                    """"op_date":"2026-07-01","activity_key":"hangs 20 mm"}""",
+            )
+        )
+        val plankId = v16.events().insert(
+            EventEntity(
+                ts = "2026-07-01T10:05:00", type = TYPE_HOLD_SET,
+                payload = """{"activity":"Plank","op_date":"2026-07-01","activity_key":"plank"}""",
+            )
+        )
+
+        v16.close()
+        opened = null
+        return PhoneV16(protocolLedId, plankId)
+    }
+
+    /** The [xyz.oleolegka.gachimuchi.domain.HoldSet] one event carries, as the domain reads it back. */
+    private fun holdPayload(events: List<JournalEvent>, id: Long) =
+        formFromEventOrNull(TYPE_HOLD_SET, events.single { it.id == id }.payload)
+            as xyz.oleolegka.gachimuchi.domain.HoldSet
+
+    @Test
+    fun `a protocol-led hold is given the length its own snapshot always stated`() = runTest {
+        val phone = writeVersion16()
+
+        val repo = ActivityRepository(openCurrent())
+        val hold = holdPayload(repo.allEvents(), phone.protocolLedId)
+
+        // the work half of the protocol IS the length of one hold under it (§12-A) — nothing
+        // invented, just finally written down
+        assertEquals(7.0, hold.holdSec!!, 1e-9)
+        assertEquals(7.0, hold.workSec!!, 1e-9)
+
+        // and the record axis this always blocked can fire on it now
+        val record = xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord(
+            emptyList(), hold,
+        )
+        assertNull("the FIRST hold of an exercise is a baseline, not a record over nothing", record)
+    }
+
+    @Test
+    fun `a hold with no protocol snapshot is left exactly as it was - there is nothing honest to invent`() =
+        runTest {
+            val phone = writeVersion16()
+
+            val repo = ActivityRepository(openCurrent())
+            val plank = holdPayload(repo.allEvents(), phone.plankId)
+
+            assertNull(plank.holdSec)
+            assertNull(plank.workSec)
+        }
+
+    @Test
+    fun `a hold set written after the upgrade is unaffected - the entry card states its own length`() =
+        runTest {
+            writeVersion16()
+
+            val repo = ActivityRepository(openCurrent())
+            val exercise = repo.ensureExercise(
+                "Hangs 20 mm", xyz.oleolegka.gachimuchi.domain.ExerciseForm.HOLD,
+                workSec = 7.0, restSec = 3.0,
+            )
+            val id = repo.record(
+                xyz.oleolegka.gachimuchi.domain.holdSetOf(
+                    exercise = repo.exercise(exercise)!!.toRef(),
+                    opDate = "2026-08-07", reps = 6, holdSec = 12.0,
+                ),
+                attachToWorkout = false,
+            )
+
+            // a length the user actually typed in is never overwritten by the protocol's own
+            assertEquals(12.0, holdPayload(repo.allEvents(), id).holdSec!!, 1e-9)
+        }
 }
