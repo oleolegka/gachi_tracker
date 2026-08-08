@@ -437,6 +437,10 @@ fun GachiApp(viewModel: MainViewModel) {
                     // rows and all: the "added" events and every set of the exercise, so a
                     // block taken out of the workout does not come straight back on its sets
                     removeExercise = viewModel::deleteEntries,
+                    // the whole order, one row per drop -- see TYPE_WORKOUT_ORDER_SET
+                    reorderExercises = { order ->
+                        viewModel.setWorkoutExerciseOrder(workoutBeingLogged, order)
+                    },
                     finish = { viewModel.finishWorkout(workoutBeingLogged) },
                     startProtocolSet = { exercise, addedKg ->
                         viewModel.startProgramForExercise(exercise, addedKg)
@@ -551,6 +555,9 @@ fun GachiApp(viewModel: MainViewModel) {
                     modifier = inner,
                     onSaveSlot = viewModel::saveSlot,
                     onDeleteSlot = viewModel::deleteSlot,
+                    onCreateExercise = { name, form, edge, work, rest, then ->
+                        viewModel.createExercise(name, form, edge, work, rest, then)
+                    },
                 )
 
                 Tab.TIMER -> {

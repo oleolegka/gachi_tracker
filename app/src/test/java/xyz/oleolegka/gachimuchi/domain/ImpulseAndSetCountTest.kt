@@ -118,7 +118,9 @@ class ImpulseAndSetCountTest {
             hang("2026-08-03", addedKg = 10.0),
         )
         val series = volumeSeries(acts(events), hangs, ExerciseForm.HOLD)!!
-        assertEquals("Impulse, kg·s", series.spec.label)
+        assertEquals("Impulse", series.spec.label)
+        // the unit is the FORMAT's now, not a suffix on the label
+        assertEquals(ValueFormat.KILOGRAM_SECONDS, series.spec.format)
         assertEquals(Aggregation.SUM, series.spec.aggregation)
         assertEquals(listOf("2026-08-01", "2026-08-03"), series.points.map { it.opDate })
         assertEquals(78.0 * 42 + 70.0 * 42, series.points[0].value, 1e-9)
@@ -151,7 +153,9 @@ class ImpulseAndSetCountTest {
             hang("2026-08-02"),
         )
         val series = volumeSeries(acts(events), hangs, ExerciseForm.HOLD)!!
-        assertEquals("Impulse, kg·s", series.spec.label)
+        assertEquals("Impulse", series.spec.label)
+        // the unit is the FORMAT's now, not a suffix on the label
+        assertEquals(ValueFormat.KILOGRAM_SECONDS, series.spec.format)
         // the day of the unweighed hang is a real day with real work on it and draws as zero.
         // Stated rather than corrected: the same trade the strength branch makes for a set
         // whose load cannot be computed
@@ -182,8 +186,10 @@ class ImpulseAndSetCountTest {
         val impulse = volumeSeries(acts(listOf(hanging)), hangs, ExerciseForm.HOLD)!!
 
         assertEquals(ValueFormat.KILOGRAMS, tonnage.spec.format)
-        // not kilograms: nothing may put these two on one axis or add them into one bar
-        assertNotEquals(ValueFormat.KILOGRAMS, impulse.spec.format)
+        // a kind of its own, and specifically NOT kilograms: nothing may put these two on one
+        // axis or add them into one bar, and the type is what carries that rule
+        assertEquals(ValueFormat.KILOGRAM_SECONDS, impulse.spec.format)
+        assertNotEquals(tonnage.spec.format, impulse.spec.format)
         assertNotEquals(tonnage.spec.label, impulse.spec.label)
     }
 

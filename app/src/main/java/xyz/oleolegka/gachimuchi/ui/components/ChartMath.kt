@@ -112,11 +112,16 @@ fun labelIndices(count: Int, maxLabels: Int): List<Int> {
  * bars), but past a couple of dozen bars the labels collide into a grey smear and stop
  * being readable. Beyond [maxLabels] bars only the extremes and the most recent bar are
  * labelled — the three a reader actually looks for — and the rest rely on the axis.
+ *
+ * A null is an EMPTY SLOT of the shared time axis, not a zero: it can carry no label, and it
+ * does not count towards the crowding either. Thirty days holding three sessions is three
+ * labels, not a thinned-out three of thirty.
  */
-fun barLabelIndices(values: List<Double>, maxLabels: Int = 14): Set<Int> {
-    if (values.isEmpty()) return emptySet()
-    if (values.size <= maxLabels) return values.indices.toSet()
-    val maxAt = values.indices.maxBy { values[it] }
-    val minAt = values.indices.minBy { values[it] }
-    return setOf(maxAt, minAt, values.lastIndex)
+fun barLabelIndices(values: List<Double?>, maxLabels: Int = 14): Set<Int> {
+    val filled = values.indices.filter { values[it] != null }
+    if (filled.isEmpty()) return emptySet()
+    if (filled.size <= maxLabels) return filled.toSet()
+    val maxAt = filled.maxBy { values[it]!! }
+    val minAt = filled.minBy { values[it]!! }
+    return setOf(maxAt, minAt, filled.last())
 }

@@ -199,7 +199,22 @@ fun DayCardList(
 private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
     val colors = LocalGachiColors.current
     val onTap: (() -> Unit)? = when (card.action) {
-        DayCardAction.START -> card.slotId?.let { id -> { actions.startFromPlan(id, date) } }
+        /*
+         * A tap on the BODY of a planned card opens the plan; only the button starts.
+         *
+         * It used to start from anywhere on the card, without a question, and that is how a
+         * plan for the evening became a workout running an hour early: the user tapped it to
+         * look inside and to add exercises, which is the one thing a plan invites. Reported
+         * from the phone as "I did not want to start a workout, why did the app decide that I
+         * did" (2026-08-08).
+         *
+         * Beginning something is a deliberate act and gets a deliberate target — the button
+         * that says the word. The card itself is for looking, which is what a card is for
+         * everywhere else on this screen.
+         */
+        DayCardAction.START ->
+            card.slotId?.let { id -> actions.editSlot?.let { edit -> { edit(id) } } }
+
         DayCardAction.CONTINUE -> card.workoutId?.let { id -> { actions.continueWorkout(id) } }
         DayCardAction.OPEN -> when (card.kind) {
             DayCardKind.SINGLE -> card.exerciseId?.let { id -> { actions.openExercise(id, date) } }
@@ -290,16 +305,27 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             RowIcon(Icons.Filled.Delete, "Delete \"${card.title}\"", colors.critical) { delete(slotId) }
         }
 
-        // only the two actions that BEGIN something get a button of their own; "open" is the
-        // card itself, and a button saying "open" next to a card that opens is noise
-        val label = when (card.action) {
-            DayCardAction.START -> "Start"
-            DayCardAction.CONTINUE -> "Continue"
+        /*
+         * Only the two actions that BEGIN something get a button of their own; "open" is the
+         * card itself, and a button saying "open" next to a card that opens is noise.
+         *
+         * The button carries its OWN handler rather than reusing the card's tap: for a plan
+         * the two are deliberately different things now — the card opens the plan, the button
+         * starts the workout.
+         */
+        val begin: Pair<String, () -> Unit>? = when (card.action) {
+            DayCardAction.START ->
+                card.slotId?.let { id -> "Start" to { actions.startFromPlan(id, date) } }
+
+            DayCardAction.CONTINUE ->
+                card.workoutId?.let { id -> "Continue" to { actions.continueWorkout(id) } }
+
             DayCardAction.OPEN, DayCardAction.NONE -> null
         }
-        if (label != null && onTap != null) {
+        if (begin != null) {
+            val (label, onBegin) = begin
             Button(
-                onClick = onTap,
+                onClick = onBegin,
                 contentPadding = PaddingValues(horizontal = 14.dp),
                 modifier = Modifier.padding(end = 8.dp).heightIn(min = 40.dp),
             ) { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }

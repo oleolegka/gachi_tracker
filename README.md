@@ -86,14 +86,6 @@ You need JDK 21 and the Android SDK (compileSdk 37).
 The SDK path goes into `local.properties` (`sdk.dir=...`); that file is not part of the
 repository.
 
-The launcher icon is generated rather than hand-drawn — it is a 32x32 pixel-art map
-inside `tools/pixel_icon.py`. Edit the map or the palette there and run:
-
-```
-python3 tools/pixel_icon.py                            # rewrites the icon resources
-python3 tools/pixel_icon.py --preview /tmp/icon.png    # and renders what it made
-```
-
 ## How it is built
 
 Why the journal is append-only, how the timer stays accurate while the device sleeps, and

@@ -51,6 +51,27 @@ fun fmtAddedKg(x: Double): String {
     return if (text.startsWith("-")) text else "+$text"
 }
 
+/**
+ * AN IMPULSE, in kilogram-seconds: "2940 kg·s".
+ *
+ * ── Why this is not printed as anything shorter ─────────────────────────────────
+ * A session's impulse runs into five figures and a month's into six, so the temptation is to
+ * compact it to "17k" the way [fmtDistance] turns metres into kilometres. That is exactly
+ * where a chart starts lying: the axis title is chosen from the LARGEST value of a series
+ * while each tick is formatted on its own, so a compacting threshold makes the small ticks
+ * print in one unit under a title naming another. Kilogram-seconds are already an invented
+ * quantity ([xyz.oleolegka.gachimuchi.domain.holdImpulseKgSec] says so at length); they do
+ * not also need a magnitude a reader has to reconstruct.
+ *
+ * The fraction is dropped instead. A tenth of a kilogram-second is a hundredth of a second of
+ * hanging, which is below anything a hangboard set is recorded to.
+ */
+fun fmtKgSec(x: Double): String = "${fmtWholeKgSec(x)} kg·s"
+
+/** The bare number of [fmtKgSec], with no unit: for the callers that typeset the unit apart. */
+private fun fmtWholeKgSec(x: Double): String =
+    if (x.isFinite()) kotlin.math.round(x).toLong().toString() else "0"
+
 fun fmtDuration(sec: Int): String {
     val m = sec / 60
     val s = sec % 60
@@ -105,6 +126,7 @@ fun HoldSide.label(): String = when (this) {
  */
 fun fmtValue(value: Double, format: ValueFormat): String = when (format) {
     ValueFormat.KILOGRAMS -> fmtKg(value)
+    ValueFormat.KILOGRAM_SECONDS -> fmtKgSec(value)
     ValueFormat.SECONDS -> fmtDuration(value.roundToInt())
     ValueFormat.PACE -> fmtPace(value)
     ValueFormat.DISTANCE -> fmtDistance(value)
@@ -118,6 +140,7 @@ fun fmtValue(value: Double, format: ValueFormat): String = when (format) {
  */
 fun fmtValueParts(value: Double, format: ValueFormat): Pair<String, String?> = when (format) {
     ValueFormat.KILOGRAMS -> fmtCount((value * 10).roundToInt() / 10.0) to "kg"
+    ValueFormat.KILOGRAM_SECONDS -> fmtWholeKgSec(value) to "kg·s"
     ValueFormat.SECONDS -> when {
         value >= 3600 -> fmtCount((value / 360).roundToInt() / 10.0) to "h"
         value >= 60 -> fmtCount((value / 60).roundToInt().toDouble()) to "min"
@@ -160,6 +183,9 @@ fun fmtCount(value: Double): String {
  */
 fun fmtAxis(value: Double, format: ValueFormat): String = when (format) {
     ValueFormat.KILOGRAMS -> fmtCount(value)
+    // deliberately not compacted, so a tick can never read in a different unit from the
+    // title above it -- see [fmtKgSec]
+    ValueFormat.KILOGRAM_SECONDS -> fmtWholeKgSec(value)
     ValueFormat.SECONDS -> if (value >= 3600) "${fmtCount(value / 3600)}h"
         else if (value >= 120) "${(value / 60).roundToInt()}m"
         else "${value.roundToInt()}s"
@@ -174,6 +200,8 @@ fun fmtAxis(value: Double, format: ValueFormat): String = when (format) {
 /** The unit an axis title should carry, or "" when the numbers speak for themselves. */
 fun axisUnit(format: ValueFormat, maxValue: Double): String = when (format) {
     ValueFormat.KILOGRAMS -> "kg"
+    // the one unit here that does not follow the magnitude, on purpose ([fmtKgSec])
+    ValueFormat.KILOGRAM_SECONDS -> "kg·s"
     ValueFormat.SECONDS -> if (maxValue >= 3600) "h" else if (maxValue >= 120) "min" else "s"
     ValueFormat.PACE -> "/km"
     ValueFormat.DISTANCE -> if (maxValue >= 1000) "km" else "m"

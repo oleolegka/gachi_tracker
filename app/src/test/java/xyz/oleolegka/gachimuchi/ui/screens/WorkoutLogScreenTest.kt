@@ -3,7 +3,12 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.down
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.moveBy
+import androidx.compose.ui.test.up
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -16,6 +21,7 @@ import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
@@ -91,6 +97,8 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val undone = mutableListOf<Long>()
     /** The rows an exercise removed from the workout took with it. */
     private val removedRows = mutableListOf<List<Long>>()
+    /** Every order this screen has stated, whole, in the order it stated them. */
+    private val reordered = mutableListOf<List<ExerciseLink>>()
     private val started = mutableListOf<Pair<String, Double?>>()
     private var conductorOpened = 0
     private var summaryDismissed = 0
@@ -120,6 +128,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
                     removeExercise = { ids -> removedRows += ids },
+                    reorderExercises = { order -> reordered += order },
                     finish = { finishes++ },
                     startProtocolSet = { exercise, kg -> started += exercise.name to kg },
                     openConductor = { conductorOpened++ },
@@ -462,7 +471,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Rest between sets").assertExists()
         // the catalog remembers 90 s for this one, so agreeing costs exactly one tap
         compose.onNodeWithText("90").assertExists()
-        compose.onNodeWithText("That is 1:30.").assertExists()
+        compose.onNodeWithText("1:30").assertExists()
 
         compose.onNodeWithText("Add to workout").performClick()
         assertEquals(listOf(2L to 90), added)
@@ -754,5 +763,140 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Remove from this workout").assertDoesNotExist()
         compose.onNodeWithText("Repeat set").assertExists()
+    }
+
+    // --- rearranging the cards ------------------------------------------------------------
+
+    /** Which card is drawn above which, read off the layout rather than off the fixture. */
+    private fun cardsTopDown(vararg names: String): List<String> =
+        names.sortedBy { compose.onNodeWithText(it).getBoundsInRoot().top.value }
+
+    /**
+     * The screen draws the order the JOURNAL folds to, not the order the exercises were added
+     * in. The fold is [xyz.oleolegka.gachimuchi.domain.buildWorkout]'s business and is tested
+     * there; what this proves is that the screen goes through it rather than arranging for
+     * itself — the failure it would catch is a screen that sorts, and then disagrees with the
+     * workout review screen next door about the same workout.
+     */
+    @Test
+    fun `the cards are drawn in the order the journal states`() {
+        val journal = Journal()
+        val workout = supersetWorkout(journal)
+        journal.setExerciseOrder(workout, iso, abs, bench, at = "18:20")
+        show(journal, workout)
+
+        assertEquals(listOf("Abs", "Bench press"), cardsTopDown("Bench press", "Abs"))
+    }
+
+    /**
+     * The written way to move a card, which is also the only way that works with a screen
+     * reader. What it states is the WHOLE order — see `TYPE_WORKOUT_ORDER_SET` — so the
+     * assertion is an arrangement and not a move.
+     */
+    @Test
+    fun `the menu moves a card one place and states the whole order`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Abs").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Move up").performClick()
+        settle()
+
+        assertEquals(listOf(listOf(abs.link, bench.link)), reordered)
+    }
+
+    @Test
+    fun `moving the other card the other way states the same arrangement`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Move down").performClick()
+        settle()
+
+        assertEquals(listOf(listOf(abs.link, bench.link)), reordered)
+    }
+
+    /** No move that does not exist is offered: the top card cannot go up. */
+    @Test
+    fun `the ends of the list offer only the move they have`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Move down").assertExists()
+        compose.onNodeWithText("Move up").assertDoesNotExist()
+    }
+
+    /**
+     * A workout with one exercise has no order to state, so nothing about moving appears — and
+     * removal still does, which is the action that was on this menu before any of this.
+     */
+    @Test
+    fun `an only exercise is offered no move and is still removable`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        show(journal, workout)
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Move up").assertDoesNotExist()
+        compose.onNodeWithText("Move down").assertDoesNotExist()
+        compose.onNodeWithText("Remove from this workout").assertExists()
+    }
+
+    /**
+     * THE DRAG ITSELF, as far as it can honestly be driven here: a long press, then a finger
+     * travelling down past the card below it, then a release.
+     *
+     * ── What this does not prove ────────────────────────────────────────────────
+     * The frame clock is frozen for the reason in [ScreenTest], so NO FRAME IS DRAWN between the
+     * injected pointer events: the list never re-lays out under the finger, and the card in hand
+     * is never actually seen to move. One swap is therefore the most that can be exercised, and
+     * the arithmetic that decides the second and later swaps of a long drag — which reads
+     * positions only a real frame updates — is not covered by anything in this suite. Neither is
+     * the shadow under a lifted card, nor the gap opening behind it, nor autoscrolling (which is
+     * not implemented at all — see `ReorderState`).
+     */
+    @Test
+    fun `dragging a card past the one below it states the new order`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Bench press").performTouchInput {
+            down(center)
+            // past the long press, which is what turns this into a carry rather than a tap
+            advanceEventTime(1_000)
+            moveBy(Offset(0f, 120f))
+            moveBy(Offset(0f, 120f))
+            moveBy(Offset(0f, 120f))
+            moveBy(Offset(0f, 120f))
+            up()
+        }
+        settle()
+
+        assertEquals(listOf(listOf(abs.link, bench.link)), reordered)
+        // and the cards follow, because the screen redraws off the order it has just stated
+        assertEquals(listOf("Abs", "Bench press"), cardsTopDown("Bench press", "Abs"))
+    }
+
+    /**
+     * The other half of the gesture split, stated rather than left to the removal tests: a press
+     * that goes nowhere is the menu and is not a reordering.
+     */
+    @Test
+    fun `a long press that does not move raises the menu and writes no order`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+
+        compose.onNodeWithText("Remove from this workout").assertExists()
+        assertTrue("a press that never moved is not a reordering", reordered.isEmpty())
     }
 }

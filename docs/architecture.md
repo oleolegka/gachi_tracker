@@ -129,6 +129,15 @@ What the timer owes at a given instant — a boundary signal, a countdown tick, 
 is a pure function of the step list, the run state and the monotonic clock, so the timing of
 the signals is tested on the JVM rather than only heard on a phone.
 
+A boundary is **the state having moved**, not the clock standing past a number. That sounds
+like pedantry and was the bug: the test used to be "is now past the end of the current step",
+which `settleRun` makes false by construction, so the only boundary the loop could ever
+report was the end of the whole program. The loop therefore never advanced a run, and the
+exact alarm — written up everywhere as the backstop — was in fact the only thing that moved a
+run from one step to the next or made a step boundary sound. Nothing looked wrong, because
+the countdown and its ticks were still right: this function settles internally before working
+them out.
+
 The rule that function exists to enforce: a tick may not land on a boundary signal. The tone
 generator plays one tone at a time and the vibrator one waveform at a time, so a tick inside
 a boundary does not mix with it, it replaces it — and on 7:3 repeaters that silenced the
@@ -450,3 +459,14 @@ the search, or create the exercise.
   backstop alarm. Only the first makes a signal, but the second still settles the state,
   writes it to disk and redraws the notification — duplicated work at every step of a 7:3
   protocol. Correct, and not free.
+- **The countdown loop cannot be run in a test except by hand.** It sleeps in real
+  milliseconds against a clock Robolectric only moves on request, so the coroutine never
+  wakes during a test. `TimerController.countdownPass` exists so a test can drive it a pass
+  at a time; without it a whole protocol was never run in a test, which is how a boundary
+  that goes missing from the second cycle survived three fixes and a release.
+- **The launcher icon is generated output.** The drawables under `res/` are a few hundred
+  path commands each and are not meant to be edited by hand. They came from a 32x32
+  pixel-art map in a throwaway script that lived at `tools/pixel_icon.py` until commit
+  `aad4c36`; it was dropped because the app builds with the JDK and the Android SDK alone
+  and a one-off generator in a language nothing else here uses did not earn a place in the
+  tree. `git show aad4c36:tools/pixel_icon.py` brings it back if the icon needs redrawing.
