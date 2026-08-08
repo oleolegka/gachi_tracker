@@ -79,6 +79,16 @@ class WorkoutLogScreenTest : ScreenTest() {
     )
 
     /**
+     * The case this file's protocol-and-side tests exist for: a hangboard hang trained one arm
+     * at a time. Both flags at once, which is the owner's actual routine — see the note on
+     * `holdSetsFromRun` in domain/RunLog.kt.
+     */
+    private val oneArmHangs = ExerciseRef(
+        id = 6, name = "One-arm hangs", form = ExerciseForm.HOLD,
+        workSec = 7.0, restSec = 3.0, oneSided = true,
+    )
+
+    /**
      * The catalog carries a chosen rest for each, which is what the "add an exercise" question
      * is prefilled from. Set here rather than left to be measured out of the journal so the
      * number under test is a fact of the fixture and not of the gaps between its timestamps.
@@ -92,6 +102,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         exerciseEntity(4, "One-arm hang 20 mm", ExerciseForm.HOLD)
             .copy(defaultRestSec = 180, oneSided = true),
         exerciseEntity(5, "Both-arm hang 20 mm", ExerciseForm.HOLD).copy(defaultRestSec = 180),
+        exerciseEntity(6, "One-arm hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+            .copy(defaultRestSec = 180, oneSided = true),
     )
 
     /** Which exercise, at which rest, for which card — the third element is the side asked for. */
@@ -102,7 +114,8 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val removedRows = mutableListOf<List<Long>>()
     /** Every order this screen has stated, whole, in the order it stated them. */
     private val reordered = mutableListOf<List<OrderedCard>>()
-    private val started = mutableListOf<Pair<String, Double?>>()
+    /** Which exercise, at which plate, for which hand — the third element is the card's own side. */
+    private val started = mutableListOf<Triple<String, Double?, HoldSide?>>()
     private var conductorOpened = 0
     private var summaryDismissed = 0
     private var finishes = 0
@@ -121,7 +134,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         val state = UiState(
             events = journal.events,
             exercises = catalog,
-            programsById = mapOf(protocolProgramIdFor(3) to protocolProgram(3, "Hangs", 7.0, 3.0)),
+            programsById = mapOf(
+                protocolProgramIdFor(3) to protocolProgram(3, "Hangs", 7.0, 3.0),
+                protocolProgramIdFor(6) to protocolProgram(6, "One-arm hangs", 7.0, 3.0),
+            ),
             loading = false,
         )
         screen {
@@ -138,7 +154,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                     removeExercise = { ids -> removedRows += ids },
                     reorderExercises = { order -> reordered += order },
                     finish = { finishes++ },
-                    startProtocolSet = { exercise, kg -> started += exercise.name to kg },
+                    startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
                     openConductor = { conductorOpened++ },
                     close = { closed++ },
                 ),
@@ -468,6 +484,39 @@ class WorkoutLogScreenTest : ScreenTest() {
     }
 
     /**
+     * The gap this closes: a one-sided exercise that is ALSO run by its protocol still draws
+     * two cards, and a tap on either used to start the identical run — one that could not say
+     * which hand it had just counted six hangs for. Both taps go through the weight question
+     * here (there is a LEFT-hand plate on file, and `lastAddedKg` is not side-aware — the same
+     * one prefill limitation the reps count has, see [twoCardWorkout]), which is the more
+     * involved of the two branches [WorkoutLogScreen] can start a protocol-led run from and
+     * therefore the one most likely to have dropped the side on the way.
+     */
+    @Test
+    fun `each card of a protocol-led one-sided exercise starts a run that knows its own hand`() {
+        val journal = Journal()
+        show(journal, twoCardWorkout(journal, oneArmHangs))
+
+        compose.onNodeWithText("One-arm hangs - Left").performClick()
+        settle()
+        compose.onNodeWithText("Start the set").performClick()
+        settle()
+
+        compose.onNodeWithText("One-arm hangs - Right").performClick()
+        settle()
+        compose.onNodeWithText("Start the set").performClick()
+        settle()
+
+        assertEquals(
+            listOf(
+                Triple("One-arm hangs", 10.0, HoldSide.LEFT),
+                Triple("One-arm hangs", 10.0, HoldSide.RIGHT),
+            ),
+            started,
+        )
+    }
+
+    /**
      * The control, and it is the half that would be quietly broken by an over-eager fix: a hold
      * hung off both hands must stay a single card and must not be made to answer a question
      * that does not apply to it. A null side there is what "both hands" has always meant.
@@ -636,7 +685,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        assertEquals(listOf("Hangs" to null), started)
+        assertEquals(listOf(Triple("Hangs", null, null)), started)
         // no form and no question: a bodyweight protocol used to start with one tap and
         // still does
         compose.onAllNodesWithText("Added weight").assertCountEquals(0)
@@ -654,7 +703,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Weight, kg").assertExists()
-        assertEquals(emptyList<Pair<String, Double?>>(), started)
+        assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
     }
 
     /**
@@ -673,10 +722,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Added weight").assertExists()
         compose.onNodeWithText("15").assertExists()
         // nothing has started yet: the question is in front of the set, not beside it
-        assertEquals(emptyList<Pair<String, Double?>>(), started)
+        assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
 
         compose.onNodeWithText("Start the set").performClick()
-        assertEquals(listOf("Hangs" to 15.0), started)
+        assertEquals(listOf(Triple("Hangs", 15.0, null)), started)
     }
 
     /**
@@ -693,7 +742,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         settle()
 
         compose.onAllNodesWithText("Added weight").assertCountEquals(0)
-        assertEquals(listOf("Hangs" to null), started)
+        assertEquals(listOf(Triple("Hangs", null, null)), started)
     }
 
     /**
@@ -713,7 +762,7 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         assertEquals(1, conductorOpened)
         // and nothing was started a second time on top of the set already running
-        assertEquals(emptyList<Pair<String, Double?>>(), started)
+        assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
     }
 
     // --- taking a set back ------------------------------------------------------------------

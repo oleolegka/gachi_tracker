@@ -15,9 +15,13 @@ import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.ui.Journal
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.exerciseEntity
+import xyz.oleolegka.gachimuchi.ui.exerciseRef
 import java.time.LocalDate
 
 /**
@@ -148,5 +152,59 @@ class FormDetailScreenTest : ScreenTest() {
         compose.onNodeWithText("Create it as a new", substring = true).assertIsDisplayed()
         // and the form is stated as the thing that cannot move either
         compose.onNodeWithText("The form stays holds", substring = true).assertIsDisplayed()
+    }
+
+    // --- the records block, merged across a one-sided exercise's two hands -----------------
+
+    /**
+     * The gap this closes: `holdRecord` (domain/Records.kt) rightly keeps the left hand's
+     * best apart from the right hand's — the two are years apart in strength and comparing
+     * them would be dishonest — but the screen used to draw each as its own full-width card,
+     * both captioned "Most weight hung". That read as two records for two different
+     * exercises rather than one exercise reported per hand.
+     */
+    @Test
+    fun `the two hands of a one-sided exercise share one record row, not two`() {
+        val oneArm = exerciseEntity(30, "One-arm hangs", ExerciseForm.HOLD).copy(oneSided = true)
+        val ref = exerciseRef(30, "One-arm hangs", ExerciseForm.HOLD)
+        val journal = Journal()
+        journal.holdSet(ref, "2026-08-01", addedKg = 10.0, side = HoldSide.LEFT)
+        journal.holdSet(ref, "2026-07-20", addedKg = 8.0, side = HoldSide.RIGHT)
+
+        screen {
+            FormDetailScreen(
+                state = UiState(events = journal.events, exercises = listOf(oneArm), loading = false),
+                exerciseId = oneArm.id,
+                today = today,
+                onClose = {},
+            )
+        }
+
+        // one row for the axis, not two - "Most weight hung" drawn once
+        compose.onAllNodesWithText("Most weight hung").assertCountEquals(1)
+        compose.onNodeWithText("Left 10 / Right 8", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Left 1 Aug / Right 20 Jul", substring = true).assertIsDisplayed()
+    }
+
+    /** The ordinary two-handed exercise is untouched: one record, one row, as it always was. */
+    @Test
+    fun `a two-handed exercise still gets a plain single record row`() {
+        val ref = exerciseRef(1, "Hangs", ExerciseForm.HOLD)
+        val entity = exerciseEntity(1, "Hangs", ExerciseForm.HOLD)
+        val journal = Journal()
+        journal.holdSet(ref, "2026-08-01", addedKg = 12.0)
+
+        screen {
+            FormDetailScreen(
+                state = UiState(events = journal.events, exercises = listOf(entity), loading = false),
+                exerciseId = entity.id,
+                today = today,
+                onClose = {},
+            )
+        }
+
+        compose.onAllNodesWithText("Most weight hung").assertCountEquals(1)
+        compose.onNodeWithText("Left", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Right", substring = true).assertDoesNotExist()
     }
 }

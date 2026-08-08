@@ -35,6 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.formatClock
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.runSummaryLine
+import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.Instant
 import java.time.ZoneId
@@ -102,7 +103,12 @@ fun RunLogDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    chosen?.name ?: outcome.programName,
+                    // side-suffixed the same way a card names itself (WorkoutLogScreen), so an
+                    // offer from the left card and one from the right read as two sessions and
+                    // not as the same run asked about twice
+                    (chosen?.name ?: outcome.programName).let { name ->
+                        outcome.sideOf?.let { "$name - ${it.label()}" } ?: name
+                    },
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Text(

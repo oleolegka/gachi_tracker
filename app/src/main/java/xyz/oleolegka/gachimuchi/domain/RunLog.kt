@@ -178,6 +178,13 @@ data class RunOutcome(
     @SerialName("ended_at_wall_ms") val endedAtWallMs: Long = 0,
     /** ISO date the run ended on — the date its sets are written under. */
     @SerialName("op_date") val opDate: String = "",
+    /**
+     * Which hand the run trained, carried over from [RunSnapshot.side] so the offer can still
+     * answer the question after the process that started the run is long gone — an outcome is
+     * PERSISTED and may be confirmed the morning after (see the type doc above). Null for an
+     * exercise with only one card and for a run with no card of its own (the timer tab).
+     */
+    @SerialName("side") val side: String? = null,
 ) {
     /**
      * Whether this run is worth interrupting the user about. A run that completed no effort
@@ -190,6 +197,9 @@ data class RunOutcome(
      */
     val offersLogging: Boolean
         get() = sets.isNotEmpty()
+
+    /** [side] read as the domain compares it — see [HoldSet.sideOf], the same idea for a set. */
+    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
 
     /** Whether the offer is about something that just happened, or about a run found later. */
     fun isFresh(nowWallMs: Long): Boolean =
@@ -257,6 +267,7 @@ fun runOutcome(
         sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
+        side = snapshot.side,
     )
 }
 
@@ -293,6 +304,7 @@ fun salvagedOutcome(snapshot: RunSnapshot, zone: ZoneId = ZoneId.systemDefault()
         sets = completedSets(snapshot.steps, endedAtIndex = snapshot.state.stepIndex, finished = false),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
+        side = snapshot.side,
     )
 }
 
@@ -318,12 +330,18 @@ private fun isoDateOf(wallMs: Long, zone: ZoneId): String =
  * the run counted this many seconds of this many hangs, not "whatever the exercise is set to
  * today" — and unlike the entry card, this path always knows it: there is no length left for
  * the user to type in.
+ *
+ * [side] is stamped on every set exactly as the entry card stamps it — the answer to "which
+ * card was this run started from", not asked again here. A run with no side (the ordinary
+ * two-handed case, or one started from the timer tab rather than a card) leaves it null, the
+ * same as an entry card with nothing to ask.
  */
 fun holdSetsFromRun(
     exercise: ExerciseRef,
     opDate: String,
     sets: List<CompletedSet>,
     addedKg: Double? = null,
+    side: HoldSide? = null,
 ): List<HoldSet> {
     if (exercise.form != ExerciseForm.HOLD) return emptyList()
     val live = sets.filter { it.reps > 0 }
@@ -335,6 +353,7 @@ fun holdSetsFromRun(
             reps = set.reps,
             holdSec = set.workSec.toDouble(),
             restAfterSec = if (index < live.lastIndex) set.restAfterSec?.toDouble() else null,
+            side = side,
         )
     }
 }

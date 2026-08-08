@@ -416,4 +416,16 @@ data class RunSnapshot(
      * (domain/RunLog.kt). Defaulted, so a snapshot written by an older build still reads.
      */
     @SerialName("origin") val origin: RunOrigin = RunOrigin.PROGRAM,
+    /**
+     * Which hand this run trains, for a one-sided exercise started FROM ITS CARD — the same
+     * information the manual entry form is handed by [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogActions.startProtocolSet].
+     * A protocol-led exercise draws two cards and a tap on either used to start the identical
+     * run, so the sets it produced could not say which hand had trained; this is what closes
+     * that gap. Null both for an exercise that has only one card and for a run started from
+     * the timer tab, which is not any one card's tap and has no side to report.
+     *
+     * Stored as the payload code ([HoldSide.code]), the same convention as [OrderedExercise.side]
+     * and [HoldSet.side], so a run and the set it becomes agree byte for byte on what a side is.
+     */
+    @SerialName("side") val side: String? = null,
 )

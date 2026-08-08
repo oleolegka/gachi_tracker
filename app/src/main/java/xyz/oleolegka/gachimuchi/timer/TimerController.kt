@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.TimerStore
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.NUDGE_SEC
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.RunOutcome
@@ -269,6 +270,8 @@ class TimerController internal constructor(
         program: WorkoutProgram,
         exerciseId: Long? = null,
         origin: RunOrigin = RunOrigin.PROGRAM,
+        /** Which card this run was started from — see [RunSnapshot.side]. */
+        side: HoldSide? = null,
     ) {
         synchronized(lock) {
             val steps = program.flatten()
@@ -299,6 +302,7 @@ class TimerController internal constructor(
                 bootRef = currentBootRef(),
                 exerciseId = exerciseId,
                 origin = origin,
+                side = side?.code,
             )
             NotificationManagerCompat.from(app).cancel(TimerNotifications.ID_ALERT)
             if (store.settings.value.speak) speaker.prepare()

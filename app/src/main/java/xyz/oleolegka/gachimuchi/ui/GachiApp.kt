@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
@@ -405,7 +406,13 @@ fun GachiApp(viewModel: MainViewModel) {
          * list back without anything having to notice and clear a flag first.
          */
         conductorOpen && timerRun != null -> ConductorScreen(
-            exerciseName = state.exerciseById(timerRun?.exerciseId)?.name,
+            // side-suffixed the same way a card is (WorkoutLogScreen.exerciseName) — a run
+            // started from the left card and one started from the right one must not read
+            // as the same set on this screen, which is the one place a superset sends the
+            // user back to mid-set.
+            exerciseName = state.exerciseById(timerRun?.exerciseId)?.name?.let { name ->
+                HoldSide.fromCode(timerRun?.side)?.let { "$name - ${it.label()}" } ?: name
+            },
             state = timerState,
             actions = timerActions,
             onLeave = { conductorOpen = false },
@@ -454,8 +461,8 @@ fun GachiApp(viewModel: MainViewModel) {
                         viewModel.setWorkoutExerciseOrder(workoutBeingLogged, order)
                     },
                     finish = { viewModel.finishWorkout(workoutBeingLogged) },
-                    startProtocolSet = { exercise, addedKg ->
-                        viewModel.startProgramForExercise(exercise, addedKg)
+                    startProtocolSet = { exercise, addedKg, side ->
+                        viewModel.startProgramForExercise(exercise, addedKg, side)
                         conductorOpen = true
                     },
                     openConductor = { conductorOpen = true },

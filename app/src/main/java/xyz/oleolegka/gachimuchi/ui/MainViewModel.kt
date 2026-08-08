@@ -593,8 +593,14 @@ class MainViewModel(
      * [addedKg] is the one thing that can be asked first, and only when there is a reason to
      * (§13.5) — the caller decides that, because the caller is the one that would be putting
      * the extra screen in front of the user.
+     *
+     * [side] names the CARD this run was started from, for an exercise trained one limb at a
+     * time — the same answer the manual entry form is handed as `fixedSide`. It travels with
+     * the run (`RunSnapshot.side`) and comes back out on every set the run's offer writes
+     * ([logRunSets]), which is what makes the two cards of a protocol-led one-sided exercise
+     * lead to two distinguishable runs instead of one that forgets which hand it was.
      */
-    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null) {
+    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null, side: HoldSide? = null) {
         _entryAddedKg.value = addedKg
         viewModelScope.launch {
             val events = repo.allEvents()
@@ -607,7 +613,7 @@ class MainViewModel(
                 restBetweenSetsSec = resolveRestSec(settings, events, exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch
-            timer.start(program, exercise.id, RunOrigin.EXERCISE)
+            timer.start(program, exercise.id, RunOrigin.EXERCISE, side)
         }
     }
 
@@ -706,7 +712,9 @@ class MainViewModel(
              * tried again.
              */
             val ok = runCatching {
-                holdSetsFromRun(exercise, day, sets, addedKg).forEach { written += repo.record(it) }
+                holdSetsFromRun(exercise, day, sets, addedKg, outcome?.sideOf).forEach {
+                    written += repo.record(it)
+                }
             }.isSuccess
 
             if (ok) {

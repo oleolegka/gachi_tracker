@@ -34,6 +34,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRecord
 import xyz.oleolegka.gachimuchi.domain.FormSeries
 import xyz.oleolegka.gachimuchi.domain.Granularity
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
@@ -383,15 +384,35 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
 
             else -> {
                 SectionHeader("Records", "with the date")
+                /*
+                 * ONE ROW PER AXIS, not one per [ExerciseRecord]. `holdRecord` (domain/Records.kt)
+                 * is right to keep the left hand's best and the right hand's best as two separate
+                 * comparisons — years of divergence between them makes merging the COMPARISON
+                 * dishonest. But a screen that then drew each of those as its own full-width
+                 * card, both captioned "Most weight hung", read as two different achievements
+                 * for two different exercises rather than one exercise reported per hand. Same
+                 * axis, same card, both hands on one line — see [mergedValue] and [mergedWhen].
+                 *
+                 * `groupBy` keeps the order [holdRecord] already produced (left, right, then the
+                 * sets that named no side), so a two-handed exercise or a strength exercise —
+                 * where every group is a singleton — draws exactly as it always did.
+                 */
+                val grouped = records.groupBy { it.axis }.values.toList()
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    records.forEachIndexed { index, record ->
-                        val (number, unit) = fmtValueParts(record.value, recordFormat(record))
+                    grouped.forEachIndexed { index, group ->
+                        val leading = group.first()
+                        val single = group.size == 1
+                        val (number, unit) = fmtValueParts(leading.value, recordFormat(leading))
                         StatCard(
-                            label = recordLabel(record),
-                            value = number,
+                            label = recordLabel(leading),
+                            value = if (single) number else mergedValue(group),
                             unit = unit,
-                            `when` = fmtShortDay(LocalDate.parse(record.opDate)),
-                            // only the leading record gets the badge: two green pills next to
+                            `when` = if (single) {
+                                fmtShortDay(LocalDate.parse(leading.opDate))
+                            } else {
+                                mergedWhen(group)
+                            },
+                            // only the leading row gets the badge: two green pills next to
                             // each other stop meaning "this is the notable one"
                             badge = index == 0,
                             modifier = Modifier.fillMaxWidth(),
@@ -401,6 +422,28 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
             }
         }
     }
+}
+
+/**
+ * "Left" / "Right" / "No side" — the same words [FormDetailScreen]'s own identity chip and
+ * `WorkoutLogScreen`'s cards already use for a [HoldSide], plus the honest third case: a
+ * record built from sets that named no hand at all ([ExerciseRecord.sideMissing]). Never
+ * called for a record that is not part of a merged, side-split group — see [mergedValue].
+ */
+private fun sideTag(record: ExerciseRecord): String = when (record.side) {
+    HoldSide.LEFT -> "Left"
+    HoldSide.RIGHT -> "Right"
+    null -> "No side"
+}
+
+/** "Left 10 / Right 8" — the big-number line for a merged axis group; the unit is shared. */
+private fun mergedValue(group: List<ExerciseRecord>): String = group.joinToString(" / ") { record ->
+    "${sideTag(record)} ${fmtValueParts(record.value, recordFormat(record)).first}"
+}
+
+/** "Left Aug 5 / Right Jul 20" — every side's own date, §12-C still honoured per side. */
+private fun mergedWhen(group: List<ExerciseRecord>): String = group.joinToString(" / ") { record ->
+    "${sideTag(record)} ${fmtShortDay(LocalDate.parse(record.opDate))}"
 }
 
 private fun recordLabel(record: ExerciseRecord): String = when (record.axis) {
