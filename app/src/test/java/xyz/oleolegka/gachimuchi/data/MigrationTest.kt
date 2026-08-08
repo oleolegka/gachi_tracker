@@ -2573,6 +2573,12 @@ class MigrationTest {
      * The upgrade must not fail on a catalog it disagrees with, and must not silently make the
      * disagreement go away either. Both rows survive; the later one is marked so the index can
      * exist at all.
+     *
+     * The names asserted here are the ones AFTER the whole chain, not after 14 -> 15 alone: both
+     * rows carry an edge, and MIGRATION_17_18 folds it into every name a few steps later, which
+     * is exactly the "(2)" riding along into the folded name that MIGRATION_17_18's own KDoc
+     * accepts as a narrow, harmless quirk of a multi-hop upgrade rather than something to
+     * engineer around.
      */
     @Test
     fun `two catalog rows claiming one identity both come through, the later one marked`() = runTest {
@@ -2584,8 +2590,8 @@ class MigrationTest {
 
         assertNotNull("the first row was lost", kept)
         assertNotNull("the duplicate was deleted rather than kept", marked)
-        assertEquals("the row that was there first keeps its name", "Hangs", kept!!.name)
-        assertEquals("HANGS (2)", marked!!.name)
+        assertEquals("the row that was there first keeps its name", "Hangs 20mm", kept!!.name)
+        assertEquals("HANGS (2) 20mm", marked!!.name)
         assertNotEquals(kept.identityKey, marked.identityKey)
         assertEquals(3, db.exercises().all().size)
     }
