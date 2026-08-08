@@ -450,3 +450,9 @@ the search, or create the exercise.
   backstop alarm. Only the first makes a signal, but the second still settles the state,
   writes it to disk and redraws the notification — duplicated work at every step of a 7:3
   protocol. Correct, and not free.
+- **The launcher icon is generated output.** The drawables under `res/` are a few hundred
+  path commands each and are not meant to be edited by hand. They came from a 32x32
+  pixel-art map in a throwaway script that lived at `tools/pixel_icon.py` until commit
+  `aad4c36`; it was dropped because the app builds with the JDK and the Android SDK alone
+  and a one-off generator in a language nothing else here uses did not earn a place in the
+  tree. `git show aad4c36:tools/pixel_icon.py` brings it back if the icon needs redrawing.
