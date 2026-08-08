@@ -462,7 +462,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Rest between sets").assertExists()
         // the catalog remembers 90 s for this one, so agreeing costs exactly one tap
         compose.onNodeWithText("90").assertExists()
-        compose.onNodeWithText("That is 1:30.").assertExists()
+        compose.onNodeWithText("1:30").assertExists()
 
         compose.onNodeWithText("Add to workout").performClick()
         assertEquals(listOf(2L to 90), added)

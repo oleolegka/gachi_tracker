@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -812,12 +813,35 @@ private fun RestDialog(
                     steps = listOf(15.0, 30.0),
                     decimal = false,
                 )
+                /*
+                 * The chosen rest, said the way a person reads a rest, and said LOUDLY.
+                 *
+                 * The field above holds bare seconds because that is what the steppers add
+                 * to, and "90" is not a length of time anyone recognises at a glance. This
+                 * line used to be the small grey afterthought under it, which put the only
+                 * legible form of the answer in the smallest type on the screen — reported
+                 * from the phone as "hard to tell what is even selected" (2026-08-08).
+                 */
                 Text(
-                    seconds?.let { "That is ${formatClock(it)}." }
-                        ?: "A rest is between 1 second and an hour.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkSecondary,
+                    seconds?.let(::formatClock) ?: "--:--",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = if (seconds != null) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        colors.inkMuted
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
                 )
+                if (seconds == null) {
+                    Text(
+                        "A rest is between 1 second and an hour.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkSecondary,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         },
         confirmButton = {

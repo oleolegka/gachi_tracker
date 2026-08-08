@@ -123,6 +123,15 @@ fun CalendarScreen(
     // to compile, and there is exactly one caller
     onSaveSlot: (SlotDraft, Long?) -> Unit,
     onDeleteSlot: (Long) -> Unit,
+    /** Lets the plan's exercise picker create a row it does not have yet. */
+    onCreateExercise: ((
+        name: String,
+        form: ExerciseForm,
+        edgeMm: Double?,
+        workSec: Double?,
+        restSec: Double?,
+        then: (Long) -> Unit,
+    ) -> Unit)? = null,
 ) {
     var monthOffset by rememberSaveable { mutableIntStateOf(0) }
     var selected by rememberSaveable { mutableStateOf(today.toString()) }
@@ -220,6 +229,7 @@ fun CalendarScreen(
             today = today,
             // the catalog the editor's exercise picker searches through
             state = state,
+            onCreateExercise = onCreateExercise,
             onSave = { draft ->
                 onSaveSlot(draft, target.slot?.id)
                 // follow the plan to where it landed, month included

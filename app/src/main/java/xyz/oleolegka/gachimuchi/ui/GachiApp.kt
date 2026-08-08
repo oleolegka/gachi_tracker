@@ -551,6 +551,9 @@ fun GachiApp(viewModel: MainViewModel) {
                     modifier = inner,
                     onSaveSlot = viewModel::saveSlot,
                     onDeleteSlot = viewModel::deleteSlot,
+                    onCreateExercise = { name, form, edge, work, rest, then ->
+                        viewModel.createExercise(name, form, edge, work, rest, then)
+                    },
                 )
 
                 Tab.TIMER -> {

@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.REPEAT_DAILY
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.REPEAT_RULES
@@ -136,6 +137,18 @@ fun SlotEditorDialog(
     today: LocalDate,
     /** The catalog and the journal behind it: what the exercise picker searches through. */
     state: UiState,
+    /**
+     * Writes a new catalog row and hands back its id. Null hides the picker's create button,
+     * which is only right for a caller that genuinely cannot write — the calendar can.
+     */
+    onCreateExercise: ((
+        name: String,
+        form: ExerciseForm,
+        edgeMm: Double?,
+        workSec: Double?,
+        restSec: Double?,
+        then: (Long) -> Unit,
+    ) -> Unit)? = null,
     onSave: (SlotDraft) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -182,9 +195,20 @@ fun SlotEditorDialog(
             state = state,
             today = today,
             onPick = { id -> draft = draft.withExerciseAdded(id) },
-            // planning picks from what is already trained; creating an exercise asks the
-            // §12-A identity questions, which belong to the moment of the first set
-            onCreate = null,
+            /*
+             * Planning can create, and once could not. The argument for refusing was that the
+             * identity questions (form, edge, protocol) belong to the moment of the first set
+             * — which sounds right and is wrong in the hand: planning Tuesday's hangs on a
+             * 15 mm edge you have never hung is exactly what a plan is for, and the picker
+             * offered no way out of the dead end. Reported from the phone, 2026-08-08.
+             */
+            onCreate = onCreateExercise?.let { create ->
+                { name, form, edge, work, rest ->
+                    create(name, form, edge, work, rest) { id ->
+                        draft = draft.withExerciseAdded(id)
+                    }
+                }
+            },
             onDismiss = { picking = false },
         )
     }
