@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -32,6 +34,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,11 +43,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.MAX_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
@@ -65,11 +71,15 @@ import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.components.CardRadius
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.ItemAction
 import xyz.oleolegka.gachimuchi.ui.components.ItemActions
+import xyz.oleolegka.gachimuchi.ui.components.ItemDrag
+import xyz.oleolegka.gachimuchi.ui.components.moved
+import xyz.oleolegka.gachimuchi.ui.components.rememberReorderState
 import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
@@ -120,6 +130,18 @@ import java.time.LocalDate
  * hands the screen to the conductor — because for those the app is not recording what
  * happened, it is calling out what to do next, and a form asking for numbers that do not
  * exist yet is in the way. A card whose set is already running leads back to it.
+ *
+ * ── The cards can be rearranged, because the gym decides the order ──────────────
+ * The list used to be the order the exercises were ADDED in, which is the order they were
+ * thought of standing in the doorway. A machine being occupied is enough to make that wrong for
+ * the rest of the hour, so a card can be picked up on a long press and carried to where it now
+ * belongs. What that costs elsewhere: the order is a fact of its own now and lives in the
+ * journal — see `TYPE_WORKOUT_ORDER_SET`.
+ *
+ * The long press was already spoken for: it raises the menu that removes an exercise. It still
+ * does, and which of the two a press meant is decided by whether the finger moved — the reasoning
+ * and the threshold are on [ItemDrag]. The menu additionally carries "Move up" and "Move down",
+ * which is the same move for a screen reader, where a drag reports nothing.
  */
 @Immutable
 data class WorkoutLogActions(
@@ -167,6 +189,16 @@ data class WorkoutLogActions(
      * whole block or it is nothing, and the confirmation says which sets are going.
      */
     val removeExercise: (eventIds: List<Long>) -> Unit,
+
+    /**
+     * State the order the exercises of this workout are to be done in, WHOLE.
+     *
+     * The whole list on every change rather than "this one moved there", for the reasons on
+     * `TYPE_WORKOUT_ORDER_SET`. What that buys the screen is that it never has to describe a
+     * move: it hands over the arrangement it is currently showing, and the journal's answer
+     * either matches it or replaces it.
+     */
+    val reorderExercises: (order: List<ExerciseLink>) -> Unit,
 
     /**
      * Declare the workout over.
@@ -263,6 +295,69 @@ fun WorkoutLogScreen(
      */
     var removingKey by rememberSaveable { mutableStateOf<String?>(null) }
 
+    /*
+     * ── The order under the finger, which the journal has not been told about yet ───
+     * A drag rearranges the list twenty times before it is dropped, and writing a row for each
+     * would be twenty facts to record one decision. So the arrangement being SHOWN is held here
+     * while the card is in the hand, and one event is written when it lands.
+     *
+     * Null is the ordinary state and means "whatever the journal folds to". It goes back to null
+     * once the journal agrees with what is on screen, which is what makes the write authoritative
+     * rather than this variable: a reorder that failed to reach the database would otherwise be
+     * visible here forever, and instead the next fold puts the list back and the user can see
+     * that nothing happened.
+     *
+     * NOT rememberSaveable: it is the state of a finger that is on the screen right now. Nothing
+     * is lost by forgetting it across a rotation, and remembering it would restore a preview of
+     * an arrangement nobody is holding.
+     */
+    var preview by remember { mutableStateOf<List<String>?>(null) }
+    val live = workout.exercises
+    val shown = remember(live, preview) {
+        preview?.let { keys -> keys.mapNotNull { key -> live.firstOrNull { it.exercise.key == key } } }
+            ?: live
+    }
+    LaunchedEffect(live, preview) {
+        val liveKeys = live.map { it.exercise.key }
+        val held = preview ?: return@LaunchedEffect
+        // the journal has caught up, or the workout has changed under the preview (an exercise
+        // added or removed) and a stale arrangement would hide it
+        if (held == liveKeys || held.toSet() != liveKeys.toSet()) preview = null
+    }
+
+    val listState = rememberLazyListState()
+    /*
+     * Every one of these reads `preview` at the moment it is CALLED rather than closing over the
+     * list that was on screen when this composition ran. A drag delivers many pointer events
+     * between two frames, and each one has to see what the one before it did to the order —
+     * otherwise the second swap of a drag is computed against the arrangement from before the
+     * first, and the card lands somewhere nobody dragged it.
+     */
+    val liveKeys = { live.map { it.exercise.key } }
+    val shownKeys = { preview ?: liveKeys() }
+    val reorder = rememberReorderState(
+        listState = listState,
+        keys = shownKeys,
+        onOrder = { order -> preview = order },
+    )
+
+    /**
+     * Moves one card and states the result straight away — the menu's version of a drag.
+     *
+     * No preview: there is no finger to keep up with, so the journal is the only thing that has
+     * to be told and the fold that comes back is what redraws the list.
+     */
+    fun moveExercise(from: Int, to: Int) {
+        stateOrder(shownKeys().moved(from, to), live, actions.reorderExercises)
+    }
+
+    /** Hands the arrangement now on screen to the journal, or gives up on it if it is the same. */
+    fun commitOrder() {
+        // the keys as they are RIGHT NOW, not as the last composition drew them: the drop lands
+        // in the same run of pointer events as the swaps did
+        if (!stateOrder(shownKeys(), live, actions.reorderExercises)) preview = null
+    }
+
     Scaffold(
         modifier = modifier.imePadding(),
         topBar = {
@@ -344,6 +439,7 @@ fun WorkoutLogScreen(
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier.padding(padding).fillMaxWidth(),
             contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -357,8 +453,9 @@ fun WorkoutLogScreen(
                 }
             }
 
-            items(workout.exercises.size, key = { workout.exercises[it].exercise.key }) { index ->
-                val exercise = workout.exercises[index]
+            items(shown.size, key = { shown[it].exercise.key }) { index ->
+                val exercise = shown[index]
+                val key = exercise.exercise.key
                 val id = exercise.exerciseId
                 // an exercise this phone has no catalog row for cannot have a form built
                 // for it, so it is shown and not offered — see WorkoutExercise.exerciseId
@@ -403,7 +500,32 @@ fun WorkoutLogScreen(
                         }
                     },
                     onRest = id?.let { e -> { askingRestFor = e } },
-                    onRemove = { removingKey = exercise.exercise.key },
+                    onRemove = { removingKey = key },
+                    /*
+                     * Nothing to drag when there is one card, and a lift with nowhere to go
+                     * would be a gesture that appears to work and cannot. The menu keeps
+                     * working either way — see [ItemDrag].
+                     */
+                    drag = if (shown.size < 2) {
+                        null
+                    } else {
+                        ItemDrag(
+                            onStart = { reorder.start(key) },
+                            onDrag = { dy -> reorder.drag(dy) },
+                            onDrop = { reorder.stop(); commitOrder() },
+                            onCancel = { reorder.stop(); preview = null },
+                        )
+                    },
+                    lifted = reorder.draggedKey == key,
+                    liftOffset = { reorder.offsetOf(key) },
+                    /*
+                     * The same move, written down. A drag reports nothing to a screen reader and
+                     * cannot be performed without seeing where the card has got to, so the menu
+                     * carries the version that works without either — and it is also the version
+                     * somebody uses when one card has to go up one place and aiming is a bother.
+                     */
+                    onMoveUp = if (index == 0) null else ({ moveExercise(index, index - 1) }),
+                    onMoveDown = if (index == shown.lastIndex) null else ({ moveExercise(index, index + 1) }),
                 )
             }
 
@@ -543,6 +665,31 @@ fun WorkoutLogScreen(
  */
 
 /**
+ * Tells the journal that [keys] is the order of [live], unless there is nothing to tell it.
+ *
+ * Returns whether anything was written, which is what lets the caller decide what to do with the
+ * arrangement it is holding: nothing was written means nothing is coming back, so the preview has
+ * to be dropped or the screen would show an order the journal does not have.
+ *
+ * Two ways there is nothing to say. The order is ALREADY that — a card dragged and put back, and
+ * a row stating what is already true is a row every future reader has to fold for no answer. Or
+ * [keys] names something [live] no longer holds, which is a preview that outlived the workout it
+ * described (an exercise removed on another screen mid-drag); stating a partial order would drop
+ * whatever the preview does not name to the bottom of the list, silently.
+ */
+private fun stateOrder(
+    keys: List<String>,
+    live: List<WorkoutExercise>,
+    reorder: (List<ExerciseLink>) -> Unit,
+): Boolean {
+    if (keys == live.map { it.exercise.key }) return false
+    val wanted = keys.mapNotNull { key -> live.firstOrNull { it.exercise.key == key } }
+    if (wanted.size != live.size) return false
+    reorder(wanted.map { it.exercise })
+    return true
+}
+
+/**
  * The wall clock out of a journal timestamp: "2026-08-07T18:14:00" -> "18:14".
  *
  * By position rather than by parsing, because every timestamp this app writes has that exact
@@ -647,6 +794,12 @@ private fun ReadyBanner(line: String, onDismiss: () -> Unit) {
  * session and it should not require aiming. The rest is the one other control, and it is a
  * text button showing the current value — the label IS the control, so no icon has to be
  * decoded and no second row of chrome appears on a card that is mostly numbers.
+ *
+ * ── A card in the hand is drawn as one ──────────────────────────────────────────
+ * [lifted] raises it off the page: a shadow under it and a different fill behind it, because a
+ * shadow alone is a few pixels of grey that is easy to miss under a thumb and this app states
+ * every verdict in more than one channel. The gap it leaves behind opens because the LIST moves
+ * the other cards, not because anything is animated here.
  */
 @Composable
 private fun ExerciseCard(
@@ -659,22 +812,50 @@ private fun ExerciseCard(
     nowMs: Long,
     onTap: (() -> Unit)?,
     onRest: (() -> Unit)?,
-    /** Long press: take this exercise out of the workout. Null leaves it with no menu. */
+    /** Long press, released without moving: take this exercise out of the workout. */
     onRemove: (() -> Unit)?,
+    /** Long press, moved: carry the card. Null when there is nowhere to carry it to. */
+    drag: ItemDrag? = null,
+    lifted: Boolean = false,
+    /**
+     * Pixels to draw the card away from where the list put it.
+     *
+     * A LAMBDA and not a value, so the reading happens while the frame is being drawn rather
+     * than in composition: a card being dragged moves on every pointer event, and recomposing
+     * a card carrying a progress bar sixty times a second to move it is the cost this avoids.
+     */
+    liftOffset: () -> Float = { 0f },
+    /** Move this card one place, from the menu. Null at the end it is already at. */
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
 ) {
     val colors = LocalGachiColors.current
-    val menu = if (onRemove == null) {
-        emptyList()
-    } else {
-        listOf(ItemAction("Remove from this workout", destructive = true) { onRemove() })
+    val menu = buildList {
+        onMoveUp?.let { add(ItemAction("Move up") { it() }) }
+        onMoveDown?.let { add(ItemAction("Move down") { it() }) }
+        // destructive last, and away from the top of the menu where the finger already is
+        onRemove?.let { add(ItemAction("Remove from this workout", destructive = true) { it() }) }
     }
     ItemActions(
         title = name,
         actions = menu,
         onTap = onTap,
-        modifier = Modifier.fillMaxWidth(),
+        drag = drag,
+        modifier = Modifier
+            .fillMaxWidth()
+            // above its neighbours, or the card it is being dragged over draws on top of it
+            .zIndex(if (lifted) 1f else 0f)
+            .graphicsLayer {
+                translationY = liftOffset()
+                shadowElevation = if (lifted) 8.dp.toPx() else 0f
+                shape = RoundedCornerShape(CardRadius)
+                clip = false
+            },
     ) { press ->
-    GachiCard(Modifier.fillMaxWidth().then(press)) {
+    GachiCard(
+        Modifier.fillMaxWidth().then(press),
+        background = if (lifted) MaterialTheme.colorScheme.surfaceVariant else null,
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
