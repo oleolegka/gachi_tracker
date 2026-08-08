@@ -140,6 +140,114 @@ internal fun bucketPoints(
         }
 }
 
+// --- the time axis a screen shares --------------------------------------------------------
+
+/**
+ * The time axis of a whole screen: one slot per bucket, ascending, covering the ENTIRE
+ * window whether or not anything was logged into it.
+ *
+ * ── Why the window may not be left to each series ───────────────────────────────
+ * Two charts of one exercise are stacked in order to be READ AGAINST EACH OTHER — the trend
+ * above, the volume below, the same days under both. Drawn from its own points alone, a chart
+ * has an axis that begins at its own first entry and ends at its own last one, so a trend
+ * whose last 1RM was set on the third ended on the third while the volume beside it ended on
+ * the eighth. Nothing said so; the two pictures simply described different fortnights at the
+ * same width, which is exactly the comparison the layout invites a reader to make.
+ *
+ * The second half of it is worse and was invisible: points were laid out by INDEX, so a month
+ * between two entries occupied the same width as two consecutive days. Neither chart was a
+ * picture of time at all — it was a picture of the order things happened in.
+ *
+ * The slots are therefore built from the PERIOD and shared, and each series is placed onto
+ * them ([onAxis]). A bucket nobody trained in gets a null, which the charts leave blank —
+ * NOT a zero, which would claim a session that achieved nothing (the distinction [byDay]
+ * already makes when it drops a day of pure warm-ups rather than plotting it at zero).
+ */
+data class TimeAxis(val granularity: Granularity, val slots: List<String>) {
+    val size: Int get() = slots.size
+    val isEmpty: Boolean get() = slots.isEmpty()
+}
+
+/** One slot of a [TimeAxis] for one series: the bucket's day, and the value there or null. */
+data class AxisSlot(val opDate: String, val value: Double?)
+
+/**
+ * A series placed on the screen's shared [TimeAxis]: exactly as long as the axis, holes and
+ * all, so two of them can be drawn one above the other and compared column by column.
+ */
+data class SeriesOnAxis(val spec: SeriesSpec, val slots: List<AxisSlot>) {
+    /** The values that exist, in order. The empty slots are not zeroes and are not in here. */
+    val values: List<Double> get() = slots.mapNotNull { it.value }
+
+    /** How many buckets of the window actually carry something. */
+    val filled: Int get() = slots.count { it.value != null }
+
+    /** Nothing was logged in this window at all — the screen says so instead of drawing. */
+    val isEmpty: Boolean get() = filled == 0
+}
+
+/**
+ * A backstop, not a policy: one entry mis-dated to 1970 would otherwise ask for tens of
+ * thousands of buckets. Past 400 days the granularity is already months ([granularity]), so
+ * this bound is eighty years of them and no real journal can reach it.
+ */
+private const val MAX_AXIS_SLOTS = 1000
+
+/** Every bucket start between [from] and [to] inclusive, ascending. */
+internal fun bucketSlots(from: LocalDate, to: LocalDate, granularity: Granularity): List<String> {
+    if (to.isBefore(from)) return emptyList()
+    val end = LocalDate.parse(bucketStart(to.toString(), granularity))
+    var cursor = LocalDate.parse(bucketStart(from.toString(), granularity))
+    val out = ArrayList<String>()
+    while (!cursor.isAfter(end) && out.size < MAX_AXIS_SLOTS) {
+        out.add(cursor.toString())
+        cursor = when (granularity) {
+            Granularity.DAY -> cursor.plusDays(1)
+            Granularity.WEEK -> cursor.plusWeeks(1)
+            Granularity.MONTH -> cursor.plusMonths(1)
+        }
+    }
+    return out
+}
+
+/**
+ * The axis of a screen showing [series] over [period], at [granularity].
+ *
+ * The span comes from the WINDOW, not from the data: 30 days is thirty slots even if two of
+ * them were trained, which is what makes "showing: last 30 days" a true statement and what
+ * stops a sparse series from stretching itself across the card.
+ *
+ * [Period.ALL] has no start of its own, so it takes the first day anything was logged on.
+ * Pass the series already narrowed with [inPeriod] — for every window but "all" that filter
+ * has already dropped what falls outside, and this is only the frame around what is left.
+ */
+fun timeAxis(
+    series: List<FormSeries>,
+    period: Period,
+    granularity: Granularity,
+    today: LocalDate,
+): TimeAxis {
+    val days = series.flatMap { it.points }.map { it.opDate }
+    val from = period.startDate(today)
+        ?: days.minOrNull()?.let(LocalDate::parse)
+        ?: today
+    // an entry dated ahead of today is not dropped off the end of an all-time axis: the
+    // fixed windows have already excluded it, and here it is the last thing there is
+    val latest = days.maxOrNull()?.let(LocalDate::parse)
+    val to = if (period.days == null && latest != null && latest.isAfter(today)) latest else today
+    return TimeAxis(granularity, bucketSlots(minOf(from, to), to, granularity))
+}
+
+/**
+ * This series laid onto [axis]: bucketed by the axis's own granularity, then placed slot by
+ * slot. Buckets with nothing in them come out null rather than absent, which is what keeps
+ * every series on the screen the same length and the same shape.
+ */
+fun FormSeries.onAxis(axis: TimeAxis): SeriesOnAxis {
+    val byBucket = bucketPoints(points, axis.granularity, spec).associate { it.opDate to it.value }
+    return SeriesOnAxis(spec, axis.slots.map { AxisSlot(it, byBucket[it]) })
+}
+
 // --- period filter of the detail screen ------------------------------------------------
 
 /**

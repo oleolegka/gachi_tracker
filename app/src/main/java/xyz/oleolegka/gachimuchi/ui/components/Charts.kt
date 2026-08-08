@@ -22,7 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.domain.DayPoint
+import xyz.oleolegka.gachimuchi.domain.AxisSlot
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import xyz.oleolegka.gachimuchi.ui.fmtAxis
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
@@ -46,6 +46,14 @@ import java.time.LocalDate
  * rather than drawing the data and hoping labels fit. Where labels genuinely cannot fit
  * (dozens of bars on a phone), [barLabelIndices] thins them down to the ones a reader
  * actually looks for instead of dropping all of them.
+ *
+ * ── The X axis belongs to the SCREEN, not to the series ─────────────────────────
+ * Both plot charts here take [AxisSlot]s off a shared
+ * [xyz.oleolegka.gachimuchi.domain.TimeAxis] rather than a bare list of points, and the slot
+ * INDEX is the position: slot k is at the same x in every chart on the screen, because every
+ * chart was handed the same slots. A slot with no value is simply not drawn — no bar, no dot
+ * — which is how a series with a thin week says so instead of stretching itself to fill the
+ * card. The reasoning, and the defect that forced it, are on `TimeAxis` itself.
  *
  * The arithmetic lives in `ChartMath.kt` and is unit-tested; this file is only pixels.
  */
@@ -144,6 +152,21 @@ private data class Plot(val left: Float, val top: Float, val right: Float, val b
     val height: Float get() = (bottom - top).coerceAtLeast(1f)
 }
 
+/** How many dates go under a plot. One number for every chart — see [drawXDates]. */
+private const val X_LABELS = 4
+
+/**
+ * Where slot number [index] of [count] sits horizontally: the MIDDLE of its slot.
+ *
+ * The line chart used to run its first point at the very left edge and its last at the very
+ * right, while a bar sat in the middle of its slot — so a line above a bar chart of the same
+ * days was offset from it by half a bar at one end and half a bar at the other. Sharing the
+ * axis is only worth something if the columns line up, so both charts and the date captions
+ * now use this one mapping.
+ */
+private fun slotX(index: Int, count: Int, plot: Plot): Float =
+    plot.left + plot.width * (index + 0.5f) / count.coerceAtLeast(1)
+
 /**
  * Horizontal gridlines and the Y labels beside them, plus the baseline.
  *
@@ -181,20 +204,26 @@ private fun DrawScope.drawYAxis(
     }
 }
 
-/** Date labels under the plot, thinned by [labelIndices] so they never overlap. */
+/**
+ * Date labels under the plot, thinned by [labelIndices] so they never overlap.
+ *
+ * The dates are the AXIS's, not the series' — so the same days are named under every chart of
+ * a screen, and [maxLabels] is the same for all of them for the same reason: two charts whose
+ * captions fell on different days would invite exactly the mis-reading the shared axis exists
+ * to remove.
+ */
 private fun DrawScope.drawXDates(
     measurer: TextMeasurer,
-    points: List<DayPoint>,
+    dates: List<String>,
     plot: Plot,
     colors: GachiColors,
-    maxLabels: Int,
+    maxLabels: Int = X_LABELS,
 ) {
     val style = axisTextStyle(colors.inkMuted)
     val y = plot.bottom + 5.dp.toPx()
-    for (index in labelIndices(points.size, maxLabels)) {
-        val x = if (points.size == 1) plot.left + plot.width / 2f
-        else plot.left + plot.width * index / (points.size - 1).toFloat()
-        val text = fmtShortDay(LocalDate.parse(points[index].opDate))
+    for (index in labelIndices(dates.size, maxLabels)) {
+        val x = slotX(index, dates.size, plot)
+        val text = fmtShortDay(LocalDate.parse(dates[index]))
         val half = measurer.width(text, style) / 2f
         // the end labels are pulled inside the canvas instead of being clipped in half
         val clamped = x.coerceIn(plot.left - 2.dp.toPx() + half, size.width - half)
@@ -225,10 +254,18 @@ private const val AREA_ALPHA = 0.09f
  * Points get a dot only while there are few enough for dots to mean something. Past that
  * only the first, the extreme and the latest point are marked, which are the three anyone
  * looks for.
+ *
+ * ── What an empty slot does to the line ─────────────────────────────────────────
+ * The line is drawn through the slots that HAVE a value and straight across the ones that do
+ * not, so a fortnight off is one long segment rather than a break — a trend metric does not
+ * fall to zero because nobody trained, and a broken line at this size reads as a rendering
+ * fault. What the gap now costs is width: the segment is as wide as the fortnight it spans,
+ * where before it was one step like any other. Dots go on real entries only, so the line
+ * never claims a measurement on a day that has none.
  */
 @Composable
 fun LineChart(
-    points: List<DayPoint>,
+    slots: List<AxisSlot>,
     format: ValueFormat,
     modifier: Modifier = Modifier,
     height: Dp = 180.dp,
@@ -237,10 +274,12 @@ fun LineChart(
 ) {
     val colors = LocalGachiColors.current
     val measurer = rememberTextMeasurer()
-    val scale = remember(points) { niceScale(points.map { it.value }, targetTicks = 4) }
+    val scale = remember(slots) { niceScale(slots.mapNotNull { it.value }, targetTicks = 4) }
+    val filled = remember(slots) { slots.indices.filter { slots[it].value != null } }
+    val dates = remember(slots) { slots.map { it.opDate } }
 
     Canvas(modifier.fillMaxWidth().height(height)) {
-        if (points.isEmpty()) return@Canvas
+        if (filled.isEmpty()) return@Canvas
         val labelHeight = measurer.measure("0", axisTextStyle(colors.inkMuted)).size.height.toFloat()
         val plot = Plot(
             left = yLabelWidth(measurer, scale, format, colors) + 8.dp.toPx(),
@@ -250,20 +289,18 @@ fun LineChart(
             bottom = size.height - labelHeight - 8.dp.toPx(),
         )
         drawYAxis(measurer, scale, plot, format, colors)
-        drawXDates(measurer, points, plot, colors, maxLabels = 4)
+        drawXDates(measurer, dates, plot, colors)
 
         fun pointAt(index: Int): Offset {
-            val x = if (points.size == 1) plot.left + plot.width / 2f
-            else plot.left + plot.width * index / (points.size - 1).toFloat()
-            val y = plot.bottom - plot.height * scale.fraction(points[index].value)
-            return Offset(x, y.coerceIn(plot.top, plot.bottom))
+            val y = plot.bottom - plot.height * scale.fraction(slots[index].value ?: 0.0)
+            return Offset(slotX(index, slots.size, plot), y.coerceIn(plot.top, plot.bottom))
         }
 
         val line = Path()
         val area = Path()
-        for (i in points.indices) {
+        for ((n, i) in filled.withIndex()) {
             val p = pointAt(i)
-            if (i == 0) {
+            if (n == 0) {
                 line.moveTo(p.x, p.y)
                 area.moveTo(p.x, plot.bottom)
                 area.lineTo(p.x, p.y)
@@ -272,7 +309,7 @@ fun LineChart(
                 area.lineTo(p.x, p.y)
             }
         }
-        area.lineTo(pointAt(points.lastIndex).x, plot.bottom)
+        area.lineTo(pointAt(filled.last()).x, plot.bottom)
         area.close()
 
         // a flat wash, not a gradient: the design system fills the area with the line's own
@@ -282,9 +319,10 @@ fun LineChart(
         }
         drawPath(line, lineColor, style = Stroke(width = 2.dp.toPx()))
 
-        val best = if (lowerIsBetter) points.minBy { it.value } else points.maxBy { it.value }
-        val bestIndex = points.indexOf(best)
-        val marked = if (points.size <= 24) points.indices.toSet() else setOf(0, bestIndex, points.lastIndex)
+        val bestIndex = if (lowerIsBetter) filled.minBy { slots[it].value!! }
+        else filled.maxBy { slots[it].value!! }
+        val marked = if (filled.size <= 24) filled.toSet()
+        else setOf(filled.first(), bestIndex, filled.last())
         for (i in marked) {
             val p = pointAt(i)
             // the dot is filled with the card surface so the line does not show through it
@@ -292,13 +330,13 @@ fun LineChart(
             drawCircle(lineColor, radius = 3.dp.toPx(), center = p, style = Stroke(1.5.dp.toPx()))
         }
         // the closing point is solid and larger, with a 2 px ring of the surface around it
-        val endPoint = pointAt(points.lastIndex)
+        val endPoint = pointAt(filled.last())
         drawCircle(lineColor, radius = 4.dp.toPx(), center = endPoint)
         drawCircle(colors.plane, radius = 4.dp.toPx(), center = endPoint, style = Stroke(2.dp.toPx()))
 
         // the latest value in words, above its point: the number the screen is opened for
-        val lastPoint = pointAt(points.lastIndex)
-        val text = fmtAxis(points.last().value, format)
+        val lastPoint = endPoint
+        val text = fmtAxis(slots[filled.last()].value!!, format)
         val style = valueTextStyle(colors.inkSecondary)
         val half = measurer.width(text, style) / 2f
         drawLabel(
@@ -319,23 +357,32 @@ fun LineChart(
  * The baseline is not negotiable. A bar chart is read by comparing lengths, so a truncated
  * axis makes a 5 % difference look like a doubling — that is why [niceScale] is asked for
  * `includeZero` here and not for the line above.
+ *
+ * ── An untrained bucket has no bar, and does not have a zero one ────────────────
+ * A slot with no value is left blank. Drawing it at zero would be a different claim — that a
+ * session happened and moved nothing — and it is the same claim `domain/Analytics.kt` refuses
+ * to make when it drops a day made only of warm-ups. The width is spent all the same, so a
+ * fortnight with two sessions in it now LOOKS like a fortnight with two sessions in it
+ * instead of like two busy days side by side.
  */
 @Composable
 fun BarChart(
-    points: List<DayPoint>,
+    slots: List<AxisSlot>,
     format: ValueFormat,
     modifier: Modifier = Modifier,
     height: Dp = 170.dp,
 ) {
     val colors = LocalGachiColors.current
     val measurer = rememberTextMeasurer()
-    val scale = remember(points) {
-        niceScale(points.map { it.value }, targetTicks = 4, includeZero = true)
+    val scale = remember(slots) {
+        niceScale(slots.mapNotNull { it.value }, targetTicks = 4, includeZero = true)
     }
-    val labelled = remember(points) { barLabelIndices(points.map { it.value }) }
+    val labelled = remember(slots) { barLabelIndices(slots.map { it.value }) }
+    val filled = remember(slots) { slots.indices.filter { slots[it].value != null } }
+    val dates = remember(slots) { slots.map { it.opDate } }
 
     Canvas(modifier.fillMaxWidth().height(height)) {
-        if (points.isEmpty()) return@Canvas
+        if (filled.isEmpty()) return@Canvas
         val axisStyle = axisTextStyle(colors.inkMuted)
         val valueStyle = valueTextStyle(colors.inkSecondary)
         val labelHeight = measurer.measure("0", axisStyle).size.height.toFloat()
@@ -346,17 +393,17 @@ fun BarChart(
             bottom = size.height - labelHeight - 8.dp.toPx(),
         )
         drawYAxis(measurer, scale, plot, format, colors)
-        drawXDates(measurer, points, plot, colors, maxLabels = 3)
+        drawXDates(measurer, dates, plot, colors)
 
-        val slot = plot.width / points.size
+        val slot = plot.width / slots.size
         // the design caps a bar at 20 dp and asks for air between bars; below that the bar
         // takes what the slot leaves, but never thins to nothing (90 bars on a phone)
         val barWidth = minOf(20.dp.toPx(), (slot - 6.dp.toPx())).coerceAtLeast(1f)
         val zeroY = plot.bottom - plot.height * scale.fraction(0.0)
 
-        for (i in points.indices) {
-            val value = points[i].value
-            val centerX = plot.left + slot * (i + 0.5f)
+        for ((n, i) in filled.withIndex()) {
+            val value = slots[i].value ?: continue
+            val centerX = slotX(i, slots.size, plot)
             val valueY = plot.bottom - plot.height * scale.fraction(value)
             val top = minOf(valueY, zeroY)
             val bottom = maxOf(valueY, zeroY)
@@ -381,9 +428,16 @@ fun BarChart(
             if (i in labelled) {
                 val text = fmtAxis(value, format)
                 val half = measurer.width(text, valueStyle) / 2f
+                // a number is allowed the empty slots on either side of its bar as well as its
+                // own: with a shared axis a lone session in a quiet fortnight sits in a narrow
+                // slot but has nothing anywhere near it, and dropping its number then would
+                // lose exactly the value a reader came for
+                val toPrevious = i - (filled.getOrNull(n - 1) ?: -1)
+                val toNext = (filled.getOrNull(n + 1) ?: slots.size) - i
+                val room = slot * minOf(toPrevious, toNext)
                 // a number that would not fit above its own bar is dropped rather than
                 // drawn over its neighbour
-                if (half * 2 <= slot * 1.1f) {
+                if (half * 2 <= room * 1.1f) {
                     drawLabel(
                         measurer, text, valueStyle,
                         x = centerX.coerceIn(plot.left + half, size.width - half),
