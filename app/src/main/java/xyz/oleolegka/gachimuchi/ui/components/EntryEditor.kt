@@ -24,6 +24,7 @@ import xyz.oleolegka.gachimuchi.domain.Cardio
 import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
 import xyz.oleolegka.gachimuchi.domain.formatNumber
@@ -264,15 +265,25 @@ private fun WarmupToggle(selected: Boolean, onToggle: () -> Unit) {
 // the values that were not touched.
 
 private fun initialWeight(entry: ActivityForm): String = when (entry) {
-    is StrengthSet -> (if (entry.ownWeight) entry.addedKg else entry.weightKg)?.let(::formatNumber).orEmpty()
-    is HoldSet -> entry.addedKg?.let(::formatNumber).orEmpty()
+    // outward one branch — only a loaded set has a weight field at all; which field it reads
+    // (added weight vs the implement's own) still depends on the concrete form
+    is LoadedSet -> when (entry) {
+        is StrengthSet -> (if (entry.ownWeight) entry.addedKg else entry.weightKg)?.let(::formatNumber).orEmpty()
+        is HoldSet -> entry.addedKg?.let(::formatNumber).orEmpty()
+    }
+
     is Bodyweight -> formatNumber(entry.weightKg)
     else -> ""
 }
 
 private fun initialReps(entry: ActivityForm): String = when (entry) {
-    is StrengthSet -> entry.reps.toString()
-    is HoldSet -> entry.reps?.toString().orEmpty()
+    // reps is not one of LoadedSet's shared members (StrengthSet's is non-null, HoldSet's is
+    // nullable), so the concrete type still decides how to read it
+    is LoadedSet -> when (entry) {
+        is StrengthSet -> entry.reps.toString()
+        is HoldSet -> entry.reps?.toString().orEmpty()
+    }
+
     else -> ""
 }
 
@@ -289,8 +300,7 @@ private fun initialPace(entry: ActivityForm): String =
     (entry as? Cardio)?.paceSecPerKm?.let(::formatPace).orEmpty()
 
 private fun initialWarmup(entry: ActivityForm): Boolean = when (entry) {
-    is StrengthSet -> entry.warmup
-    is HoldSet -> entry.warmup
+    is LoadedSet -> entry.warmup
     else -> false
 }
 

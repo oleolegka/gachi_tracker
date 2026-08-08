@@ -265,20 +265,21 @@ fun bodyweightAt(events: List<JournalEvent>, opDate: String): Double? =
  */
 val ActivityForm.wantsBodyweightSnapshot: Boolean
     get() = when (this) {
-        is StrengthSet -> ownWeight && bodyweightKg == null
-        is HoldSet -> ownWeight && bodyweightKg == null
+        is LoadedSet -> ownWeight && bodyweightKg == null
         else -> false
     }
 
-fun ActivityForm.withBodyweightSnapshot(weightAt: (String) -> Double?): ActivityForm = when {
-    this is StrengthSet && ownWeight && bodyweightKg == null ->
-        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
-
-    this is HoldSet && ownWeight && bodyweightKg == null ->
-        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
-
-    else -> this
-}
+fun ActivityForm.withBodyweightSnapshot(weightAt: (String) -> Double?): ActivityForm =
+    if (this !is LoadedSet || !ownWeight || bodyweightKg != null) {
+        this
+    } else {
+        weightAt(opDate)?.let { snapshot ->
+            when (this) {
+                is StrengthSet -> copy(bodyweightKg = snapshot)
+                is HoldSet -> copy(bodyweightKg = snapshot)
+            }
+        } ?: this
+    }
 
 // --- the session feed ----------------------------------------------------------------
 
@@ -385,12 +386,16 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
         prior.mapNotNull { pick(it.form)?.takeIf { _ -> it.form.exerciseLink()?.matches(exercise) == true } }
 
     return when (val form = all[index].form) {
-        is StrengthSet ->
-            evaluateStrengthRecord(
-                priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup,
-            )
+        // outward one branch — LoadedSet is the only pair that has a record model at all; which
+        // record function applies still depends on the concrete form, so that stays nested
+        is LoadedSet -> when (form) {
+            is StrengthSet ->
+                evaluateStrengthRecord(
+                    priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup,
+                )
 
-        is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
+            is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
+        }
 
         else -> null
     }
@@ -405,8 +410,7 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
  * the same two events.
  */
 internal fun explicitRestAfter(form: ActivityForm): Double? = when (form) {
-    is StrengthSet -> form.restAfterSec
-    is HoldSet -> form.restAfterSec
+    is LoadedSet -> form.restAfterSec
     else -> null
 }
 
