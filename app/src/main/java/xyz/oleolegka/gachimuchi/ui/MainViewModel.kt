@@ -75,6 +75,16 @@ data class UiState(
     val events: List<JournalEvent> = emptyList(),
     val exercises: List<ExerciseEntity> = emptyList(),
     val slots: List<Slot> = emptyList(),
+    /**
+     * The program library, by local row id — folded in here so that [refById] and every screen
+     * that needs an exercise's resolved protocol (the identity chip, the picker's protocol
+     * caption, the hold-exercise list `GachiApp.kt` builds for the timer tab) can do it without
+     * a second, separate `combine` of their own. This is NOT the only place the library is
+     * exposed: [xyz.oleolegka.gachimuchi.ui.MainViewModel.programs] stays a StateFlow of its
+     * own too, because the program editor screen reads that directly and has no reason to carry
+     * the rest of [UiState] along with it.
+     */
+    val programsById: Map<Long, WorkoutProgram> = emptyMap(),
     val loading: Boolean = true,
 ) {
     fun exerciseById(id: Long?): ExerciseEntity? = id?.let { e -> exercises.firstOrNull { it.id == e } }
@@ -82,8 +92,15 @@ data class UiState(
     fun formOf(id: Long?): ExerciseForm? =
         exerciseById(id)?.let { runCatching { ExerciseForm.fromCode(it.form) }.getOrNull() }
 
+    /**
+     * The domain's view of a catalog row, protocol resolved — what the entry card builds its
+     * forms from, and what every screen wanting `ExerciseRef.workSec`/`restSec` reads.
+     */
+    fun refOf(exercise: ExerciseEntity): ExerciseRef =
+        exercise.toRef(exercise.protocolProgramId?.let { programsById[it] })
+
     /** The catalog row as the domain sees it — what the entry card builds its forms from. */
-    fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.toRef()
+    fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.let(::refOf)
 
     /**
      * How the journal names an exercise the screen is holding a number for.
@@ -124,8 +141,8 @@ class MainViewModel(
 ) : ViewModel() {
 
     val state: StateFlow<UiState> =
-        combine(repo.events, repo.exercises, repo.slots) { events, exercises, slots ->
-            UiState(events, exercises, slots, loading = false)
+        combine(repo.events, repo.exercises, repo.slots, programRepo.programs) { events, exercises, slots, programs ->
+            UiState(events, exercises, slots, programs.associateBy { it.id }, loading = false)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
     /**
@@ -250,7 +267,7 @@ class MainViewModel(
                 timer.floors.start(
                     exerciseId = exerciseId,
                     exerciseName = exercise?.name ?: "Rest",
-                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.toRef()) * 1000L,
+                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.let { repo.toRef(it) }) * 1000L,
                 )
             }
         }

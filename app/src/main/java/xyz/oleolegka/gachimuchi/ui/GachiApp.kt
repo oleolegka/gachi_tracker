@@ -24,7 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
@@ -191,9 +190,10 @@ fun GachiApp(viewModel: MainViewModel) {
     val enableTimer = rememberTimerEnabler(onEnabled = viewModel::enableTimer)
 
     // the hold exercises, which are the ones a program can be logged as; computed once per
-    // change of the catalog rather than on every recomposition of a running countdown
-    val holdExercises = remember(state.exercises) {
-        state.exercises.map { it.toRef() }.filter { it.form == ExerciseForm.HOLD }
+    // change of the catalog (or the library, since a resolved ExerciseRef.protocol now comes
+    // from it) rather than on every recomposition of a running countdown
+    val holdExercises = remember(state.exercises, state.programsById) {
+        state.exercises.map(state::refOf).filter { it.form == ExerciseForm.HOLD }
     }
 
     // the headings programs are already filed under, offered by the editor so the same one

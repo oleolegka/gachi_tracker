@@ -20,6 +20,7 @@ import xyz.oleolegka.gachimuchi.domain.PortableSlot
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.elementToPayload
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.mergeExercises
 import xyz.oleolegka.gachimuchi.domain.payloadToElement
 import xyz.oleolegka.gachimuchi.domain.portableSettings
@@ -67,6 +68,9 @@ class JournalBackup(
     suspend fun export(exportedAt: String = "", deviceId: String = ""): String {
         val exercises = db.exercises().all()
         val uidOfExercise = exercises.associate { it.id to it.uid }
+        // the reverse of programsOut's own exercise lookup: an exercise names its protocol
+        // program by uid the same way a program names its exercise by uid
+        val uidOfProgram = db.programs().allPrograms().associate { it.id to it.uid }
 
         return writeJournalFile(
             events = db.events().all().map { row ->
@@ -79,7 +83,7 @@ class JournalBackup(
                     authorId = row.authorId,
                 )
             },
-            exercises = exercises.map { it.toPortable() },
+            exercises = exercises.map { it.toPortable(it.protocolProgramId?.let(uidOfProgram::get)) },
             slots = slotsOut(uidOfExercise),
             programs = programsOut(uidOfExercise),
             settings = settings?.read(),
@@ -158,23 +162,32 @@ class JournalBackup(
     suspend fun restore(file: JournalFile): ImportReport {
         val notes = ArrayList<String>()
 
-        val merge = mergeExercises(file.exercises, db.exercises().all().map { it.toPortable() })
+        // resolved for the STORED side of the identity comparison too, or every stored
+        // exercise would compare as "no protocol" and a genuine duplicate could slip past
+        // mergeExercises — see [export] for the same lookup built the other way round
+        val uidOfProgram = db.programs().allPrograms().associate { it.id to it.uid }
+        val merge = mergeExercises(
+            file.exercises,
+            db.exercises().all().map { it.toPortable(it.protocolProgramId?.let(uidOfProgram::get)) },
+        )
         for (row in merge.toInsert) {
             db.exercises().insert(
                 ExerciseEntity(
                     name = row.name,
                     form = row.form,
                     createdAt = row.createdAt.ifBlank { now() },
-                    protocolWorkSec = row.protocolWorkSec,
-                    protocolRestSec = row.protocolRestSec,
+                    // the local row id of the program this uid names cannot be known yet — the
+                    // program itself may still be waiting in file.programs, below — so this is
+                    // filled in afterwards by [setProtocolProgramId]; the identity key needs no
+                    // such wait, because it is keyed on the uid STRING the file already carries,
+                    // not on a local id (see [xyz.oleolegka.gachimuchi.domain.PortableExercise])
                     defaultRestSec = row.defaultRestSec,
                     ledByProtocol = row.ledByProtocol,
                     oneSided = row.oneSided,
                     bodyweightShare = row.bodyweightShare,
                     uid = row.uid,
                     hidden = row.hidden,
-                    // identity_key is left to the entity's own default, which computes it from
-                    // the four values above: a key carried in the file could disagree with them
+                    identityKey = exerciseIdentityKey(row.name, row.form, row.protocolProgramUid),
                 )
             )
         }
@@ -195,6 +208,20 @@ class JournalBackup(
                 "carry, and were left out of the plan."
         }
         val programs = restorePrograms(file.programs, merge::resolve, idOfUid, notes)
+
+        /*
+         * The protocol link, backfilled now that the programs section has been written: every
+         * program the file names by uid either just landed above or was already here under
+         * that uid. A row whose program is in neither case (a hand-edited or inconsistent file)
+         * keeps `protocol_program_id = null` — a dangling reference reads as "no protocol",
+         * exactly as it does everywhere else this column is read.
+         */
+        val programIdOfUid = db.programs().allPrograms().associate { it.uid to it.id }
+        for (row in merge.toInsert) {
+            val programUid = row.protocolProgramUid ?: continue
+            val exerciseId = idOfUid[row.uid] ?: continue
+            programIdOfUid[programUid]?.let { db.exercises().setProtocolProgramId(exerciseId, it) }
+        }
 
         val carried = file.settings
         val settingsApplied = carried != null && settings != null

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
@@ -247,6 +248,7 @@ private fun PickExisting(
     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
         items(items, key = { it.id }) { exercise ->
             val form = runCatching { ExerciseForm.fromCode(exercise.form) }.getOrNull()
+            val protocolBlock = exercise.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
             val used = usage[exercise.id]
             Column(
                 modifier = Modifier
@@ -268,8 +270,8 @@ private fun PickExisting(
                          * identical lines would put the same failure back one step later, with
                          * the user picking whichever of the two came first.
                          */
-                        if (exercise.protocolWorkSec != null && exercise.protocolRestSec != null) {
-                            append(" - ${exercise.protocolWorkSec.trimZero()}:${exercise.protocolRestSec.trimZero()}")
+                        if (protocolBlock != null) {
+                            append(" - ${protocolBlock.workSec}:${protocolBlock.restSec}")
                         }
                         if (used == null) {
                             append(" - not logged yet")
@@ -285,10 +287,6 @@ private fun PickExisting(
         }
     }
 }
-
-/** "7" rather than "7.0": a protocol is written the way it is spoken. */
-private fun Double.trimZero(): String =
-    if (this == toLong().toDouble()) toLong().toString() else toString()
 
 /**
  * Creating an exercise. The form is asked ONCE, here, and never again (§11): it is part

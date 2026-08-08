@@ -5,6 +5,7 @@ import xyz.oleolegka.gachimuchi.domain.CatalogExercise
 import xyz.oleolegka.gachimuchi.domain.CatalogRow
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.PortableExercise
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.toCatalogExercise
 import xyz.oleolegka.gachimuchi.domain.toPortable
 import xyz.oleolegka.gachimuchi.domain.toRef
@@ -34,8 +35,7 @@ fun ExerciseEntity.toCatalogRow(): CatalogRow = CatalogRow(
     name = name,
     form = form,
     createdAt = createdAt,
-    protocolWorkSec = protocolWorkSec,
-    protocolRestSec = protocolRestSec,
+    protocolProgramId = protocolProgramId,
     defaultRestSec = defaultRestSec,
     ledByProtocol = ledByProtocol,
     oneSided = oneSided,
@@ -43,11 +43,24 @@ fun ExerciseEntity.toCatalogRow(): CatalogRow = CatalogRow(
     hidden = hidden,
 )
 
-/** The catalog row as the domain sees it — see [ExerciseRef]. */
-fun ExerciseEntity.toRef(): ExerciseRef = toCatalogRow().toRef()
+/**
+ * The catalog row as the domain sees it — see [ExerciseRef].
+ *
+ * [program] is the resolved library program [ExerciseEntity.protocolProgramId] points at, or
+ * null for no protocol — the caller resolves it (see [CatalogRow.toRef]'s own KDoc for why this
+ * function does not reach for a database itself).
+ */
+fun ExerciseEntity.toRef(program: WorkoutProgram? = null): ExerciseRef = toCatalogRow().toRef(program)
 
 /** Catalog row -> what the dashboard needs; an unreadable form code drops out of the feed. */
 fun ExerciseEntity.toCatalog(): CatalogExercise? = toCatalogRow().toCatalogExercise()
 
-/** Catalog row -> what a journal backup carries for it. */
-fun ExerciseEntity.toPortable(): PortableExercise = toCatalogRow().toPortable()
+/**
+ * Catalog row -> what a journal backup carries for it.
+ *
+ * [protocolProgramUid] is the resolved uid of [ExerciseEntity.protocolProgramId], or null —
+ * resolved by the caller for the same reason [toRef] takes a resolved program rather than a
+ * database: this mapper stays a pure function of what it is handed.
+ */
+fun ExerciseEntity.toPortable(protocolProgramUid: String? = null): PortableExercise =
+    toCatalogRow().toPortable(protocolProgramUid)

@@ -75,6 +75,13 @@ class ProgramRepository(private val db: AppDatabase) {
                     createdAt = existing?.createdAt ?: now(),
                     exerciseId = program.exerciseId,
                     category = program.category.trim(),
+                    // PRESERVED, not left to the entity's own `newUid()` default. A program's
+                    // uid is now what an exercise's protocol is keyed on
+                    // (domain/Catalog.kt's ExerciseIdentity), and letting an ordinary edit here
+                    // regenerate it would silently strand every exercise identity pointing at
+                    // this program the moment its name, category or blocks were next corrected
+                    // in the library editor.
+                    uid = existing?.uid ?: program.uid,
                 )
             )
             db.programs().deleteGroupsOf(program.id)
@@ -148,6 +155,7 @@ class ProgramRepository(private val db: AppDatabase) {
                 prepareSec = program.prepareSec,
                 exerciseId = program.exerciseId,
                 category = program.category,
+                uid = program.uid,
                 groups = groupsByProgram[program.id].orEmpty().map { group ->
                     ProgramGroup(
                         name = group.name,

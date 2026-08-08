@@ -132,6 +132,22 @@ data class PortableEvent(
  * [journalFileJson] sets `ignoreUnknownKeys`. No payload rewrite was written for old files on
  * disk; there was nothing to migrate, because a file is read once, on import, through exactly
  * this class, and a class with no `edgeMm` field cannot read one back out.
+ *
+ * ── `protocol_work_sec`/`protocol_rest_sec` used to be two of these fields, and are gone
+ * (schema version 19) ─────────────────────────────────────────────────────────────
+ * The protocol is now a REFERENCE to a library program rather than a bare work:rest pair — see
+ * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity] for why. [protocolProgramUid] carries that
+ * reference the same way [PortableProgramRow.exerciseUid] already carries the reverse link, by
+ * uid rather than by local row number, so it survives a restore onto a different phone.
+ *
+ * The consequence for an OLD backup file worth stating plainly: it still has the two old keys,
+ * decodes fine under `ignoreUnknownKeys` exactly as an `edge_mm` file does, and the two numbers
+ * are simply DROPPED on import — the exercise comes back with no protocol program at all, not
+ * with one reconstructed from the pair. That is a real loss, accepted rather than worked
+ * around: a fresh restore from a JSON backup is a rare path, and synthesizing a program from two
+ * bare numbers during import would duplicate the migration's own find-or-create logic in a
+ * second place, maintained for a path nobody exercises routinely. See
+ * `PortableExerciseCoverageTest` for the test pinning this behaviour.
  */
 @Serializable
 data class PortableExercise(
@@ -140,8 +156,8 @@ data class PortableExercise(
     /** Form code, the values of [ExerciseForm]. */
     @SerialName("form") val form: Int,
     @SerialName("created_at") val createdAt: String,
-    @SerialName("protocol_work_sec") val protocolWorkSec: Double? = null,
-    @SerialName("protocol_rest_sec") val protocolRestSec: Double? = null,
+    /** The library program this exercise's protocol is, by uid — see the class KDoc above. */
+    @SerialName("protocol_program_uid") val protocolProgramUid: String? = null,
     @SerialName("default_rest_sec") val defaultRestSec: Int? = null,
     @SerialName("led_by_protocol") val ledByProtocol: Boolean? = null,
     /** Whether a set of this exercise is done one side at a time (schema version 13). */
@@ -482,21 +498,23 @@ data class ImportReport(
  * definition living in the file format would be a second thing to keep in step.
  */
 fun PortableExercise.identity(): ExerciseIdentity =
-    exerciseIdentity(name, form, protocolWorkSec, protocolRestSec)
+    exerciseIdentity(name, form, protocolProgramUid)
 
 /**
  * The backup's view of a catalog row — see [CatalogRow] for why this is one of four narrow
  * views built off the one place that reads the entity, rather than a fifth place that reads it
  * again. [id] is dropped: it is local plumbing (domain/Catalog.kt), and the file refers to
  * everything by [CatalogRow.uid] instead.
+ *
+ * [protocolProgramUid] is resolved by the caller (see [xyz.oleolegka.gachimuchi.data.toPortable]
+ * — this function is a pure mapping over what it is handed, same as [toRef]).
  */
-fun CatalogRow.toPortable(): PortableExercise = PortableExercise(
+fun CatalogRow.toPortable(protocolProgramUid: String? = null): PortableExercise = PortableExercise(
     uid = uid,
     name = name,
     form = form,
     createdAt = createdAt,
-    protocolWorkSec = protocolWorkSec,
-    protocolRestSec = protocolRestSec,
+    protocolProgramUid = protocolProgramUid,
     defaultRestSec = defaultRestSec,
     ledByProtocol = ledByProtocol,
     oneSided = oneSided,

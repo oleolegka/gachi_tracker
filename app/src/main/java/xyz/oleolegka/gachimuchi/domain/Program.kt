@@ -96,6 +96,15 @@ data class ProgramGroup(
  * Optional rather than required, because most programs are not one exercise: a circuit is
  * five, and forcing a link on it would mean picking a lie. Null means "ask when it
  * finishes" (ui/components/RunLogDialog.kt), not "never offer".
+ *
+ * ── [uid] (schema version 19) ─────────────────────────────────────────────────
+ * The stable identity of this program across devices and edits — the same role
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.uid] plays for a catalog row. It is what an
+ * exercise's protocol is now keyed on ([xyz.oleolegka.gachimuchi.domain.ExerciseIdentity]), and
+ * a local row id (`Long`) could never fill that role: it counts how many programs THIS phone
+ * has written and means nothing on another one, which is exactly what would silently break
+ * cross-device identity comparison ([xyz.oleolegka.gachimuchi.domain.PortableExercise.identity],
+ * `mergeExercises`) the moment a device compared its own numbering against someone else's.
  */
 @Serializable
 data class WorkoutProgram(
@@ -107,6 +116,7 @@ data class WorkoutProgram(
     @SerialName("exercise_id") val exerciseId: Long? = null,
     /** Free-text heading this program is filed under on the timer tab. Blank means none. */
     @SerialName("category") val category: String = "",
+    @SerialName("uid") val uid: String = newUid(),
 )
 
 /** Programs under one heading, in the order they are stored. */
@@ -314,6 +324,20 @@ fun WorkoutProgram.flatten(): List<WorkoutStep> {
     while (out.isNotEmpty() && out.last().kind == StepKind.REST) out.removeAt(out.lastIndex)
     return out
 }
+
+/**
+ * The first block of a program's first group, or null for an empty program.
+ *
+ * ── Why this exists ──────────────────────────────────────────────────────────────
+ * A protocol built from a plain "work, rest" pair — the shape the exercise create/edit dialogs
+ * still speak (see `ActivityRepository`'s find-or-create-protocol-program logic) — is always
+ * exactly this: one group, one block, `repeats == 1` on both. This is the read side of that
+ * shape, used both to spot a matching program when one already exists in the library and to
+ * turn a resolved program back into the two numbers `ExerciseRef.workSec`/`restSec` want (see
+ * [xyz.oleolegka.gachimuchi.domain.CatalogRow.toRef]). It says nothing about whether a program
+ * genuinely IS that minimal shape — a caller comparing `repeats` and block count does that.
+ */
+fun WorkoutProgram.firstBlock(): ProgramBlock? = groups.firstOrNull()?.blocks?.firstOrNull()
 
 /** Total length of a program once expanded, in seconds. */
 fun WorkoutProgram.totalSec(): Int = flatten().sumOf { it.durationSec }
