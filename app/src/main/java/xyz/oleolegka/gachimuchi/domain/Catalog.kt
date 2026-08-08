@@ -128,3 +128,87 @@ fun freeExerciseName(
 }
 
 private const val MAX_NAME_ATTEMPTS = 999
+
+/**
+ * A catalog row exactly as the database holds it, minus the columns that mean nothing off
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity] itself: the local row number's own space
+ * ([xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID] never varies) and the identity key, which
+ * is derived from [name], [form], [edgeMm], [protocolWorkSec] and [protocolRestSec] and would
+ * only ever be recomputed by a reader, never trusted from one.
+ *
+ * ── The one place a new column has to be wired in ───────────────────────────────
+ * Every view the app takes of a catalog row — the entry card's [ExerciseRef], the dashboard's
+ * [CatalogExercise], the §12-A switcher's [HoldSibling], the backup's `PortableExercise` — used
+ * to be read off [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity] independently, by four
+ * mappers that each remembered a different subset of its columns. A column that a mapper forgot
+ * still compiled, because every field on every one of those four types has a default: the
+ * column simply came back empty on that one view and nowhere else, which is how the same bug
+ * shipped twice in three days (§12-A one-sidedness and body-weight share, then hiding).
+ *
+ * [xyz.oleolegka.gachimuchi.data.toCatalogRow] is now the ONLY function that reads the entity,
+ * and [toRef], [toCatalogExercise], [toHoldSibling] and
+ * [xyz.oleolegka.gachimuchi.domain.toPortable] each build their narrower view out of this one
+ * instead — so a column added to the entity and to this class is a column every view already
+ * has, and a column added to the entity and forgotten here is the one place left to go wrong.
+ */
+data class CatalogRow(
+    val id: Long,
+    val uid: String,
+    val name: String,
+    /** Form code, the values of [ExerciseForm]. */
+    val form: Int,
+    val createdAt: String,
+    val edgeMm: Double? = null,
+    val protocolWorkSec: Double? = null,
+    val protocolRestSec: Double? = null,
+    val defaultRestSec: Int? = null,
+    val ledByProtocol: Boolean? = null,
+    val oneSided: Boolean = false,
+    val bodyweightShare: Double? = null,
+    val hidden: Boolean = false,
+)
+
+/**
+ * The entry card's view of a catalog row — see [ExerciseRef].
+ *
+ * An unreadable form code degrades to [ExerciseForm.TICK] rather than throwing: that is the
+ * only form whose entry card cannot write a wrong-shaped payload, so a corrupted row costs a
+ * useless card instead of a crash on the screen the user is standing in the gym with.
+ */
+fun CatalogRow.toRef(): ExerciseRef = ExerciseRef(
+    id = id,
+    uid = uid,
+    name = name,
+    form = runCatching { ExerciseForm.fromCode(form) }.getOrDefault(ExerciseForm.TICK),
+    edgeMm = edgeMm,
+    workSec = protocolWorkSec,
+    restSec = protocolRestSec,
+    defaultRestSec = defaultRestSec,
+    ledByProtocolFlag = ledByProtocol,
+    oneSided = oneSided,
+)
+
+/**
+ * The dashboard's view of a catalog row — see [CatalogExercise]. Null for a form code this
+ * build cannot read, so an unreadable row drops out of the feed rather than crashing it.
+ */
+fun CatalogRow.toCatalogExercise(): CatalogExercise? =
+    runCatching { ExerciseForm.fromCode(form) }.getOrNull()?.let { readableForm ->
+        CatalogExercise(
+            id = id,
+            name = name,
+            form = readableForm,
+            uid = uid,
+            oneSided = oneSided,
+            bodyweightShare = bodyweightShare,
+        )
+    }
+
+/** The §12-A sibling switcher's view of a catalog row — see [HoldSibling]. */
+fun CatalogRow.toHoldSibling(): HoldSibling = HoldSibling(
+    exerciseId = id,
+    name = name,
+    edgeMm = edgeMm,
+    workSec = protocolWorkSec,
+    restSec = protocolRestSec,
+)

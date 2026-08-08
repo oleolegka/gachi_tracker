@@ -11,7 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
-import xyz.oleolegka.gachimuchi.domain.CatalogExercise
+import xyz.oleolegka.gachimuchi.data.toCatalog
 import xyz.oleolegka.gachimuchi.domain.DoorTile
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.activityHeatmap
@@ -176,34 +176,6 @@ private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, today: LocalDat
     return parts.joinToString(" - ")
 }
 
-/**
- * Catalog row -> what the dashboard needs; an unreadable form code drops out of the feed.
- *
- * ── Every column the analytics can use, or they silently do nothing ─────────────
- * This mapping used to carry the id, the name and the form, and drop the rest. The three it
- * dropped are not decoration:
- *
- *  - [ExerciseEntity.uid] is how an entry names its exercise off this phone. Without it the
- *    link fell back to the local row number for everything, which is the fallback meant for
- *    entries too old to carry an identity — see [ExerciseLink.matches].
- *  - [ExerciseEntity.oneSided] is what splits a record per hand. Dropped, `recordsOf` took its
- *    default and reported one record for both hands: the better one, hiding the gap the
- *    training exists to close.
- *  - [ExerciseEntity.bodyweightShare] is what gives a pull-up any tonnage at all. Dropped,
- *    `volumeSeries` took its default and a week of pull-ups drew as a week of doing nothing.
- *
- * All three arrived with columns of their own and defaults that preserve the old behaviour,
- * which is exactly why leaving them out compiled, ran, and quietly answered the old question.
- */
-fun ExerciseEntity.toCatalog(): CatalogExercise? =
-    runCatching { ExerciseForm.fromCode(form) }.getOrNull()
-        ?.let {
-            CatalogExercise(
-                id = id,
-                name = name,
-                form = it,
-                uid = uid,
-                oneSided = oneSided,
-                bodyweightShare = bodyweightShare,
-            )
-        }
+// ExerciseEntity.toCatalog() has moved to data/CatalogMapping.kt: a screen is not the place
+// to describe how the table is read (see the KDoc there, and domain/Catalog.kt's CatalogRow,
+// for the bug two independent mappers like this one used to cause).

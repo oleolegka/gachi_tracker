@@ -17,7 +17,6 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.EntryAmended
 import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
-import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
@@ -763,27 +762,8 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun deleteSlot(id: Long) = db.slots().deleteByIds(listOf(id))
 }
 
-/**
- * The catalog row as the domain sees it. Screens build forms out of an [ExerciseRef] and
- * never assemble a payload themselves, so an exercise cannot lose its identity — for
- * holds that identity includes edge and protocol (§12-A).
- *
- * An unreadable form code degrades to a check-in rather than throwing: that is the only
- * form whose entry card cannot write a wrong-shaped payload, so a corrupted row costs a
- * useless card instead of a crash on the screen the user is standing in the gym with.
- */
-fun ExerciseEntity.toRef(): ExerciseRef = ExerciseRef(
-    id = id,
-    uid = uid,
-    name = name,
-    form = runCatching { ExerciseForm.fromCode(form) }.getOrDefault(ExerciseForm.TICK),
-    edgeMm = edgeMm,
-    workSec = protocolWorkSec,
-    restSec = protocolRestSec,
-    defaultRestSec = defaultRestSec,
-    ledByProtocolFlag = ledByProtocol,
-    oneSided = oneSided,
-)
+// ExerciseEntity.toRef() has moved to data/CatalogMapping.kt, alongside the rest of the
+// catalog row's views (see the KDoc there for why the four were consolidated).
 
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,
