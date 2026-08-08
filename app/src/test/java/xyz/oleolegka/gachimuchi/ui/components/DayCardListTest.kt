@@ -103,6 +103,22 @@ class DayCardListTest : ScreenTest() {
         assertEquals(7L to today, startedFromPlan)
     }
 
+    /*
+     * A plan is opened by tapping it and started only by the button. It used to start from
+     * anywhere on the card, and that is how a session planned for the evening became a
+     * workout running an hour early: the user tapped it to look inside and to add exercises.
+     * Reported from the phone on 2026-08-08.
+     */
+    @Test
+    fun `tapping the body of a plan opens it and does not start a workout`() {
+        day(slots = listOf(slot(7, "Gym", "18:00", today.toString())), withSlotIcons = true)
+
+        compose.onNodeWithText("Gym").performClick()
+
+        assertEquals(null, startedFromPlan)
+        assertEquals(7L, edited)
+    }
+
     @Test
     fun `the workout in progress says so, counts what is in it, and offers to continue`() {
         val journal = Journal()
