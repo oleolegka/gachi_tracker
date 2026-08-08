@@ -200,8 +200,12 @@ class SharedTimeAxisTest {
      * a window anybody will meet.
      */
     @Test
-    fun `the bucket walk is bounded against absurd dates`() {
+    fun `the bucket walk is bounded against absurd dates, and keeps the recent end`() {
         val slots = bucketSlots(LocalDate.parse("1900-01-01"), today, Granularity.DAY)
         assertEquals(1000, slots.size)
+        // what the bound drops is 1900, never this month: an axis that spent its allowance on
+        // the far end would hide everything anybody has actually logged
+        assertEquals("2026-08-07", slots.last())
+        assertEquals(slots, slots.sorted())
     }
 }

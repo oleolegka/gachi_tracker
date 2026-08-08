@@ -207,21 +207,28 @@ data class SeriesOnAxis(val spec: SeriesSpec, val slots: List<AxisSlot>) {
  */
 private const val MAX_AXIS_SLOTS = 1000
 
-/** Every bucket start between [from] and [to] inclusive, ascending. */
+/**
+ * Every bucket start between [from] and [to] inclusive, ascending.
+ *
+ * Walked BACKWARDS from [to] so that [MAX_AXIS_SLOTS], if it ever bites, drops the oldest end
+ * of the window. Walking forwards would have spent the whole allowance on 1900 and left this
+ * month off the axis altogether — a backstop that hides the data is worse than the runaway it
+ * is guarding against.
+ */
 internal fun bucketSlots(from: LocalDate, to: LocalDate, granularity: Granularity): List<String> {
     if (to.isBefore(from)) return emptyList()
-    val end = LocalDate.parse(bucketStart(to.toString(), granularity))
-    var cursor = LocalDate.parse(bucketStart(from.toString(), granularity))
+    val start = LocalDate.parse(bucketStart(from.toString(), granularity))
+    var cursor = LocalDate.parse(bucketStart(to.toString(), granularity))
     val out = ArrayList<String>()
-    while (!cursor.isAfter(end) && out.size < MAX_AXIS_SLOTS) {
+    while (!cursor.isBefore(start) && out.size < MAX_AXIS_SLOTS) {
         out.add(cursor.toString())
         cursor = when (granularity) {
-            Granularity.DAY -> cursor.plusDays(1)
-            Granularity.WEEK -> cursor.plusWeeks(1)
-            Granularity.MONTH -> cursor.plusMonths(1)
+            Granularity.DAY -> cursor.minusDays(1)
+            Granularity.WEEK -> cursor.minusWeeks(1)
+            Granularity.MONTH -> cursor.minusMonths(1)
         }
     }
-    return out
+    return out.reversed()
 }
 
 /**
