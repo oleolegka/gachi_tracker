@@ -85,13 +85,13 @@ fun ExercisePickerSheet(
     /**
      * Creating a new catalog exercise, or NULL for a caller that only picks from what is
      * already there — the slot editor, which plans sessions out of exercises the user
-     * already trains and has no business asking §12-A identity questions (form, edge,
-     * protocol) days before the first set.
+     * already trains and has no business asking §12-A identity questions (form, protocol)
+     * days before the first set.
      *
      * Nullable rather than defaulted, so that every caller has to say which it is: a create
      * button wired to nothing is exactly the failure this is meant to make impossible.
      */
-    onCreate: ((String, ExerciseForm, Double?, Double?, Double?) -> Unit)?,
+    onCreate: ((String, ExerciseForm, Double?, Double?) -> Unit)?,
     onDismiss: () -> Unit,
     /**
      * Skip the list and open on the create form. Set when the catalog is empty: a search
@@ -118,8 +118,8 @@ fun ExercisePickerSheet(
                 CreateExerciseForm(
                     initialName = query,
                     onCancel = { creating = false },
-                    onCreate = { name, form, edge, work, rest ->
-                        onCreate(name, form, edge, work, rest)
+                    onCreate = { name, form, work, rest ->
+                        onCreate(name, form, work, rest)
                         creating = false
                         onDismiss()
                     },
@@ -260,15 +260,14 @@ private fun PickExisting(
                     buildString {
                         append(form?.title ?: "unknown form")
                         /*
-                         * The edge and the protocol are on the row because they are what makes
-                         * two rows of the same NAME two exercises (§12-A). They used to be
-                         * unnecessary here for a bad reason: creating an exercise deduplicated
-                         * by name, so a second "Hangs" on another edge could not exist — it was
-                         * silently handed the first one's history. Now that it can exist, a list
-                         * showing two identical lines would put the same failure back one step
-                         * later, with the user picking whichever of the two came first.
+                         * The protocol is on the row because it is what makes two rows of the
+                         * same NAME two exercises (§12-A). It used to be unnecessary here for a
+                         * bad reason: creating an exercise deduplicated by name, so a second
+                         * "Hangs" on another protocol could not exist — it was silently handed
+                         * the first one's history. Now that it can exist, a list showing two
+                         * identical lines would put the same failure back one step later, with
+                         * the user picking whichever of the two came first.
                          */
-                        exercise.edgeMm?.let { append(" - ${it.trimZero()} mm") }
                         if (exercise.protocolWorkSec != null && exercise.protocolRestSec != null) {
                             append(" - ${exercise.protocolWorkSec.trimZero()}:${exercise.protocolRestSec.trimZero()}")
                         }
@@ -287,27 +286,26 @@ private fun PickExisting(
     }
 }
 
-/** "20" rather than "20.0": an edge is written the way it is spoken. */
+/** "7" rather than "7.0": a protocol is written the way it is spoken. */
 private fun Double.trimZero(): String =
     if (this == toLong().toDouble()) toLong().toString() else toString()
 
 /**
  * Creating an exercise. The form is asked ONCE, here, and never again (§11): it is part
- * of the exercise, not of a set. For holds the edge and the work:rest protocol are asked
- * in the same breath, because §12-A makes them part of the identity — the same hangs on a
- * 15 mm edge are a DIFFERENT exercise with its own history and its own record.
+ * of the exercise, not of a set. For holds the work:rest protocol is asked in the same
+ * breath, because §12-A makes it part of the identity — the same hangs on a different
+ * protocol are a DIFFERENT exercise with its own history and its own record.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateExerciseForm(
     initialName: String,
     onCancel: () -> Unit,
-    onCreate: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
+    onCreate: (String, ExerciseForm, Double?, Double?) -> Unit,
 ) {
     val colors = LocalGachiColors.current
     var name by rememberSaveable { mutableStateOf(initialName) }
     var form by rememberSaveable { mutableStateOf(ExerciseForm.STRENGTH) }
-    var edge by rememberSaveable { mutableStateOf("") }
     var work by rememberSaveable { mutableStateOf("") }
     var rest by rememberSaveable { mutableStateOf("") }
 
@@ -333,17 +331,12 @@ private fun CreateExerciseForm(
 
     if (form == ExerciseForm.HOLD) {
         Text(
-            "Edge and protocol are part of the identity: hangs on another edge or another " +
-                "work:rest are a separate exercise with a separate record.",
+            "The work:rest protocol is part of the identity: hangs on another protocol are " +
+                "a separate exercise with a separate record.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkSecondary,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = edge, onValueChange = { edge = it }, modifier = Modifier.weight(1f),
-                singleLine = true, label = { Text("Edge, mm") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            )
             OutlinedTextField(
                 value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
                 singleLine = true, label = { Text("Work, s") },
@@ -368,12 +361,12 @@ private fun CreateExerciseForm(
                 val hold = form == ExerciseForm.HOLD
                 /*
                  * Every number here is "positive, or it was never filled in". A zero (or a
-                 * minus, which some keyboards offer on the decimal layout) is not a 0 mm
-                 * edge or a 0-second hang, it is an empty field with a character in it —
-                 * and the HoldSet validator rejects a non-positive edge or protocol by
-                 * throwing, which on the logging screen would surface as a crash on the Add
-                 * button rather than as a message. Stored as null, the field simply stays
-                 * unset, which is a state the whole app already handles.
+                 * minus, which some keyboards offer on the decimal layout) is not a 0-second
+                 * hang, it is an empty field with a character in it — and the HoldSet
+                 * validator rejects a non-positive protocol by throwing, which on the
+                 * logging screen would surface as a crash on the Add button rather than as
+                 * a message. Stored as null, the field simply stays unset, which is a state
+                 * the whole app already handles.
                  *
                  * The protocol is a pair or nothing at all: half of it would be rejected by
                  * the same validator on the very first set.
@@ -381,11 +374,7 @@ private fun CreateExerciseForm(
                 val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else null
                 val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else null
                 val pair = if (w != null && r != null) w to r else null
-                onCreate(
-                    name.trim(), form,
-                    if (hold) parseNumber(edge)?.takeIf { it > 0 } else null,
-                    pair?.first, pair?.second,
-                )
+                onCreate(name.trim(), form, pair?.first, pair?.second)
             },
             enabled = name.isNotBlank(),
             modifier = Modifier.weight(1f).heightIn(min = 48.dp),

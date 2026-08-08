@@ -354,9 +354,9 @@ fun restProgram(restSec: Int, label: String = "Rest"): WorkoutProgram = WorkoutP
  * The integration a standalone timer app cannot have: a program built FROM A CATALOG
  * EXERCISE.
  *
- * A hangboard exercise already carries its work:rest protocol and its edge (§12-A puts
- * them on the exercise, not on the set), so "Hangs 20 mm - 7:3" plus a rep count, a set
- * count and a pause between sets is a complete interval program with nothing left to ask.
+ * A hangboard exercise already carries its work:rest protocol (§12-A puts it on the
+ * exercise, not on the set), so "Hangs - 7:3" plus a rep count, a set count and a pause
+ * between sets is a complete interval program with nothing left to ask.
  * That is the whole point: the numbers are already in the catalog and in the journal, so
  * starting the right timer costs one tap instead of building a program by hand.
  *

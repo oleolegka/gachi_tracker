@@ -196,8 +196,8 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
 
     if (candidates.isEmpty()) {
         Text(
-            "There is no hold exercise in the catalog to file this under. Create one (name, " +
-                "edge and work:rest) and this program can be logged next time - the numbers " +
+            "There is no hold exercise in the catalog to file this under. Create one (name " +
+                "and work:rest) and this program can be logged next time - the numbers " +
                 "above are what it counted.",
             style = MaterialTheme.typography.bodyMedium,
             color = colors.inkMuted,
@@ -221,9 +221,7 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
             Text(candidate.name, style = MaterialTheme.typography.bodyMedium)
             Text(
                 buildString {
-                    candidate.edge?.let { append("${formatNumber(it)} mm") }
                     candidate.protocol?.let {
-                        if (isNotEmpty()) append("   ")
                         append("${formatNumber(it.first)}:${formatNumber(it.second)}")
                     }
                 },

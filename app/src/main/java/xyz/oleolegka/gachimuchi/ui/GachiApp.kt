@@ -421,8 +421,8 @@ fun GachiApp(viewModel: MainViewModel) {
                     addExercise = { exerciseId, restSec ->
                         viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec)
                     },
-                    createExercise = { name, form, edge, work, rest, then ->
-                        viewModel.createExercise(name, form, edge, work, rest, then)
+                    createExercise = { name, form, work, rest, then ->
+                        viewModel.createExercise(name, form, work, rest, then)
                     },
                     /*
                      * INTO THIS WORKOUT, named rather than looked up. The screen is drawing a
@@ -478,8 +478,8 @@ fun GachiApp(viewModel: MainViewModel) {
                 onEnableTimer = enableTimer,
                 onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
                 onSelectExercise = viewModel::selectExercise,
-                onCreateExercise = { name, form, edge, work, rest ->
-                    viewModel.createExercise(name, form, edge, work, rest)
+                onCreateExercise = { name, form, work, rest ->
+                    viewModel.createExercise(name, form, work, rest)
                 },
                 // an entry logged with no workout behind it must not be swallowed by the
                 // workout that happens to be open — see ActivityRepository.record
@@ -555,8 +555,8 @@ fun GachiApp(viewModel: MainViewModel) {
                     modifier = inner,
                     onSaveSlot = viewModel::saveSlot,
                     onDeleteSlot = viewModel::deleteSlot,
-                    onCreateExercise = { name, form, edge, work, rest, then ->
-                        viewModel.createExercise(name, form, edge, work, rest, then)
+                    onCreateExercise = { name, form, work, rest, then ->
+                        viewModel.createExercise(name, form, work, rest, then)
                     },
                 )
 

@@ -41,8 +41,8 @@ class TimerOutcomeTest {
     private val controllers = mutableListOf<TimerController>()
 
     private val hangs = ExerciseRef(
-        id = 42, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
-        edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+        id = 42, name = "Hangs", form = ExerciseForm.HOLD,
+        workSec = 7.0, restSec = 3.0,
     )
 
     /** Two sets of two hangs, no lead-in: seven steps, four of them efforts. */

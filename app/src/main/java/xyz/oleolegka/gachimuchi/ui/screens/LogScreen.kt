@@ -124,7 +124,7 @@ fun LogScreen(
     onEnableTimer: () -> Unit,
     onStartExerciseProgram: (ExerciseRef) -> Unit,
     onSelectExercise: (Long?) -> Unit,
-    onCreateExercise: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
+    onCreateExercise: (String, ExerciseForm, Double?, Double?) -> Unit,
     onAddSet: (ActivityForm) -> Unit,
     onUndoSet: (Long) -> Unit,
     onClose: () -> Unit,
@@ -409,7 +409,6 @@ private fun EntryPanel(
 private fun contextLine(exercise: ExerciseRef): String = buildString {
     append(exercise.form.title.lowercase())
     if (exercise.form == ExerciseForm.HOLD) {
-        exercise.edge?.let { append(" - ${formatNumber(it)} mm edge") }
         exercise.protocol?.let { append(" - ${formatNumber(it.first)}:${formatNumber(it.second)} protocol") }
     }
 }
@@ -527,9 +526,9 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
 }
 
 /**
- * Holds. Edge and protocol are NOT asked for: §12-A puts them on the exercise, so the
- * variables of a set are the added weight, the number of reps and — on an exercise trained
- * one limb at a time — which hand it was.
+ * Holds. The protocol is NOT asked for: §12-A puts it on the exercise, so the variables of
+ * a set are the added weight, the number of reps and — on an exercise trained one limb at
+ * a time — which hand it was.
  *
  * ── The side is asked for, and it cannot be skipped ─────────────────────────────
  * A record on a one-sided exercise is per (exercise, side): the weaker hand has its own

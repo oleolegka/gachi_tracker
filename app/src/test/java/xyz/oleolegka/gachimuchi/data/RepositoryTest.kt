@@ -89,24 +89,20 @@ class RepositoryTest {
     @Test
     fun `a name that matches but an identity that does not is a different exercise`() = runTest {
         val id = repo.ensureExercise(
-            "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
         )
 
-        val otherForm = repo.ensureExercise("hangs 20 mm", ExerciseForm.STRENGTH, defaultRestSec = 150)
-        val otherEdge = repo.ensureExercise(
-            "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 15.0, workSec = 7.0, restSec = 3.0,
-        )
+        val otherForm = repo.ensureExercise("hangs", ExerciseForm.STRENGTH, defaultRestSec = 150)
         val otherProtocol = repo.ensureExercise(
-            "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 10.0, restSec = 5.0,
+            "Hangs", ExerciseForm.HOLD, workSec = 10.0, restSec = 5.0,
         )
 
-        assertEquals(4, repo.allExercises().size)
-        assertTrue(setOf(id, otherForm, otherEdge, otherProtocol).size == 4)
+        assertEquals(3, repo.allExercises().size)
+        assertTrue(setOf(id, otherForm, otherProtocol).size == 3)
 
         // and the original is untouched by any of them
         val stored = repo.exercise(id)!!
         assertEquals(ExerciseForm.HOLD.code, stored.form)
-        assertEquals(20.0, stored.edgeMm!!, 1e-9)
         assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
         assertNull("the rest was set on the row that call described, not on this one", stored.defaultRestSec)
         assertEquals(150, repo.exercise(otherForm)!!.defaultRestSec)
@@ -116,11 +112,11 @@ class RepositoryTest {
     @Test
     fun `the same identity spelled differently is the same exercise, and the rest is a preference`() = runTest {
         val id = repo.ensureExercise(
-            "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
             defaultRestSec = 150,
         )
         val again = repo.ensureExercise(
-            "  hangs   20   MM ", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "  hangs  ", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
             defaultRestSec = 240,
         )
 
@@ -128,10 +124,10 @@ class RepositoryTest {
         assertEquals(1, repo.allExercises().size)
         assertEquals(240, repo.exercise(id)!!.defaultRestSec)
         // the name it was created under is what stays; a lookup does not rewrite it
-        assertEquals("Hangs 20 mm", repo.exercise(id)!!.name)
+        assertEquals("Hangs", repo.exercise(id)!!.name)
 
         // and saying nothing about the rest leaves the remembered one alone
-        repo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+        repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
         assertEquals(240, repo.exercise(id)!!.defaultRestSec)
     }
 }

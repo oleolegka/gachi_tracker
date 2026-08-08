@@ -62,7 +62,7 @@ class WorkoutTest {
 
     private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
     private val squat = ExerciseRef(2, "Squat", ExerciseForm.STRENGTH)
-    private val hangs = ExerciseRef(3, "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+    private val hangs = ExerciseRef(3, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
 
     private val today = "2026-08-07"
 

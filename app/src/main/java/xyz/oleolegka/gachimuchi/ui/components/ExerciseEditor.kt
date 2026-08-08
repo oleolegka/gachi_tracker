@@ -35,8 +35,8 @@ import xyz.oleolegka.gachimuchi.domain.parseNumber
  *
  * ── Why this exists at all ──────────────────────────────────────────────────────
  * A name typed into the entry card became a catalog row and then could never be touched
- * again: `ExerciseDao.update` existed and was called from nowhere, so a typo, a wrong edge or
- * a protocol entered as 7:30 instead of 7:3 was permanent. On the one screen where the
+ * again: `ExerciseDao.update` existed and was called from nowhere, so a typo, or a protocol
+ * entered as 7:30 instead of 7:3, was permanent. On the one screen where the
  * identity is displayed as facts about the exercise, there was no way to correct those facts.
  *
  * ── Why it writes through a repository of its own ──────────────────────────────
@@ -70,10 +70,10 @@ fun rememberExerciseEditor(): ExerciseEditor {
         EditExerciseDialog(
             exercise = exercise,
             onDismiss = { editing = null },
-            onSave = { name, edge, work, rest, oneSided, share ->
+            onSave = { name, work, rest, oneSided, share ->
                 editing = null
                 scope.launch {
-                    val result = repo.editExercise(exercise.id, name, edge, work, rest)
+                    val result = repo.editExercise(exercise.id, name, work, rest)
                     /*
                      * The two flags are their own columns and their own writes: correcting a
                      * name, declaring the exercise one-handed and saying what share of you it
@@ -94,10 +94,10 @@ fun rememberExerciseEditor(): ExerciseEditor {
                         is ExerciseEdit.Blank -> "An exercise needs a name."
                         is ExerciseEdit.Gone -> "That exercise is no longer in the catalog."
                         is ExerciseEdit.Taken ->
-                            "\"${result.name}\" already has that name, edge and protocol, and " +
-                                "an exercise is those three together. Two rows claiming to be " +
-                                "the same exercise would split its history in half, so this " +
-                                "one was left as it was."
+                            "\"${result.name}\" already has that name and protocol, and an " +
+                                "exercise is those together. Two rows claiming to be the same " +
+                                "exercise would split its history in half, so this one was " +
+                                "left as it was."
                     }
                 }
             },
@@ -124,7 +124,7 @@ fun rememberExerciseEditor(): ExerciseEditor {
 }
 
 /**
- * The correction itself: the name, and for a hold the edge and the work:rest protocol.
+ * The correction itself: the name, and for a hold the work:rest protocol.
  *
  * ── And two things that are not corrections ────────────────────────────────────
  * "One hand at a time" and "how much of you it lifts" are statements about the exercise that
@@ -148,12 +148,11 @@ fun rememberExerciseEditor(): ExerciseEditor {
 private fun EditExerciseDialog(
     exercise: ExerciseEntity,
     onDismiss: () -> Unit,
-    onSave: (String, Double?, Double?, Double?, Boolean, Double?) -> Unit,
+    onSave: (String, Double?, Double?, Boolean, Double?) -> Unit,
 ) {
     val hold = exercise.form == ExerciseForm.HOLD.code
     val lifted = hold || exercise.form == ExerciseForm.STRENGTH.code
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
-    var edge by remember(exercise.id) { mutableStateOf(exercise.edgeMm.asField()) }
     var work by remember(exercise.id) { mutableStateOf(exercise.protocolWorkSec.asField()) }
     var rest by remember(exercise.id) { mutableStateOf(exercise.protocolRestSec.asField()) }
     var oneSided by remember(exercise.id) { mutableStateOf(exercise.oneSided) }
@@ -178,11 +177,6 @@ private fun EditExerciseDialog(
                 )
                 if (hold) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = edge, onValueChange = { edge = it }, modifier = Modifier.weight(1f),
-                            singleLine = true, label = { Text("Edge, mm") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        )
                         OutlinedTextField(
                             value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
                             singleLine = true, label = { Text("Work, s") },
@@ -262,9 +256,9 @@ private fun EditExerciseDialog(
                 Text(
                     "This corrects what the catalog SAYS. The sets already logged stay with " +
                         "this exercise, and the ones recorded before the correction still carry " +
-                        "the edge and protocol they were written with. An exercise you have " +
-                        "genuinely moved to another edge is a different exercise - create it " +
-                        "instead, and it starts its own history from today.",
+                        "the protocol they were written with. An exercise you have genuinely " +
+                        "moved to another protocol is a different exercise - create it instead, " +
+                        "and it starts its own history from today.",
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Text(
@@ -284,7 +278,6 @@ private fun EditExerciseDialog(
                     val pair = if (w != null && r != null) w to r else null
                     onSave(
                         name.trim(),
-                        if (hold) parseNumber(edge)?.takeIf { it > 0 } else exercise.edgeMm,
                         pair?.first,
                         pair?.second,
                         oneSided,

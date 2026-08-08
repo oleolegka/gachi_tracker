@@ -165,7 +165,6 @@ class JournalBackup(
                     name = row.name,
                     form = row.form,
                     createdAt = row.createdAt.ifBlank { now() },
-                    edgeMm = row.edgeMm,
                     protocolWorkSec = row.protocolWorkSec,
                     protocolRestSec = row.protocolRestSec,
                     defaultRestSec = row.defaultRestSec,

@@ -160,13 +160,12 @@ private fun FormDoorTile(
 /**
  * The caption under a tile name: what form it is and how long ago it happened.
  *
- * For a hangboard the edge and protocol go in too — §12-A makes them part of the
- * exercise's identity, so "Hangs" alone does not say which exercise this tile is about.
+ * For a hangboard the protocol goes in too — §12-A makes it part of the exercise's
+ * identity, so "Hangs" alone does not say which exercise this tile is about.
  */
 private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, today: LocalDate): String {
     val parts = mutableListOf<String>()
     if (tile.form == ExerciseForm.HOLD && entity != null) {
-        entity.edgeMm?.let { parts += "${it.toInt()} mm edge" }
         if (entity.protocolWorkSec != null && entity.protocolRestSec != null) {
             parts += "${entity.protocolWorkSec.toInt()}:${entity.protocolRestSec.toInt()}"
         }
