@@ -338,7 +338,7 @@ class RunLoggingChainTest {
 
         val first = timer.floors.floors.value.single()
         assertEquals(exercise.id, first.exerciseId)
-        assertEquals("Hangs 20 mm", first.exerciseName)
+        assertEquals("Hangs", first.exerciseName)
         // the default, since the journal has only one entry and so no gap to measure
         assertEquals(timer.settings.value.defaultRestSec * 1000L, first.orderedMs)
 
@@ -404,7 +404,7 @@ class RunLoggingChainTest {
         // 4. and the user is told, by name and by count, rather than left to go and look
         val receipt = viewModel.logReceipt.value
         assertNotNull(receipt)
-        assertEquals("Hangs 20 mm", receipt!!.exerciseName)
+        assertEquals("Hangs", receipt!!.exerciseName)
         assertEquals(2, receipt.setCount)
         assertEquals(2, receipt.eventIds.size)
 

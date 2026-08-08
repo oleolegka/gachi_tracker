@@ -140,7 +140,7 @@ class SessionTest {
         val session = buildSession(events, day)
         assertEquals(2, session.groups.size)
         assertEquals("Bench press", session.groups[0].name)  // it appeared first
-        assertEquals("Hangs 20 mm", session.groups[1].name)
+        assertEquals("Hangs", session.groups[1].name)
         assertEquals(3, session.groups[0].sets.size)
         assertEquals(4, session.setCount)
         assertEquals(
