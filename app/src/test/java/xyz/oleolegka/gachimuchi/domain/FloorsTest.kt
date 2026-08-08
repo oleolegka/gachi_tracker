@@ -436,6 +436,33 @@ class FloorsTest {
         assertEquals(210_000L, floors.first { it.exerciseId == 1L }.readyAtMs)
     }
 
+    /**
+     * The whole reason [RestFloor.side] exists: a one-sided exercise's left and right card each
+     * get their own countdown, so marking the right hand's set must not stop the left hand's
+     * still-running rest — which is exactly what happened before a floor was keyed by
+     * (exerciseId, side) rather than by exerciseId alone.
+     */
+    @Test
+    fun `two cards of one exercise keep two independent floors`() {
+        val left = startFloor(1, "Hangs - Left", orderedMs = 120_000, nowElapsed = 0, nowWall = WALL, side = "left")
+        val right = startFloor(1, "Hangs - Right", orderedMs = 60_000, nowElapsed = 0, nowWall = WALL, side = "right")
+
+        val floors = listOf(left).withFloor(right)
+
+        assertEquals("marking the right hand did not touch the left hand's rest", 2, floors.size)
+        assertEquals(120_000L, floors.first { it.side == "left" }.readyAtMs)
+        assertEquals(60_000L, floors.first { it.side == "right" }.readyAtMs)
+
+        // a second right-hand set still replaces only the right hand's floor
+        val rightAgain =
+            startFloor(1, "Hangs - Right", orderedMs = 90_000, nowElapsed = 30_000, nowWall = WALL, side = "right")
+        val settled = floors.withFloor(rightAgain)
+
+        assertEquals(2, settled.size)
+        assertEquals("untouched by the right hand's new set", 120_000L, settled.first { it.side == "left" }.readyAtMs)
+        assertEquals(120_000L, settled.first { it.side == "right" }.readyAtMs)
+    }
+
     @Test
     fun `no floors at all asks for no alarm`() {
         assertNull(nextFloorSignalMs(emptyList(), conductorRunning = false))

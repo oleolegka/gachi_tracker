@@ -724,6 +724,18 @@ data class WorkoutExerciseAdded(
     @SerialName("workout_uid") val workoutUid: String? = null,
     /** Identity of the exercise being added — the same link as [exerciseId]. */
     @SerialName("exercise_uid") val exerciseUid: String? = null,
+    /**
+     * Which card this is, for an exercise trained one limb at a time
+     * ([xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided]) — one of [HoldSide]'s codes.
+     *
+     * An exercise flagged one-sided gets TWO of these rows when it is put into a workout, one
+     * per side, so that the workout carries two independent cards rather than one that asks
+     * mid-set which hand a set belongs to. Null is the ordinary answer for every exercise that
+     * is not one-sided, and also for every row written before this field existed — a workout
+     * folded out of an old journal simply has one card for such an exercise, exactly as it
+     * always did.
+     */
+    @SerialName("side") val side: String? = null,
 ) {
     init {
         // zero is a legitimate answer ("go straight into the next set"); a negative one is

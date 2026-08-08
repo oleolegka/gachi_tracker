@@ -544,25 +544,39 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
  * failure is silent: two lefts in the journal, a right hand's history missing a set, and a
  * record on the wrong hand. The weight and the reps prefill because being wrong about them is
  * visible in the field before the button is pressed; the hand is not.
+ *
+ * ── [fixedSide] — asked already, by the card ─────────────────────────────────────
+ * Null everywhere this used to be the whole of it: a bare entry not raised from a workout, and
+ * the standalone [LogScreen] itself, where there is no card to have already said which hand.
+ * Inside a workout a one-sided exercise gets two CARDS, one per side (see domain/Workout.kt),
+ * and the card that was tapped is itself the answer — asking again with a chip row here would
+ * be the same question twice on the one screen used mid-set. So a non-null [fixedSide] hides the
+ * chips and writes that side, unconditionally, with nothing left for [sideMissing] to catch.
  */
 @Composable
-internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun HoldEntry(
+    state: UiState,
+    exercise: ExerciseRef,
+    opDate: String,
+    onAddSet: (ActivityForm) -> Unit,
+    fixedSide: HoldSide? = null,
+) {
     val colors = LocalGachiColors.current
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var holdSeconds by remember(exercise.id, last) { mutableStateOf(last?.holdSec?.let(::formatNumber) ?: "") }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
-    var side by remember(exercise.id, last) { mutableStateOf<HoldSide?>(null) }
+    var side by remember(exercise.id, last, fixedSide) { mutableStateOf(fixedSide) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
     val holdSecValue = parseNumber(holdSeconds)
     val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
         holdSecValue == last.holdSec && warmup == last.warmup && side == last.sideOf
-    // only a one-sided exercise owes an answer; on any other one a null side is what "both
-    // hands" has always meant and always will
-    val sideMissing = exercise.oneSided && side == null
+    // only a one-sided exercise owes an answer, and only when the card itself did not already
+    // say which one — on any other one, or with a fixed side, there is nothing left to ask
+    val sideMissing = exercise.oneSided && fixedSide == null && side == null
 
     StepperField(
         label = "Added weight, kg",
@@ -590,7 +604,7 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         onValueChange = { holdSeconds = it },
         steps = listOf(1.0, 5.0),
     )
-    if (exercise.oneSided) {
+    if (exercise.oneSided && fixedSide == null) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HoldSide.entries.forEach { option ->
                 FilterChip(

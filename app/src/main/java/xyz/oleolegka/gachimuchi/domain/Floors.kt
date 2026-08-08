@@ -112,6 +112,17 @@ data class RestFloor(
      * left to say.
      */
     @SerialName("signalled") val signalled: Boolean = false,
+    /**
+     * Which card this rest belongs to, for an exercise trained one limb at a time — one of
+     * [HoldSide]'s codes, or null for every exercise that is not.
+     *
+     * A floor is "at most one per exercise" — see [withFloor] — and that used to mean a superset
+     * of the left and right hand cannot both be resting: marking the right hand's set replaced
+     * the left hand's still-running countdown, because both wrote to the same exerciseId. This
+     * is what makes the two independent: the identity a floor is kept and replaced by is
+     * (exerciseId, side) together, not exerciseId alone.
+     */
+    @SerialName("side") val side: String? = null,
 )
 
 /** A floor of [orderedMs] started now, stamped with both clocks. */
@@ -121,6 +132,7 @@ fun startFloor(
     orderedMs: Long,
     nowElapsed: Long,
     nowWall: Long,
+    side: String? = null,
 ): RestFloor = RestFloor(
     exerciseId = exerciseId,
     exerciseName = exerciseName,
@@ -128,11 +140,16 @@ fun startFloor(
     bootRef = bootReference(nowWall, nowElapsed),
     orderedMs = orderedMs,
     startedAtWallMs = nowWall,
+    side = side,
 )
 
-/** [floor] added, replacing any floor already running for the same exercise. */
+/**
+ * [floor] added, replacing any floor already running for the same CARD — the same exercise
+ * AND the same side. Two cards of one one-sided exercise therefore keep two floors, each
+ * replaced only by a fresh rest of its own side; see [RestFloor.side].
+ */
 fun List<RestFloor>.withFloor(floor: RestFloor): List<RestFloor> =
-    filterNot { it.exerciseId == floor.exerciseId } + floor
+    filterNot { it.exerciseId == floor.exerciseId && it.side == floor.side } + floor
 
 // --- the rest a floor actually measured -------------------------------------------------
 

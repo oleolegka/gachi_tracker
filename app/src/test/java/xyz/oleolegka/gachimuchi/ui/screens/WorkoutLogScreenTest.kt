@@ -21,10 +21,10 @@ import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
-import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
@@ -94,13 +94,14 @@ class WorkoutLogScreenTest : ScreenTest() {
         exerciseEntity(5, "Both-arm hang 20 mm", ExerciseForm.HOLD).copy(defaultRestSec = 180),
     )
 
-    private val added = mutableListOf<Pair<Long, Int>>()
+    /** Which exercise, at which rest, for which card — the third element is the side asked for. */
+    private val added = mutableListOf<Triple<Long, Int, HoldSide?>>()
     private val logged = mutableListOf<ActivityForm>()
     private val undone = mutableListOf<Long>()
     /** The rows an exercise removed from the workout took with it. */
     private val removedRows = mutableListOf<List<Long>>()
     /** Every order this screen has stated, whole, in the order it stated them. */
-    private val reordered = mutableListOf<List<ExerciseLink>>()
+    private val reordered = mutableListOf<List<OrderedCard>>()
     private val started = mutableListOf<Pair<String, Double?>>()
     private var conductorOpened = 0
     private var summaryDismissed = 0
@@ -130,7 +131,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 settings = TimerSettings(),
                 floors = floors,
                 actions = WorkoutLogActions(
-                    addExercise = { id, rest -> added += id to rest },
+                    addExercise = { id, rest, side -> added += Triple(id, rest, side) },
                     createExercise = { _, _, _, _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
@@ -394,63 +395,92 @@ class WorkoutLogScreenTest : ScreenTest() {
         assertFalse("an untouched card must record a working set", (logged.single() as StrengthSet).warmup)
     }
 
-    // --- which hand a one-sided hold was done with ------------------------------------------
+    // --- the two cards of a one-sided exercise ------------------------------------------------
 
     /**
-     * A workout holding one hang, with an earlier RIGHT-hand set of it to prefill the numbers
-     * from. The earlier set is what leaves the missing side as the only thing standing between
-     * the card and the journal — without it the button would also be waiting for the reps, and
-     * the test would prove nothing about the hand.
+     * Both cards of the one-sided exercise, exactly the shape the app itself produces the
+     * moment such an exercise is added to a workout — see `ActivityRepository.addExerciseToWorkout`
+     * called twice, once per [HoldSide]. An earlier LEFT-hand set is there too, so the numeric
+     * fields prefill and the two cards can be told apart by whether the prefill still counts as
+     * untouched (the left one, which matches) or not (the right one, which does not).
      */
-    private fun hangWorkout(journal: Journal, exercise: ExerciseRef, side: HoldSide?): Long {
-        journal.holdSet(exercise, "2026-08-05", reps = 5, addedKg = 10.0, side = side)
+    private fun twoCardWorkout(journal: Journal, exercise: ExerciseRef): Long {
+        journal.holdSet(exercise, "2026-08-05", reps = 5, addedKg = 10.0, side = HoldSide.LEFT)
         val workout = journal.startWorkout(iso, at = "18:05")
-        journal.addExercise(workout, iso, exercise, restSec = 180)
+        journal.addExercise(workout, iso, exercise, restSec = 180, side = HoldSide.LEFT)
+        journal.addExercise(workout, iso, exercise, restSec = 180, side = HoldSide.RIGHT)
         return workout
     }
 
     /**
-     * The defect this refuses to write: a set on a one-sided exercise that names no hand. It is
-     * not "both hands" — the record is per (exercise, side), so such a row belongs to neither
-     * history and the reducers file it under "side not recorded". Refusing it at the card is the
-     * only place it can be refused, because the journal is append-only.
+     * The owner's decision, written down: the catalog holds ONE exercise, and a workout that
+     * carries it shows TWO cards — because the left hand's rest and the right hand's are two
+     * different countdowns (domain/Floors.kt), and the card is what tells the two apart on
+     * screen as well as in the timer.
      */
     @Test
-    fun `a one-sided hold cannot be recorded until a hand is chosen`() {
+    fun `an exercise trained one hand at a time gets two cards, not a side question on one`() {
         val journal = Journal()
-        show(journal, hangWorkout(journal, oneArm, HoldSide.RIGHT))
+        show(journal, twoCardWorkout(journal, oneArm))
 
-        compose.onNodeWithText("no sets yet").performClick()
+        compose.onNodeWithText("One-arm hang 20 mm - Left").assertIsDisplayed()
+        compose.onNodeWithText("One-arm hang 20 mm - Right").assertIsDisplayed()
+    }
+
+    /**
+     * The card already answered which hand a set is about, so the form does not ask again — the
+     * chip row this screen used to raise for a one-sided exercise is gone from here, because
+     * there is nowhere left for the answer to come from but the card that was tapped.
+     */
+    @Test
+    fun `tapping the left card writes a left-hand set without asking which hand`() {
+        val journal = Journal()
+        show(journal, twoCardWorkout(journal, oneArm))
+
+        compose.onNodeWithText("One-arm hang 20 mm - Left").performClick()
         settle()
         settle()
 
-        compose.onNodeWithText("Left").assertExists()
-        compose.onNodeWithText("Right").assertExists()
-        // a dead button that explains nothing is the worst thing to meet mid-set
-        compose.onNodeWithText(
-            "Say which side. This one is trained a limb at a time, and each side keeps " +
-                "its own record - a set that names neither belongs to neither."
-        ).assertExists()
-        compose.onNodeWithText("Add set").assertIsNotEnabled()
+        compose.onNodeWithText("Left").assertDoesNotExist()
+        compose.onNodeWithText("Right").assertDoesNotExist()
 
-        compose.onNodeWithText("Left").performClick()
-        settle()
-
-        compose.onNodeWithText("Add set").performClick()
+        // the left-hand history prefills this card as untouched
+        compose.onNodeWithText("Repeat set").performClick()
         assertEquals("left", (logged.single() as HoldSet).side)
+    }
+
+    /** The other card of the same exercise, writing the other hand — no chip here either. */
+    @Test
+    fun `tapping the right card writes a right-hand set without asking which hand`() {
+        val journal = Journal()
+        show(journal, twoCardWorkout(journal, oneArm))
+
+        compose.onNodeWithText("One-arm hang 20 mm - Right").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Left").assertDoesNotExist()
+        compose.onNodeWithText("Right").assertDoesNotExist()
+
+        // the history on file is the LEFT hand's, so this card is not "the same set again"
+        compose.onNodeWithText("Add set").performClick()
+        assertEquals("right", (logged.single() as HoldSet).side)
     }
 
     /**
      * The control, and it is the half that would be quietly broken by an over-eager fix: a hold
-     * hung off both hands must not be made to answer a question that does not apply to it. A
-     * null side there is what "both hands" has always meant.
+     * hung off both hands must stay a single card and must not be made to answer a question
+     * that does not apply to it. A null side there is what "both hands" has always meant.
      */
     @Test
-    fun `a two-handed hold is never asked which hand, and records without one`() {
+    fun `a two-handed hold still gets one card and is never asked which hand`() {
         val journal = Journal()
-        show(journal, hangWorkout(journal, twoArm, side = null))
+        journal.holdSet(twoArm, "2026-08-05", reps = 5, addedKg = 10.0)
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, twoArm, restSec = 180)
+        show(journal, workout)
 
-        compose.onNodeWithText("no sets yet").performClick()
+        compose.onNodeWithText("Both-arm hang 20 mm").performClick()
         settle()
         settle()
 
@@ -481,7 +511,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("1:30").assertExists()
 
         compose.onNodeWithText("Add to workout").performClick()
-        assertEquals(listOf(2L to 90), added)
+        assertEquals(listOf(Triple(2L, 90, null)), added)
     }
 
     /**
@@ -504,7 +534,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         )
 
         compose.onNodeWithText("Save").performClick()
-        assertEquals(listOf(1L to 150), added)
+        assertEquals(listOf(Triple(1L, 150, null)), added)
     }
 
     // --- finishing --------------------------------------------------------------------------
@@ -810,7 +840,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Move up").performClick()
         settle()
 
-        assertEquals(listOf(listOf(abs.link, bench.link)), reordered)
+        assertEquals(listOf(listOf(OrderedCard(abs.link), OrderedCard(bench.link))), reordered)
     }
 
     @Test
@@ -823,7 +853,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Move down").performClick()
         settle()
 
-        assertEquals(listOf(listOf(abs.link, bench.link)), reordered)
+        assertEquals(listOf(listOf(OrderedCard(abs.link), OrderedCard(bench.link))), reordered)
     }
 
     /** No move that does not exist is offered: the top card cannot go up. */
@@ -886,7 +916,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         }
         settle()
 
-        assertEquals(listOf(listOf(abs.link, bench.link)), reordered)
+        assertEquals(listOf(listOf(OrderedCard(abs.link), OrderedCard(bench.link))), reordered)
         // and the cards follow, because the screen redraws off the order it has just stated
         assertEquals(listOf("Abs", "Bench press"), cardsTopDown("Bench press", "Abs"))
     }

@@ -27,8 +27,10 @@ import xyz.oleolegka.gachimuchi.domain.CompletedSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.LoadedSet
+import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
@@ -241,10 +243,18 @@ class MainViewModel(
              * form which one day does not cannot produce a floor called "null".
              */
             val exerciseId = form.exerciseId
+            /*
+             * Which CARD this set belongs to, for an exercise trained one limb at a time — the
+             * left hand's rest and the right hand's are two floors, not one, so the exercise id
+             * alone no longer names the countdown a set closes out or the one it starts. Only a
+             * [HoldSet] ever carries a side; every other form floors by exercise id alone, side
+             * always null, exactly as before this existed.
+             */
+            val side = (form as? HoldSet)?.sideOf
             if (live && timer.enabled.value && startsRest(form) && exerciseId != null) {
-                timer.floors.floors.value.firstOrNull { it.exerciseId == exerciseId }
+                timer.floors.floors.value.firstOrNull { it.exerciseId == exerciseId && it.side == side?.code }
                     ?.actualRestSec(System.currentTimeMillis())
-                    ?.let { repo.recordActualRest(form.exerciseLink()!!, it) }
+                    ?.let { repo.recordActualRest(form.exerciseLink()!!, it, side) }
             }
 
             repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
@@ -255,6 +265,7 @@ class MainViewModel(
             }
             if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
                 val exercise = repo.exercise(exerciseId)
+                val label = exercise?.name ?: "Rest"
                 /*
                  * THE REST THAT WAS CHOSEN, and only failing that the one that was measured —
                  * which is what [restHintSec] resolves and what [resolveRestSec] on its own
@@ -266,8 +277,11 @@ class MainViewModel(
                  */
                 timer.floors.start(
                     exerciseId = exerciseId,
-                    exerciseName = exercise?.name ?: "Rest",
+                    // said by hand as well as by card, since the summary line and the shade
+                    // notification only ever have the name to tell the two floors apart by
+                    exerciseName = if (side != null) "$label - ${side.label()}" else label,
                     orderedMs = restHintSec(settings, repo.allEvents(), exercise?.let { repo.toRef(it) }) * 1000L,
+                    side = side?.code,
                 )
             }
         }
@@ -316,9 +330,12 @@ class MainViewModel(
      * choice made here is what the NEXT workout will be offered — the two writes are two
      * different facts and neither can be derived from the other; see
      * [ActivityRepository.addExerciseToWorkout].
+     *
+     * [side] names one CARD of a one-sided exercise. Adding both is two calls — see
+     * [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen] for where they are made.
      */
-    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
-        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
+    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec, side) }
     }
 
     /**
@@ -328,7 +345,7 @@ class MainViewModel(
      * The WHOLE order, every time, because that is what the event carries: the screen hands over
      * the arrangement it is showing and does not have to describe a move.
      */
-    fun setWorkoutExerciseOrder(workoutId: Long, order: List<ExerciseLink>) {
+    fun setWorkoutExerciseOrder(workoutId: Long, order: List<OrderedCard>) {
         viewModelScope.launch { repo.setWorkoutExerciseOrder(workoutId, order) }
     }
 

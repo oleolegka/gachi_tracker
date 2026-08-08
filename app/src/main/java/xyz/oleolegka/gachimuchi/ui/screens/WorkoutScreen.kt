@@ -33,7 +33,9 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutExercise
 import xyz.oleolegka.gachimuchi.domain.activityName
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.cardKey
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.EntryBlock
 import xyz.oleolegka.gachimuchi.ui.components.EntryEditorDialog
@@ -168,7 +170,7 @@ fun WorkoutScreen(
                 }
             }
 
-            items(workout.exercises.size, key = { workout.exercises[it].exercise.key }) { index ->
+            items(workout.exercises.size, key = { workout.exercises[it].cardKey }) { index ->
                 val exercise = workout.exercises[index]
                 EntryBlock(
                     name = exerciseName(state, exercise),
@@ -236,13 +238,17 @@ private fun summaryOf(workout: Workout): String {
 }
 
 /**
- * The exercise's name.
+ * The exercise's name — with the hand appended, for the exercise trained one limb at a time
+ * that this block is one half of; see [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen]'s
+ * copy of this same helper for why two blocks of one exercise need telling apart at all.
  *
  * The catalog first, because that is the name the user maintains. The set's own payload is
  * the fallback and it matters: the journal outlives the catalog (an exercise can be deleted
  * while its history stays), and a block headed "exercise 14" is a workout you cannot read.
  */
-private fun exerciseName(state: UiState, exercise: WorkoutExercise): String =
-    state.exerciseById(exercise.exerciseId)?.name
+private fun exerciseName(state: UiState, exercise: WorkoutExercise): String {
+    val name = state.exerciseById(exercise.exerciseId)?.name
         ?: exercise.sets.firstOrNull()?.form?.activityName()
         ?: "Exercise ${exercise.exerciseId}"
+    return exercise.side?.let { "$name - ${it.label()}" } ?: name
+}
