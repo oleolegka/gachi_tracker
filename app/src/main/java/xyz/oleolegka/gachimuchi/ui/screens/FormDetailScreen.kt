@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.data.toSibling
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRecord
 import xyz.oleolegka.gachimuchi.domain.FormSeries
@@ -40,7 +39,6 @@ import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import xyz.oleolegka.gachimuchi.domain.granularity
-import xyz.oleolegka.gachimuchi.domain.holdSiblings
 import xyz.oleolegka.gachimuchi.domain.onAxis
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.recordsOf
@@ -57,7 +55,6 @@ import xyz.oleolegka.gachimuchi.ui.components.LineChart
 import xyz.oleolegka.gachimuchi.ui.components.NoteText
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.SegmentControl
-import xyz.oleolegka.gachimuchi.ui.components.SiblingChip
 import xyz.oleolegka.gachimuchi.ui.components.StatCard
 import xyz.oleolegka.gachimuchi.ui.axisUnit
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
@@ -79,13 +76,18 @@ import java.time.temporal.ChronoUnit
  * Cardio has no records block either: §8.3c has never defined cardio records, so the
  * screen says that out loud instead of showing an empty "Records" heading.
  *
- * ── §12-A: the hangboard is several exercises ───────────────────────────────────
- * Edge and protocol are part of a hold exercise's IDENTITY, so "Hangs 20 mm 7:3" and
- * "Hangs 15 mm 7:3" are separate catalog rows with separate histories. That makes the
- * detail screen unusable without a way to hop between them, hence the sibling chips; the
- * identity chips under them state the edge and the protocol so it is never ambiguous which
- * of the siblings the chart belongs to. Those two values come from the catalog COLUMNS,
- * not from parsing the name.
+ * ── §12-A: the protocol is part of a hold exercise's identity ───────────────────
+ * "Hangs" at 7:3 and "Hangs" at 10:5 are separate catalog rows with separate histories, so
+ * the identity chip under the title states the protocol — it comes from the catalog COLUMNS,
+ * not from parsing the name — which is never ambiguous about which exercise the chart below
+ * belongs to.
+ *
+ * A §12-A sibling switcher used to sit here too, letting the screen hop between hangboard
+ * exercises that differed only by EDGE (the hangboard lip width, in mm). The edge attribute
+ * has been removed from the app entirely (see `MIGRATION_17_18` in `data/db/AppDatabase.kt`)
+ * and the switcher left with it: there is nothing left for it to compare, and "Hangs 20mm" is
+ * simply a different exercise from "Hangs" now, the same way any two differently-named
+ * exercises are.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,12 +98,11 @@ fun FormDetailScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var currentId by remember(exerciseId) { mutableStateOf(exerciseId) }
     var period by remember(exerciseId) { mutableStateOf(Period.MONTH) }
     var menuOpen by remember(exerciseId) { mutableStateOf(false) }
 
-    val entity = state.exerciseById(currentId)
-    val form = state.formOf(currentId)
+    val entity = state.exerciseById(exerciseId)
+    val form = state.formOf(exerciseId)
     val colors = LocalGachiColors.current
     val editor = rememberExerciseEditor()
 
@@ -115,7 +116,7 @@ fun FormDetailScreen(
 
     val activities = remember(state.events) { readActivities(state.events) }
     // the screen navigates by row number; the journal is keyed by identity (see ExerciseLink)
-    val link = remember(state.exercises, currentId) { state.linkOf(currentId) }
+    val link = remember(state.exercises, exerciseId) { state.linkOf(exerciseId) }
     val trendAll = remember(activities, link, form) { trendSeries(activities, link, form) }
     /*
      * The two catalog columns are passed rather than left to their defaults, and the defaults
@@ -129,11 +130,6 @@ fun FormDetailScreen(
     }
     val records = remember(activities, link, form, entity.oneSided) {
         recordsOf(activities, link, form, entity.oneSided)
-    }
-
-    val siblings = remember(state.exercises, currentId, form) {
-        if (form != ExerciseForm.HOLD) emptyList()
-        else holdSiblings(state.exercises.map { it.toSibling() }, currentId)
     }
 
     // the bucket width follows the window, so a year is weeks rather than 365 bars
@@ -178,11 +174,11 @@ fun FormDetailScreen(
                 actions = {
                     /*
                      * The catalog is editable HERE and nowhere else, because this is the screen
-                     * that shows an exercise as a thing in its own right — its name, its edge,
-                     * its protocol, its history — and therefore the screen somebody is looking
-                     * at when they notice one of those is wrong. The picker is for choosing,
-                     * and a menu of corrections in a list you are trying to get out of quickly
-                     * is a menu in the way.
+                     * that shows an exercise as a thing in its own right — its name, its
+                     * protocol, its history — and therefore the screen somebody is looking at
+                     * when they notice one of those is wrong. The picker is for choosing, and
+                     * a menu of corrections in a list you are trying to get out of quickly is
+                     * a menu in the way.
                      */
                     IconButton(onClick = { menuOpen = true }) {
                         Icon(Icons.Filled.MoreVert, contentDescription = "More")
@@ -221,24 +217,11 @@ fun FormDetailScreen(
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         NoteText(
-                            "An exercise is name + edge + protocol. \"Hangs 20 mm 7:3\" and " +
-                                "\"15 mm 7:3\" are different exercises. What is tracked and what " +
-                                "counts as a record is the WEIGHT."
+                            "An exercise is name + protocol. \"Hangs\" at 7:3 and \"Hangs\" at " +
+                                "10:5 are different exercises. What is tracked and what counts " +
+                                "as a record is the WEIGHT."
                         )
-                        if (siblings.size > 1) {
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                siblings.forEach { sibling ->
-                                    SiblingChip(
-                                        text = sibling.name,
-                                        selected = sibling.exerciseId == currentId,
-                                        accent = colors.forForm(ExerciseForm.HOLD),
-                                        onClick = { currentId = sibling.exerciseId },
-                                    )
-                                }
-                            }
-                        }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            entity.edgeMm?.let { IdentityChip("edge", "${it.toInt()} mm") }
                             if (entity.protocolWorkSec != null && entity.protocolRestSec != null) {
                                 IdentityChip(
                                     "protocol",
@@ -488,6 +471,3 @@ private fun historySpanDays(trend: FormSeries?, volume: FormSeries?, today: Loca
         .minByOrNull { it.opDate } ?: return 0
     return ChronoUnit.DAYS.between(LocalDate.parse(first.opDate), today).toInt().coerceAtLeast(0)
 }
-
-// ExerciseEntity.toSibling() has moved to data/CatalogMapping.kt: a screen is not the place
-// to describe how the table is read (see domain/Catalog.kt's CatalogRow).
