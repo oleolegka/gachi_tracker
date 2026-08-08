@@ -44,7 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
 import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
-import xyz.oleolegka.gachimuchi.domain.parseNumber
+import xyz.oleolegka.gachimuchi.domain.parseCount
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.fmtDay
@@ -330,7 +330,8 @@ private fun CreateExerciseForm(
     if (form == ExerciseForm.HOLD) {
         Text(
             "The work:rest protocol is part of the identity: hangs on another protocol are " +
-                "a separate exercise with a separate record.",
+                "a separate exercise with a separate record. Whole seconds - a decimal typed " +
+                "here rounds to the nearest one, it is not cut off.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkSecondary,
         )
@@ -338,12 +339,12 @@ private fun CreateExerciseForm(
             OutlinedTextField(
                 value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
                 singleLine = true, label = { Text("Work, s") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
             OutlinedTextField(
                 value = rest, onValueChange = { rest = it }, modifier = Modifier.weight(1f),
                 singleLine = true, label = { Text("Rest, s") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
         }
     }
@@ -359,18 +360,30 @@ private fun CreateExerciseForm(
                 val hold = form == ExerciseForm.HOLD
                 /*
                  * Every number here is "positive, or it was never filled in". A zero (or a
-                 * minus, which some keyboards offer on the decimal layout) is not a 0-second
+                 * minus, which some keyboards offer alongside digits) is not a 0-second
                  * hang, it is an empty field with a character in it — and the HoldSet
                  * validator rejects a non-positive protocol by throwing, which on the
                  * logging screen would surface as a crash on the Add button rather than as
                  * a message. Stored as null, the field simply stays unset, which is a state
                  * the whole app already handles.
                  *
+                 * WHOLE SECONDS, ROUNDED TO THE NEAREST ONE rather than typed. [parseCount]
+                 * (domain/Input.kt) is the same rounding `parseCount("4.6") == 5` already
+                 * gives the rep-count fields elsewhere in this app — reused here rather than
+                 * a second implementation, so that "how a stray decimal is handled" has one
+                 * answer. This used to be [parseNumber], which stored whatever was typed —
+                 * "7.6" landed on the exercise as 7.6, and every later reader of the protocol
+                 * that wants a whole second ([xyz.oleolegka.gachimuchi.data.
+                 * ProgramRepository]'s `resolveOrCreateProtocolProgram`, which builds the
+                 * program a hold's protocol IS) truncated it to 7 with the decimal simply
+                 * gone — silently, at save time, never at the field where it could be seen.
+                 * Rounding here means the truncation downstream never has anything to cut.
+                 *
                  * The protocol is a pair or nothing at all: half of it would be rejected by
                  * the same validator on the very first set.
                  */
-                val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else null
-                val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else null
+                val w = if (hold) parseCount(work)?.takeIf { it > 0 }?.toDouble() else null
+                val r = if (hold) parseCount(rest)?.takeIf { it > 0 }?.toDouble() else null
                 val pair = if (w != null && r != null) w to r else null
                 onCreate(name.trim(), form, pair?.first, pair?.second)
             },
