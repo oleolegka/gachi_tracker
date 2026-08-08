@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.data
 import android.content.Context
 import android.os.Looper
 import androidx.room.Room
+import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -349,9 +350,23 @@ class RunLoggingChainTest {
         settle()
 
         assertEquals("one exercise, one floor", 1, timer.floors.floors.value.size)
-        assertTrue(
+        /*
+         * The restart is asserted as "this floor has its whole length still to run", not as
+         * "it ends later than the one before it".
+         *
+         * The second reading is what stood here, and it failed on the build machine while
+         * passing on a fast one. The ordered length is DERIVED from the gaps between journal
+         * timestamps: on a fast machine both sets land in the same millisecond, no gap is
+         * measurable, and both floors take the default. On a slower one a second passes
+         * between the writes, a gap appears, and the second floor is ordered for the rounded
+         * fifteen seconds — genuinely SHORTER than the first, so it ends earlier and the
+         * comparison broke. The test was measuring the speed of the machine.
+         */
+        val restarted = timer.floors.floors.value.single()
+        assertEquals(
             "the second set must push the rest out rather than leave the first one running",
-            timer.floors.floors.value.single().readyAtMs > first.readyAtMs,
+            restarted.orderedMs,
+            restarted.readyAtMs - SystemClock.elapsedRealtime(),
         )
     }
 
