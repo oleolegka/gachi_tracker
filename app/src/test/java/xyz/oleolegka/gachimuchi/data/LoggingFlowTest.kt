@@ -57,7 +57,7 @@ class LoggingFlowTest {
     fun tearDown() = db.close()
 
     private suspend fun ref(name: String, form: ExerciseForm, work: Double? = null, rest: Double? = null) =
-        repo.exercise(repo.ensureExercise(name, form, work, rest))!!.toRef()
+        repo.toRef(repo.exercise(repo.ensureExercise(name, form, work, rest))!!)
 
     @Test
     fun `a set is logged, prefills the card, and repeating it writes an identical second one`() = runTest {

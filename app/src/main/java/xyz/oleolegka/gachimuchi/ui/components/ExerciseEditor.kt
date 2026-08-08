@@ -12,6 +12,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,9 +26,12 @@ import kotlin.math.round
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
 import xyz.oleolegka.gachimuchi.data.ExerciseEdit
+import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 
 /**
@@ -62,13 +66,20 @@ fun rememberExerciseEditor(): ExerciseEditor {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repo = remember(context) { ActivityRepository(AppDatabase.get(context)) }
+    // resolves the protocol to prefill Work/Rest with — the dialog still asks for two plain
+    // numbers (see its own KDoc), and this is where those numbers come from now that the
+    // catalog row itself no longer carries them
+    val programRepo = remember(context) { ProgramRepository(AppDatabase.get(context)) }
+    val programs by programRepo.programs.collectAsState(initial = emptyList())
 
     var editing by remember { mutableStateOf<ExerciseEntity?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
 
     editing?.let { exercise ->
+        val program = exercise.protocolProgramId?.let { id -> programs.firstOrNull { it.id == id } }
         EditExerciseDialog(
             exercise = exercise,
+            program = program,
             onDismiss = { editing = null },
             onSave = { name, work, rest, oneSided, share ->
                 editing = null
@@ -147,14 +158,21 @@ fun rememberExerciseEditor(): ExerciseEditor {
 @Composable
 private fun EditExerciseDialog(
     exercise: ExerciseEntity,
+    /** The resolved protocol program [exercise.protocolProgramId] names, or null for none. */
+    program: WorkoutProgram?,
     onDismiss: () -> Unit,
     onSave: (String, Double?, Double?, Boolean, Double?) -> Unit,
 ) {
     val hold = exercise.form == ExerciseForm.HOLD.code
     val lifted = hold || exercise.form == ExerciseForm.STRENGTH.code
+    val protocolBlock = program?.firstBlock()
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
-    var work by remember(exercise.id) { mutableStateOf(exercise.protocolWorkSec.asField()) }
-    var rest by remember(exercise.id) { mutableStateOf(exercise.protocolRestSec.asField()) }
+    var work by remember(exercise.id, program) {
+        mutableStateOf(protocolBlock?.workSec?.toDouble().asField())
+    }
+    var rest by remember(exercise.id, program) {
+        mutableStateOf(protocolBlock?.restSec?.toDouble().asField())
+    }
     var oneSided by remember(exercise.id) { mutableStateOf(exercise.oneSided) }
     var percent by remember(exercise.id) { mutableStateOf(exercise.bodyweightShare.asPercentField()) }
 
@@ -273,8 +291,8 @@ private fun EditExerciseDialog(
             TextButton(
                 enabled = name.isNotBlank() && !percentBad,
                 onClick = {
-                    val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else exercise.protocolWorkSec
-                    val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else exercise.protocolRestSec
+                    val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else protocolBlock?.workSec?.toDouble()
+                    val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else protocolBlock?.restSec?.toDouble()
                     val pair = if (w != null && r != null) w to r else null
                     onSave(
                         name.trim(),

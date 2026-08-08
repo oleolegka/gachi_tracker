@@ -14,8 +14,10 @@ import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.toCatalog
 import xyz.oleolegka.gachimuchi.domain.DoorTile
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.activityHeatmap
 import xyz.oleolegka.gachimuchi.domain.doorTiles
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.heroStats
 import xyz.oleolegka.gachimuchi.domain.presenceWindow
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -94,7 +96,9 @@ fun OverviewScreen(
         }
 
         items(tiles, key = { it.exerciseId }) { tile ->
-            FormDoorTile(tile, byId[tile.exerciseId], today, onOpenForm)
+            val entity = byId[tile.exerciseId]
+            val program = entity?.protocolProgramId?.let { state.programsById[it] }
+            FormDoorTile(tile, entity, program, today, onOpenForm)
         }
     }
 }
@@ -119,6 +123,7 @@ private fun heroMeta(entries: Int, previous: Int, current: Int): String {
 private fun FormDoorTile(
     tile: DoorTile,
     entity: ExerciseEntity?,
+    program: WorkoutProgram?,
     today: LocalDate,
     onOpenForm: (Long) -> Unit,
 ) {
@@ -130,7 +135,7 @@ private fun FormDoorTile(
 
     DoorTile(
         name = tile.name,
-        caption = tileCaption(tile, entity, today),
+        caption = tileCaption(tile, entity, program, today),
         value = number,
         unit = unit,
         delta = delta?.takeIf { it.improved }?.let { fmtDelta(it.change, tile.series.spec.format) },
@@ -163,12 +168,10 @@ private fun FormDoorTile(
  * For a hangboard the protocol goes in too — §12-A makes it part of the exercise's
  * identity, so "Hangs" alone does not say which exercise this tile is about.
  */
-private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, today: LocalDate): String {
+private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, program: WorkoutProgram?, today: LocalDate): String {
     val parts = mutableListOf<String>()
     if (tile.form == ExerciseForm.HOLD && entity != null) {
-        if (entity.protocolWorkSec != null && entity.protocolRestSec != null) {
-            parts += "${entity.protocolWorkSec.toInt()}:${entity.protocolRestSec.toInt()}"
-        }
+        program?.firstBlock()?.let { parts += "${it.workSec}:${it.restSec}" }
     }
     if (parts.isEmpty()) parts += tile.form.title.lowercase()
     parts += fmtRelativeDay(LocalDate.parse(tile.lastDate), today)

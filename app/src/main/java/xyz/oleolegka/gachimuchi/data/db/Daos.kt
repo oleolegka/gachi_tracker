@@ -80,15 +80,14 @@ interface ExerciseDao {
      * exercises; the repository turns that into a sentence.
      */
     @Query(
-        "UPDATE exercises SET name = :name, protocol_work_sec = :workSec, " +
-            "protocol_rest_sec = :restSec, identity_key = :identityKey " +
+        "UPDATE exercises SET name = :name, protocol_program_id = :programId, " +
+            "identity_key = :identityKey " +
             "WHERE space_id = :spaceId AND id = :id"
     )
     suspend fun editIdentity(
         id: Long,
         name: String,
-        workSec: Double?,
-        restSec: Double?,
+        programId: Long?,
         identityKey: String,
         spaceId: Long = LOCAL_SPACE_ID,
     ): Int
@@ -96,6 +95,22 @@ interface ExerciseDao {
     /** Keeps an exercise out of the pickers, or brings it back — see [ExerciseEntity.hidden]. */
     @Query("UPDATE exercises SET hidden = :hidden WHERE space_id = :spaceId AND id = :id")
     suspend fun setHidden(id: Long, hidden: Boolean, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Points an exercise at its protocol program WITHOUT touching its identity key.
+     *
+     * Used only by [xyz.oleolegka.gachimuchi.data.JournalBackup.restore], for the one case
+     * where a row's protocol program cannot be known at insert time: a backup names it by uid,
+     * and the program it names may itself still be waiting to be inserted from the same file.
+     * The exercise is written first with `protocol_program_id = null` and a correct
+     * `identity_key` computed straight from the file's uid string (no lookup needed for that —
+     * see [xyz.oleolegka.gachimuchi.domain.PortableExercise]'s KDoc), and once the programs
+     * section has been restored this backfills the column alone. Every OTHER writer of this
+     * column resolves the program first and writes it in the same statement as the identity
+     * key (see [editIdentity]), because there it can.
+     */
+    @Query("UPDATE exercises SET protocol_program_id = :programId WHERE id = :id")
+    suspend fun setProtocolProgramId(id: Long, programId: Long?)
 
     /**
      * Remembers the rest last chosen for an exercise.

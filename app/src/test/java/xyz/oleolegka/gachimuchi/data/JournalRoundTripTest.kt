@@ -116,7 +116,7 @@ class JournalRoundTripTest {
         work: Double? = null,
         rest: Double? = null,
     ): ExerciseRef =
-        repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!.toRef()
+        repo.toRef(repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!)
 
     /**
      * How a catalog exercise is named to the reducers, looked up the way a screen does it.

@@ -164,11 +164,11 @@ data class EventEntity(
  * A canonical exercise (§11): statistics and records aggregate by `id` rather than by the
  * word an entry happens to carry, so "squat" and "squats" cannot end up as two histories.
  *
- * [protocolWorkSec] and [protocolRestSec] are an EXTENSION over the server table (which has
- * five columns). The reason is §12-A: hangboard identity is name + protocol, so the protocol
- * belongs to the exercise, not to the set. That refactor has not been done on the server yet
- * (it is waiting for the design to settle), so the schema here is DELIBERATELY ahead — when
- * sync arrives, the server will have to add these fields, otherwise identity will drift apart.
+ * [protocolProgramId] is an EXTENSION over the server table (which has five columns). The
+ * reason is §12-A: hangboard identity is name + protocol, so the protocol belongs to the
+ * exercise, not to the set. That refactor has not been done on the server yet (it is waiting
+ * for the design to settle), so the schema here is DELIBERATELY ahead — when sync arrives, the
+ * server will have to add an equivalent field, otherwise identity will drift apart.
  *
  * ── `edge_mm` used to be a third column here, and is gone (schema version 18) ────
  * The hangboard edge (the hangboard lip width, in mm) was a climbing-specific attribute the
@@ -200,8 +200,34 @@ data class ExerciseEntity(
     /** Form code, the values of Python's `flow.FORM_*` (see ExerciseForm). */
     val form: Int,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
-    @androidx.room.ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
-    @androidx.room.ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    /**
+     * The library program this exercise's protocol IS (schema version 19), or null for no
+     * protocol at all.
+     *
+     * ── What used to be here, and why it moved ───────────────────────────────────
+     * `protocol_work_sec`/`protocol_rest_sec` — a bare work:rest pair — described the simplest
+     * possible cycle and nothing past it: a real hangboard protocol ("seven seconds work, three
+     * rest, six times, pause, switch hands, repeat") cannot be written as two numbers, but the
+     * program library ([ProgramEntity]/[ProgramGroupEntity]/[ProgramBlockEntity],
+     * `domain/Program.kt`) already models exactly that shape. So an exercise's protocol is now a
+     * REFERENCE to one library program rather than a pair of columns, and the library holds the
+     * actual work/rest/repeat structure — see `ActivityRepository`'s find-or-create-protocol-
+     * program logic for how creating or editing a hold exercise's protocol gets its program into
+     * the library.
+     *
+     * ── Nullable and deliberately WITHOUT a foreign key ───────────────────────────
+     * The same reasoning [ProgramEntity.exerciseId] already gives a few lines above it in this
+     * same file, in reverse. A program is reference data that outlives the catalog row it points
+     * at; the mirror image is also true — an exercise's protocol program can be deleted from the
+     * library, or repointed to a different one when the exercise's protocol is corrected (see
+     * `ActivityRepository.editExercise`), and neither of those is a reason to touch the exercise
+     * row. `ON DELETE CASCADE` would silently strip a hangboard exercise of its identity the
+     * moment somebody tidied up the program library; `ON DELETE SET NULL` would still make
+     * deleting a program a silent edit of an unrelated table. A dangling id simply reads as "no
+     * protocol", exactly as a dangling `exercise_id` on a program reads as "no link" — the offer
+     * asks again, on this side the identity chip and the timer simply have nothing to show.
+     */
+    @androidx.room.ColumnInfo(name = "protocol_program_id") val protocolProgramId: Long? = null,
     /**
      * The rest between sets last chosen for this exercise, in seconds (schema version 5),
      * or null while nothing has been chosen yet.
@@ -304,24 +330,35 @@ data class ExerciseEntity(
      * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity] (schema version 15).
      *
      * ── Derived state, and how it is kept from drifting ────────────────────────
-     * This is not an independent fact: it is [name], [form], [protocolWorkSec] and
-     * [protocolRestSec] folded together, and a row whose key disagrees with its own columns
-     * would be invisible to the lookup that prevents duplicates. Two things hold it in place.
+     * This is not an independent fact: it is [name], [form] and the protocol program's stable
+     * `uid` folded together, and a row whose key disagrees with its own columns would be
+     * invisible to the lookup that prevents duplicates.
      *
-     * It is a CONSTRUCTOR DEFAULT computed from the parameters above it, so there is no way to
-     * build the entity without it and no call site that has to remember — every insert in the
-     * app, the backup restore included, gets a correct key for free.
+     * ── The constructor default is honest only for "no protocol" (schema version 19) ────
+     * Before this version the default was ALWAYS correct — it was a pure function of columns
+     * this very row already carried, so no call site could get it wrong even by omission. That
+     * stopped being true the moment the protocol became a REFERENCE: [protocolProgramId] is a
+     * local row number, and the identity wants the program's portable `uid`, which only a
+     * database lookup can produce — a lookup this entity, being plain data, cannot perform on
+     * itself. So the default below assumes `programUid = null`, which is correct for every row
+     * with no protocol (still the common case, and still free), and WRONG — silently, not by a
+     * refusal to compile — for a row built with [protocolProgramId] set but no explicit
+     * `identityKey`. Every call site that sets [protocolProgramId] MUST resolve its uid and pass
+     * the resulting key explicitly; see `ActivityRepository.ensureExercise`/`editExercise` for
+     * where that resolution happens live, and `MIGRATION_18_19`'s `fillIdentityKeysWithProgram`
+     * for where it happens at upgrade time. This is a real loss of the safety net the old
+     * constructor default gave, traded for a protocol that can be more than two numbers.
      *
      * And the only statement that may change an identity ([ExerciseDao.editIdentity]) writes
      * the new key in the same UPDATE as the values it was computed from. There is deliberately
-     * no other way to touch those four columns: Room's whole-entity `@Update` is gone from the
+     * no other way to touch those columns: Room's whole-entity `@Update` is gone from the
      * DAO precisely because it would let a caller rewrite the name and leave the key behind.
      *
      * Last in the parameter list because a Kotlin default may only refer to parameters
      * declared before it.
      */
     @androidx.room.ColumnInfo(name = "identity_key")
-    val identityKey: String = exerciseIdentityKey(name, form, protocolWorkSec, protocolRestSec),
+    val identityKey: String = exerciseIdentityKey(name, form, null),
 )
 
 /**

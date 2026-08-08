@@ -38,6 +38,7 @@ import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.granularity
 import xyz.oleolegka.gachimuchi.domain.onAxis
 import xyz.oleolegka.gachimuchi.domain.readActivities
@@ -222,11 +223,10 @@ fun FormDetailScreen(
                                 "as a record is the WEIGHT."
                         )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (entity.protocolWorkSec != null && entity.protocolRestSec != null) {
-                                IdentityChip(
-                                    "protocol",
-                                    "${entity.protocolWorkSec.toInt()}:${entity.protocolRestSec.toInt()}",
-                                )
+                            val protocolBlock =
+                                entity.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
+                            if (protocolBlock != null) {
+                                IdentityChip("protocol", "${protocolBlock.workSec}:${protocolBlock.restSec}")
                             }
                             IdentityChip("metric", "weight")
                         }

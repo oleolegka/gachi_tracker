@@ -31,6 +31,9 @@ import xyz.oleolegka.gachimuchi.data.db.LOCAL_SPACE_ID
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.freeExerciseName
+import xyz.oleolegka.gachimuchi.domain.holdSecondsUnderTension
 import xyz.oleolegka.gachimuchi.domain.formsOfExercise
 import xyz.oleolegka.gachimuchi.domain.formFromEventOrNull
 import xyz.oleolegka.gachimuchi.domain.buildSession
@@ -950,6 +953,80 @@ abstract class SchemaV17Database : RoomDatabase() {
 }
 
 /**
+ * The identity key of schema version 18 — a bare `(name, form, work, rest)` pair, the shape
+ * [MIGRATION_18_19] exists to fold into a program reference. Computed by hand rather than
+ * through [xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey], for the same reason
+ * [legacyIdentityKeyV17] is: that function computes TODAY's key (name, form, a program uid) and
+ * using it here would silently seed a version 18 phone with a version 19 key. The exact string
+ * does not matter to the migration under test — [MIGRATION_18_19] recomputes every key from the
+ * columns via `fillIdentityKeysWithProgram` — only that it is a real, distinct value, which is
+ * all a genuine version 18 phone's column ever was.
+ */
+private fun legacyIdentityKeyV18(name: String, form: Int, work: Double?, rest: Double?): String {
+    fun num(v: Double?) = v?.toString() ?: ""
+    return "$name|$form|${num(work)}|${num(rest)}"
+}
+
+@Entity(
+    tableName = "exercises",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "identity_key"], unique = true),
+    ],
+)
+data class ExerciseEntityV18(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
+    @ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
+    @ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
+    val hidden: Boolean = false,
+    @ColumnInfo(name = "identity_key")
+    val identityKey: String = legacyIdentityKeyV18(name, form, protocolWorkSec, protocolRestSec),
+)
+
+@Dao
+interface LegacyCatalogDaoV18 {
+    @Insert
+    suspend fun insertEvent(event: xyz.oleolegka.gachimuchi.data.db.EventEntity): Long
+
+    @Insert
+    suspend fun insertExercise(exercise: ExerciseEntityV18): Long
+}
+
+/**
+ * Version 18: every table is already today's shape except the catalog, which still carries
+ * `protocol_work_sec`/`protocol_rest_sec` — the pair [MIGRATION_18_19] exists to fold into a
+ * program in the timer's library. The journal reuses the current
+ * [xyz.oleolegka.gachimuchi.data.db.EventEntity] directly, exactly as [SchemaV17Database] does,
+ * because nothing about it changes at this step either.
+ */
+@Database(
+    entities = [
+        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        ExerciseEntityV18::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 18,
+    exportSchema = false,
+)
+abstract class SchemaV18Database : RoomDatabase() {
+    abstract fun catalog(): LegacyCatalogDaoV18
+}
+
+/**
  * Migrating a phone that already has a training journal on it.
  *
  * The thing being protected is not the new tables — a mistake there fails loudly on the
@@ -1079,7 +1156,9 @@ class MigrationTest {
         val v2 = openCurrent()
         val repo = ProgramRepository(v2)
 
-        assertEquals(0, repo.count())
+        // one already: MIGRATION_18_19 folds writeVersion1's "Hangs 20 mm" protocol (7.0, 3.0)
+        // into a library program of its own on the way past
+        assertEquals(1, repo.count())
         val id = repo.save(
             WorkoutProgram(
                 name = "Repeaters",
@@ -1113,7 +1192,8 @@ class MigrationTest {
         // compares the database against the entity definitions and refuses a mismatch
         val again = openCurrent()
         assertEquals(1, again.events().count())
-        assertEquals(0, again.programs().countPrograms())
+        // one already: see the comment on the previous test
+        assertEquals(1, again.programs().countPrograms())
     }
 
     @Test
@@ -1168,8 +1248,12 @@ class MigrationTest {
 
         // the second open compares the database against the entity definitions and refuses a
         // mismatch, which is what would catch a column type or a default written wrongly
+        //
+        // two: the hand-written "Hangboard repeaters 7:3" writeVersion2 wrote directly, plus
+        // the minimal program MIGRATION_18_19 folds "Hangs 20 mm"'s protocol into on the way
+        // past — the two are different shapes (repeats 4/6 against 1/1) so they do not merge
         val again = openCurrent()
-        assertEquals(1, again.programs().countPrograms())
+        assertEquals(2, again.programs().countPrograms())
     }
 
     // --- version 3 -> 4: the demo-seed mark ------------------------------------------------
@@ -1686,7 +1770,8 @@ class MigrationTest {
         assertEquals("Hangs 20 mm 20mm", exercise.name)
         assertEquals(1, current.slots().all().size)
         assertTrue(current.slots().allExercises().isEmpty())
-        assertEquals(0, current.programs().countPrograms())
+        // one: MIGRATION_18_19 folds this exercise's protocol into a library program too
+        assertEquals(1, current.programs().countPrograms())
     }
 
     // --- version 7 -> 8: every row learns its own name --------------------------------------
@@ -2627,11 +2712,13 @@ class MigrationTest {
     fun `every column of a catalog row survives the rebuild, and none of them is hidden`() = runTest {
         val phone = writeVersion14()
 
-        val exercise = openCurrent().exercises().byId(phone.hangsId)!!
+        val db = openCurrent()
+        val exercise = db.exercises().byId(phone.hangsId)!!
+        val ref = ActivityRepository(db).toRef(exercise)
 
         assertEquals("Hangs 20mm", exercise.name)
-        assertEquals(7.0, exercise.protocolWorkSec!!, 1e-9)
-        assertEquals(3.0, exercise.protocolRestSec!!, 1e-9)
+        assertEquals(7.0, ref.workSec!!, 1e-9)
+        assertEquals(3.0, ref.restSec!!, 1e-9)
         assertEquals(180, exercise.defaultRestSec)
         assertEquals(false, exercise.ledByProtocol)
         assertTrue(exercise.oneSided)
@@ -2641,8 +2728,9 @@ class MigrationTest {
          * was hidden before there was a way to hide it.
          */
         assertFalse(exercise.hidden)
+        val programUid = db.programs().programById(exercise.protocolProgramId!!)!!.uid
         assertEquals(
-            exerciseIdentityKey("Hangs 20mm", ExerciseForm.HOLD.code, 7.0, 3.0),
+            exerciseIdentityKey("Hangs 20mm", ExerciseForm.HOLD.code, programUid),
             exercise.identityKey,
         )
     }
@@ -3041,12 +3129,13 @@ class MigrationTest {
         val hangs = db.exercises().byId(phone.hangsId)!!
 
         assertEquals("the edge is folded into the name, not dropped", "Hangs 20mm", hangs.name)
+        val hangsProgramUid = db.programs().programById(hangs.protocolProgramId!!)!!.uid
         assertEquals(
-            exerciseIdentityKey("Hangs 20mm", ExerciseForm.HOLD.code, 7.0, 3.0),
+            exerciseIdentityKey("Hangs 20mm", ExerciseForm.HOLD.code, hangsProgramUid),
             hangs.identityKey,
         )
 
-        val sets = holdSetsOfExercise(repo.allEvents(), hangs.toRef().link)
+        val sets = holdSetsOfExercise(repo.allEvents(), repo.toRef(hangs).link)
         assertEquals("both sets logged before the upgrade are still this row's", 2, sets.size)
         assertEquals(
             setOf(10.0, 12.5),
@@ -3090,12 +3179,16 @@ class MigrationTest {
                 edged.name,
             )
             assertNotEquals(plain.identityKey, edged.identityKey)
+            // both rows share ONE protocol program (same work/rest pair, see MIGRATION_18_19's
+            // own KDoc on grouping), so both identity keys resolve against the same program uid
+            val sharedProgramUid = db.programs().programById(plain.protocolProgramId!!)!!.uid
+            assertEquals(plain.protocolProgramId, edged.protocolProgramId)
             assertEquals(
-                exerciseIdentityKey("Front lever 25mm", ExerciseForm.HOLD.code, 5.0, 5.0),
+                exerciseIdentityKey("Front lever 25mm", ExerciseForm.HOLD.code, sharedProgramUid),
                 plain.identityKey,
             )
             assertEquals(
-                exerciseIdentityKey("Front lever 25mm (2)", ExerciseForm.HOLD.code, 5.0, 5.0),
+                exerciseIdentityKey("Front lever 25mm (2)", ExerciseForm.HOLD.code, sharedProgramUid),
                 edged.identityKey,
             )
         }
@@ -3130,4 +3223,276 @@ class MigrationTest {
         val again = openCurrent()
         assertEquals(4, again.exercises().all().size)
     }
+
+    // --- MIGRATION_18_19: the protocol becomes a program reference ------------------------
+
+    private data class PhoneV18(
+        val hangsId: Long,
+        val setOnHangsId1: Long,
+        val setOnHangsId2: Long,
+        val repeatersAId: Long,
+        val repeatersBId: Long,
+        val benchId: Long,
+        val zeroNullId: Long,
+        val zeroWorkId: Long,
+    )
+
+    /**
+     * A version 18 catalog with: a hangboard exercise carrying a real protocol and real
+     * hold-set history (the scenario this migration exists for), a pair of exercises that share
+     * one protocol VALUE PAIR (the duplicate-program case), a plain strength exercise with no
+     * protocol at all, and a pair that collides only AFTER the reshaping.
+     *
+     * The last pair is the interesting one, so it is spelled out here rather than only in the
+     * test that uses it. Under schema 18, `num(null)` is `""` and `num(0.0)` is `"0.0"`, so the
+     * OLD key strings differ ("Zero|1||" against "Zero|1|0.0|5.0") and both rows are legal
+     * under the OLD unique index. [MIGRATION_18_19] requires `work > 0` for a row to count as
+     * having a protocol at all (see its own KDoc) — a stored ZERO does not qualify, same as a
+     * stored NULL — so NEITHER of these two rows gets a program, both resolve to
+     * `programUid = null`, and their NEW keys collide on name and form alone.
+     */
+    private suspend fun writeVersion18(): PhoneV18 {
+        val v18 = Room.databaseBuilder(context, SchemaV18Database::class.java, dbName).build()
+        opened = v18
+
+        val hangsId = v18.catalog().insertExercise(
+            ExerciseEntityV18(
+                name = "Hangs", form = ExerciseForm.HOLD.code, createdAt = "2026-08-06T10:00:00",
+                protocolWorkSec = 7.0, protocolRestSec = 3.0,
+            )
+        )
+        val hang1 = """{"activity":"hangs","added_kg":10.0,"own_weight":true,"work_sec":7.0,""" +
+            """"rest_sec":3.0,"hold_sec":7.0,"reps":6,"exercise_id":$hangsId,"op_date":"2026-08-06",""" +
+            """"activity_key":"hangs"}"""
+        val setOnHangsId1 = v18.catalog().insertEvent(
+            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+                ts = "2026-08-06T10:00:00", type = TYPE_HOLD_SET, payload = hang1,
+            )
+        )
+        val hang2 = """{"activity":"hangs","added_kg":12.5,"own_weight":true,"work_sec":7.0,""" +
+            """"rest_sec":3.0,"hold_sec":8.0,"reps":5,"exercise_id":$hangsId,"op_date":"2026-08-08",""" +
+            """"activity_key":"hangs"}"""
+        val setOnHangsId2 = v18.catalog().insertEvent(
+            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+                ts = "2026-08-08T10:00:00", type = TYPE_HOLD_SET, payload = hang2,
+            )
+        )
+
+        // two rows that end up sharing ONE protocol program: the identical (work, rest) pair
+        val repeatersAId = v18.catalog().insertExercise(
+            ExerciseEntityV18(
+                name = "Repeaters A", form = ExerciseForm.HOLD.code, createdAt = "2026-08-01T09:00:00",
+                protocolWorkSec = 10.0, protocolRestSec = 5.0,
+            )
+        )
+        val repeatersBId = v18.catalog().insertExercise(
+            ExerciseEntityV18(
+                name = "Repeaters B", form = ExerciseForm.HOLD.code, createdAt = "2026-08-01T09:05:00",
+                protocolWorkSec = 10.0, protocolRestSec = 5.0,
+            )
+        )
+
+        // an ordinary strength exercise: no protocol, nothing about it should move
+        val benchId = v18.catalog().insertExercise(
+            ExerciseEntityV18(
+                name = "Bench press", form = ExerciseForm.STRENGTH.code,
+                createdAt = "2026-08-01T10:00:00",
+            )
+        )
+
+        val zeroNullId = v18.catalog().insertExercise(
+            ExerciseEntityV18(
+                name = "Zero", form = ExerciseForm.STRENGTH.code, createdAt = "2026-08-01T09:00:00",
+            )
+        )
+        val zeroWorkId = v18.catalog().insertExercise(
+            ExerciseEntityV18(
+                name = "Zero", form = ExerciseForm.STRENGTH.code, createdAt = "2026-08-01T09:05:00",
+                protocolWorkSec = 0.0, protocolRestSec = 5.0,
+            )
+        )
+
+        v18.close()
+        opened = null
+        return PhoneV18(
+            hangsId, setOnHangsId1, setOnHangsId2, repeatersAId, repeatersBId, benchId,
+            zeroNullId, zeroWorkId,
+        )
+    }
+
+    /** The raw `payload` column of the named events, read without going through any reducer. */
+    private fun rawPayloads(db: RoomDatabase, ids: List<Long>): Map<Long, String> {
+        val out = HashMap<Long, String>()
+        db.openHelper.readableDatabase
+            .query("SELECT `id`, `payload` FROM `events` WHERE `id` IN (${ids.joinToString(",")})")
+            .use { c -> while (c.moveToNext()) out[c.getLong(0)] = c.getString(1) }
+        return out
+    }
+
+    /**
+     * The primary scenario, verbatim from the task this migration was written for: a protocol
+     * exercise with real hold-set history survives the upgrade with its event payloads and its
+     * TUT (time-under-tension) computation IDENTICAL to before.
+     *
+     * Proved two ways, deliberately not one: the stored payload STRINGS are byte-identical
+     * (nothing rewrites an event — only `exercises` and the new `programs` rows change), and
+     * [holdSecondsUnderTension] — the function that actually reads `hold_sec`/`reps` off those
+     * payloads for the TUT chart — produces the same numbers reading the upgraded database that
+     * it would reading the one before the upgrade.
+     */
+    @Test
+    fun `a protocol exercise with real hold-set history keeps its payloads and TUT unchanged`() = runTest {
+        val phone = writeVersion18()
+        val ids = listOf(phone.setOnHangsId1, phone.setOnHangsId2)
+
+        val before = Room.databaseBuilder(context, SchemaV18Database::class.java, dbName).build()
+        val payloadsBefore = rawPayloads(before, ids)
+        val setsBefore = ids.map { id -> payloadJson.decodeFromString<HoldSet>(payloadsBefore.getValue(id)) }
+        val tutBefore = setsBefore.map { holdSecondsUnderTension(it) }
+        before.close()
+
+        val db = openCurrent()
+        val payloadsAfter = rawPayloads(db, ids)
+        assertEquals("no event payload is rewritten by this migration", payloadsBefore, payloadsAfter)
+
+        val repo = ActivityRepository(db)
+        val hangsLink = repo.toRef(db.exercises().byId(phone.hangsId)!!).link
+        val setsAfter = holdSetsOfExercise(repo.allEvents(), hangsLink)
+            .sortedBy { it.opDate }
+        val tutAfter = setsAfter.map { holdSecondsUnderTension(it) }
+
+        assertEquals("time-under-tension must read the same before and after", tutBefore, tutAfter)
+        assertEquals(listOf(42.0, 40.0), tutAfter)
+    }
+
+    /** The protocol is folded into a new library program, and the exercise points at it. */
+    @Test
+    fun `a protocol is folded into a new program, and the exercise's link points at it`() = runTest {
+        val phone = writeVersion18()
+
+        val db = openCurrent()
+        val hangs = db.exercises().byId(phone.hangsId)!!
+        assertNotNull("a protocol exercise must gain a protocol_program_id", hangs.protocolProgramId)
+
+        val program = ProgramRepository(db).programById(hangs.protocolProgramId!!)!!
+        assertEquals("Hangs protocol", program.name)
+        assertEquals("Protocols", program.category)
+        assertEquals(1, program.groups.size)
+        assertEquals(1, program.groups.single().blocks.size)
+        assertEquals(1, program.groups.single().repeats)
+        val block = program.groups.single().blocks.single()
+        assertEquals(1, block.repeats)
+        assertEquals(7, block.workSec)
+        assertEquals(3, block.restSec)
+
+        assertEquals(
+            exerciseIdentityKey("Hangs", ExerciseForm.HOLD.code, program.uid),
+            hangs.identityKey,
+        )
+    }
+
+    /** Two exercises sharing one (work, rest) pair end up pointing at the SAME program. */
+    @Test
+    fun `two exercises with the identical protocol pair share one program, not two`() = runTest {
+        val phone = writeVersion18()
+
+        val db = openCurrent()
+        val a = db.exercises().byId(phone.repeatersAId)!!
+        val b = db.exercises().byId(phone.repeatersBId)!!
+
+        assertNotNull(a.protocolProgramId)
+        assertEquals(
+            "the second exercise with the identical pair must point at the SAME program",
+            a.protocolProgramId,
+            b.protocolProgramId,
+        )
+
+        val matching = ProgramRepository(db).allPrograms().filter { program ->
+            val block = program.groups.singleOrNull()?.blocks?.singleOrNull()
+            block?.workSec == 10 && block?.restSec == 5
+        }
+        assertEquals("exactly one program must exist for this pair, not one per exercise", 1, matching.size)
+        assertNotEquals("the two exercises must not collide with each other", a.identityKey, b.identityKey)
+    }
+
+    /** An exercise with no protocol at all is untouched: no program, no link, identity null. */
+    @Test
+    fun `an exercise with no protocol at all gets no program and its identity says so`() = runTest {
+        val phone = writeVersion18()
+
+        val db = openCurrent()
+        val bench = db.exercises().byId(phone.benchId)!!
+
+        assertNull(bench.protocolProgramId)
+        assertEquals(0, ProgramRepository(db).allPrograms().count { it.exerciseId == phone.benchId })
+        assertEquals(
+            exerciseIdentityKey("Bench press", ExerciseForm.STRENGTH.code, null),
+            bench.identityKey,
+        )
+    }
+
+    /**
+     * The collision the reshaping itself can create — see [writeVersion18]'s own KDoc for why a
+     * stored zero and a stored null were distinct identities under schema 18 and are not under
+     * schema 19. Both rows survive, the later one renamed by [freeExerciseName] exactly as
+     * [MIGRATION_14_15]'s own duplicates are, and neither is silently merged into the other.
+     */
+    @Test
+    fun `a collision created by the identity reshaping is resolved via freeExerciseName`() = runTest {
+        val phone = writeVersion18()
+
+        val db = openCurrent()
+        val first = db.exercises().byId(phone.zeroNullId)!!
+        val second = db.exercises().byId(phone.zeroWorkId)!!
+
+        assertNull(first.protocolProgramId)
+        assertNull(second.protocolProgramId)
+        assertEquals("the row that was there first keeps its name", "Zero", first.name)
+        assertEquals(
+            "the later row is marked, the same as an ordinary duplicate",
+            "Zero (2)",
+            second.name,
+        )
+        assertNotEquals(first.identityKey, second.identityKey)
+        assertEquals(
+            exerciseIdentityKey("Zero", ExerciseForm.STRENGTH.code, null),
+            first.identityKey,
+        )
+        assertEquals(
+            exerciseIdentityKey("Zero (2)", ExerciseForm.STRENGTH.code, null),
+            second.identityKey,
+        )
+    }
+
+    @Test
+    fun `the identity index is still unique after the protocol becomes a program reference`() = runTest {
+        writeVersion18()
+
+        val db = openCurrent()
+        val failure = runCatching {
+            db.exercises().insert(
+                xyz.oleolegka.gachimuchi.data.db.ExerciseEntity(
+                    name = "bench press", form = ExerciseForm.STRENGTH.code,
+                    createdAt = "2026-08-09T10:00:00",
+                )
+            )
+        }.exceptionOrNull()
+
+        assertTrue(
+            "expected the upgraded database to refuse a duplicate, got $failure",
+            failure is android.database.sqlite.SQLiteConstraintException,
+        )
+    }
+
+    @Test
+    fun `the catalog with protocol_program_id instead of the two columns passes Room's schema check`() =
+        runTest {
+            writeVersion18()
+
+            openCurrent().close()
+            opened = null
+
+            val again = openCurrent()
+            assertEquals(6, again.exercises().all().size)
+        }
 }

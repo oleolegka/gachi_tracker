@@ -7,8 +7,11 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.OrderedExercise
+import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
@@ -171,6 +174,13 @@ class Journal {
 fun exerciseRef(id: Long, name: String, form: ExerciseForm = ExerciseForm.STRENGTH) =
     ExerciseRef(id, name, form)
 
+/**
+ * [workSec]/[restSec] no longer sit on the entity itself (schema version 19: the protocol is a
+ * reference to a library program, not two columns) — when given, this fixture points the row
+ * at the deterministic program id [protocolProgramIdFor] would produce, and [protocolProgram]
+ * builds the matching [WorkoutProgram] a test wires into `UiState.programsById` (or a plain map)
+ * so a screen resolving the protocol sees the same thing a real database would hand it.
+ */
 fun exerciseEntity(
     id: Long,
     name: String,
@@ -182,8 +192,25 @@ fun exerciseEntity(
     restSec: Double? = null,
 ) = ExerciseEntity(
     id = id, name = name, form = form.code, createdAt = "2026-01-01T00:00:00", hidden = hidden,
-    protocolWorkSec = workSec, protocolRestSec = restSec,
+    protocolProgramId = if (workSec != null && restSec != null) protocolProgramIdFor(id) else null,
 )
+
+/** The local program id [exerciseEntity]'s `workSec`/`restSec` params imply for exercise [id]. */
+fun protocolProgramIdFor(id: Long): Long = id + 900_000L
+
+/** The minimal one-block program [exerciseEntity]'s `workSec`/`restSec` params reduce to. */
+fun protocolProgram(exerciseId: Long, name: String, workSec: Double, restSec: Double): WorkoutProgram =
+    WorkoutProgram(
+        id = protocolProgramIdFor(exerciseId),
+        name = "$name protocol",
+        category = "Protocols",
+        groups = listOf(
+            ProgramGroup(
+                name = name,
+                blocks = listOf(ProgramBlock(name = name, workSec = workSec.toInt(), restSec = restSec.toInt())),
+            )
+        ),
+    )
 
 fun slot(id: Long, name: String, atTime: String?, day: String) =
     Slot(id = id, name = name, atTime = atTime, repeatRule = REPEAT_NONE, anchorDate = day)

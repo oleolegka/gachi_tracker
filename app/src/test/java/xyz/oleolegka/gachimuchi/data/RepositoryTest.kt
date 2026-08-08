@@ -103,7 +103,7 @@ class RepositoryTest {
         // and the original is untouched by any of them
         val stored = repo.exercise(id)!!
         assertEquals(ExerciseForm.HOLD.code, stored.form)
-        assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
+        assertEquals(7.0, repo.toRef(stored).workSec!!, 1e-9)
         assertNull("the rest was set on the row that call described, not on this one", stored.defaultRestSec)
         assertEquals(150, repo.exercise(otherForm)!!.defaultRestSec)
     }

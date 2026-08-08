@@ -17,9 +17,13 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.EntryAmended
 import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
+import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
@@ -32,6 +36,7 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_SET_CANCEL
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.formFromEvent
 import xyz.oleolegka.gachimuchi.domain.toJsonObject
 import xyz.oleolegka.gachimuchi.domain.Workout
@@ -65,6 +70,12 @@ import java.time.format.DateTimeFormatter
  * only for "fetch the events" and "append an event"; there is no domain logic here.
  */
 class ActivityRepository(private val db: AppDatabase) {
+
+    /**
+     * The program library, reused rather than re-wrapping `db.programs()` a second time — see
+     * the find-or-create-protocol-program logic below, and [toRef], for what this is for.
+     */
+    private val programRepo = ProgramRepository(db)
 
     /** Log time (ts) — second precision, same as on the server (`db._now`). */
     private fun now(): String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
@@ -364,7 +375,7 @@ class ActivityRepository(private val db: AppDatabase) {
         val events = allEvents()
         return planned.map { entry ->
             val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
-                ?: restHintSec(settings, events, exercise(entry.exerciseId)?.toRef())
+                ?: restHintSec(settings, events, exercise(entry.exerciseId)?.let { toRef(it) })
             addExerciseToWorkout(workoutId, entry.exerciseId, rest)
         }
     }
@@ -612,19 +623,24 @@ class ActivityRepository(private val db: AppDatabase) {
         restSec: Double? = null,
         defaultRestSec: Int? = null,
     ): Long {
-        val key = exerciseIdentityKey(name, form.code, workSec, restSec)
+        val program = resolveOrCreateProtocolProgram(name, workSec, restSec)
+        val key = exerciseIdentityKey(name, form.code, program?.uid)
         db.exercises().byIdentityKey(key)?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
             if (found.hidden) setHidden(found.id, false)
+            linkProtocolProgramIfUnclaimed(program, found.id)
             return found.id
         }
-        return db.exercises().insert(
+        val id = db.exercises().insert(
             ExerciseEntity(
                 name = name, form = form.code, createdAt = now(),
-                protocolWorkSec = workSec, protocolRestSec = restSec,
+                protocolProgramId = program?.id,
                 defaultRestSec = defaultRestSec,
+                identityKey = key,
             )
         )
+        linkProtocolProgramIfUnclaimed(program, id)
+        return id
     }
 
     /**
@@ -675,7 +691,17 @@ class ActivityRepository(private val db: AppDatabase) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return ExerciseEdit.Blank
         val stored = db.exercises().byId(id) ?: return ExerciseEdit.Gone
-        val key = exerciseIdentityKey(trimmed, stored.form, workSec, restSec)
+        /*
+         * Found-or-created exactly as [ensureExercise] does it — and never the program the
+         * exercise used to point at. A correction repoints [ExerciseEntity.protocolProgramId]
+         * to whatever this resolves to; the OLD program's blocks are never touched here, which
+         * is what keeps "correcting the catalog's claim about itself, old sets keep their
+         * historical snapshot" true without ever mutating a program another exercise might
+         * share (see the long comment on why protocol correction is allowed at all, in
+         * ui/components/ExerciseEditor.kt's EditExerciseDialog).
+         */
+        val program = resolveOrCreateProtocolProgram(trimmed, workSec, restSec)
+        val key = exerciseIdentityKey(trimmed, stored.form, program?.uid)
         // asked before it is attempted, so the ordinary collision is an answer rather than a
         // caught exception; the constraint is still there underneath as the thing that makes
         // the answer true
@@ -683,11 +709,94 @@ class ActivityRepository(private val db: AppDatabase) {
             if (clash.id != id) return ExerciseEdit.Taken(clash.name)
         }
         val touched = db.exercises().editIdentity(
-            id = id, name = trimmed, workSec = workSec, restSec = restSec,
+            id = id, name = trimmed, programId = program?.id,
             identityKey = key,
         )
+        if (touched != 0) linkProtocolProgramIfUnclaimed(program, id)
         return if (touched == 0) ExerciseEdit.Gone else ExerciseEdit.Saved
     }
+
+    // --- the protocol program a plain work:rest pair resolves to (requirement 3) ----------
+    //
+    // The exercise create/edit dialogs still ask for two plain numbers, Work and Rest — see
+    // ui/screens/ExercisePicker.kt's CreateExerciseForm and ui/components/ExerciseEditor.kt's
+    // EditExerciseDialog, neither of which changed shape for this. All of the "an exercise's
+    // protocol is a library program now" logic lives here instead, so that a person filling in
+    // two boxes gets a program in the library for free and never sees one being built.
+
+    /**
+     * Finds an existing library program shaped exactly like the minimal one-block-one-group
+     * protocol [workSec]/[restSec] would produce, or creates one. Null when the pair is not a
+     * protocol at all — same positivity/pairing rule [ExerciseRef.protocol] applies, and no
+     * program is invented for an exercise with no protocol.
+     *
+     * "Found" matches on SHAPE AND NUMBERS ONLY, not on name or category: a hand-authored
+     * program that happens to have exactly one group, one block, `repeats == 1` on both, and
+     * this work/rest is a legitimate match to reuse, the same way this app already accepts
+     * value-based coincidences elsewhere. No hidden "auto-generated" flag is written — that
+     * would make a perfectly good program a second-class citizen of a library the owner wants
+     * to stay fully-featured.
+     */
+    private suspend fun resolveOrCreateProtocolProgram(
+        exerciseName: String,
+        workSec: Double?,
+        restSec: Double?,
+    ): WorkoutProgram? {
+        if (workSec == null || restSec == null || workSec <= 0 || restSec <= 0) return null
+        val workInt = workSec.toInt()
+        val restInt = restSec.toInt()
+        programRepo.allPrograms().firstOrNull { it.isMinimalProtocol(workInt, restInt) }?.let { return it }
+        val id = programRepo.save(
+            WorkoutProgram(
+                name = "$exerciseName protocol",
+                prepareSec = PREPARE_DEFAULT_SEC,
+                category = "Protocols",
+                groups = listOf(
+                    ProgramGroup(
+                        name = exerciseName,
+                        repeats = 1,
+                        blocks = listOf(
+                            ProgramBlock(
+                                name = exerciseName, workSec = workInt, restSec = restInt, repeats = 1,
+                            )
+                        ),
+                    )
+                ),
+            )
+        )
+        return programRepo.programById(id)
+    }
+
+    /** Whether [this] is exactly the one-block-one-group shape a plain protocol pair produces. */
+    private fun WorkoutProgram.isMinimalProtocol(workSec: Int, restSec: Int): Boolean {
+        val group = groups.singleOrNull() ?: return false
+        val block = group.blocks.singleOrNull() ?: return false
+        return group.repeats == 1 && block.repeats == 1 &&
+            block.workSec == workSec && block.restSec == restSec
+    }
+
+    /**
+     * Claims [program] for [exerciseId] so the "offer to log a set" flow in `RunLogDialog`
+     * works for it too — but only when nobody has claimed it yet.
+     *
+     * [xyz.oleolegka.gachimuchi.data.db.ProgramEntity.exerciseId] is inherently singular, and a
+     * program shared by several exercises (two exercises with the same numbers, or one manually
+     * pointed at a hand-authored program another exercise already claimed) can only usefully
+     * name one of them. Whichever exercise claimed it first keeps the convenience; every other
+     * exercise sharing the program still gets its correct identity and history, just not this
+     * one perk. Deliberately not fixed here — see this method's callers.
+     */
+    private suspend fun linkProtocolProgramIfUnclaimed(program: WorkoutProgram?, exerciseId: Long) {
+        if (program != null && program.exerciseId == null) programRepo.linkExercise(program.id, exerciseId)
+    }
+
+    /**
+     * The catalog row as the domain sees it, with its protocol program resolved — see
+     * [xyz.oleolegka.gachimuchi.domain.CatalogRow.toRef] for why that pure mapping does not
+     * reach for a database itself, and why the resolution happens once, here.
+     */
+    suspend fun toRef(exercise: ExerciseEntity): ExerciseRef =
+        exercise.toRef(exercise.protocolProgramId?.let { programRepo.programById(it) })
 
     /**
      * Keeps an exercise out of the pickers, or brings it back.

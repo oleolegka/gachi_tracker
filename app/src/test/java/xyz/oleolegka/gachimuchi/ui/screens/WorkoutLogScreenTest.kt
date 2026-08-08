@@ -33,6 +33,8 @@ import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.exerciseEntity
 import xyz.oleolegka.gachimuchi.ui.exerciseRef
+import xyz.oleolegka.gachimuchi.ui.protocolProgram
+import xyz.oleolegka.gachimuchi.ui.protocolProgramIdFor
 
 /**
  * Logging inside a workout: the cards, the quick form, and the rests running under them.
@@ -84,8 +86,8 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val catalog = listOf(
         exerciseEntity(1, "Bench press").copy(defaultRestSec = 150),
         exerciseEntity(2, "Abs").copy(defaultRestSec = 90),
-        exerciseEntity(3, "Hangs", ExerciseForm.HOLD)
-            .copy(defaultRestSec = 240, protocolWorkSec = 7.0, protocolRestSec = 3.0),
+        exerciseEntity(3, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+            .copy(defaultRestSec = 240),
         // the flag lives on the catalog row; the side it makes the card ask for lives on the set
         exerciseEntity(4, "One-arm hang 20 mm", ExerciseForm.HOLD)
             .copy(defaultRestSec = 180, oneSided = true),
@@ -115,7 +117,12 @@ class WorkoutLogScreenTest : ScreenTest() {
         liveExerciseId: Long? = null,
         readySummary: String? = null,
     ) {
-        val state = UiState(events = journal.events, exercises = catalog, loading = false)
+        val state = UiState(
+            events = journal.events,
+            exercises = catalog,
+            programsById = mapOf(protocolProgramIdFor(3) to protocolProgram(3, "Hangs", 7.0, 3.0)),
+            loading = false,
+        )
         screen {
             WorkoutLogScreen(
                 state = state,
