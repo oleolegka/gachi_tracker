@@ -82,17 +82,24 @@ class SignalTimingTest {
      *
      * These fix the moment the signal was REALLY made rather than the moment the step
      * nominally began, which is what `boundaryAtMs` carries.
+     *
+     * Each of these asks the question the way the controller asks it: the run has ALREADY
+     * been settled onto the late step and the boundary has ALREADY been signalled, and what
+     * is being decided is what the freshly restarted loop owes next. Handing in an unsettled
+     * state instead would be asking a different question — that one now answers "boundary",
+     * which is the whole of the fix below.
      */
+
+    private fun settledAt(list: List<WorkoutStep>, now: Long) = settleRun(list, running(list), now)
 
     /** The 3 s rest of a 7:3 set, reached 1.2 s late: its "two" tick is now behind the beep. */
     @Test
     fun `a rest boundary noticed late is not cut off by the tick it makes due`() {
         val list = steps(7, 3)
-        val state = running(list)
         // the second step runs 7 000..10 000; the boundary is only handled at 8 200
         val late = 8_200L
 
-        val cue = timerCue(list, state, countdownTicks = true, now = late, boundaryAtMs = late)
+        val cue = timerCue(list, settledAt(list, late), countdownTicks = true, now = late, boundaryAtMs = late)
 
         assertFalse(cue.boundary)
         assertNull("'two' was due at 8 000, before the beep that has just gone out", cue.tickSecond)
@@ -103,7 +110,9 @@ class SignalTimingTest {
     @Test
     fun `the tick that clears the late beep still sounds`() {
         val list = steps(7, 3)
-        val cue = timerCue(list, running(list), countdownTicks = true, now = 9_000, boundaryAtMs = 8_200)
+        val cue = timerCue(
+            list, settledAt(list, 8_200), countdownTicks = true, now = 9_000, boundaryAtMs = 8_200,
+        )
 
         assertEquals(1, cue.tickSecond)
     }
@@ -117,7 +126,7 @@ class SignalTimingTest {
         val list = steps(7, 3)
         val late = 9_100L
 
-        val cue = timerCue(list, running(list), countdownTicks = true, now = late, boundaryAtMs = late)
+        val cue = timerCue(list, settledAt(list, late), countdownTicks = true, now = late, boundaryAtMs = late)
 
         assertNull(cue.tickSecond)
         assertEquals(10_000, cue.wakeAtMs)
@@ -129,10 +138,78 @@ class SignalTimingTest {
         val list = steps(3, 7)
         val late = 7_200L
 
-        val cue = timerCue(list, running(list), countdownTicks = true, now = late, boundaryAtMs = late)
+        val cue = timerCue(list, settledAt(list, late), countdownTicks = true, now = late, boundaryAtMs = late)
 
         assertNull("'three' was due at 7 000", cue.tickSecond)
         assertEquals(8_000, cue.wakeAtMs)
+    }
+
+    // --- the boundary flag itself, which used to be unreachable ----------------------------
+
+    /*
+     * `timerCue` reported a boundary only when the WHOLE PROGRAM had run out, because the test
+     * it used could not be true for anything else: `settleRun` walks forward until the clock is
+     * inside the current step, so "the clock is past the end of the current step" is false by
+     * construction. Every step change inside a program answered "no boundary", the countdown
+     * loop therefore never advanced the run, and the exact alarm — described everywhere as the
+     * backstop — was the only thing in the app that moved a run from one step to the next.
+     */
+
+    @Test
+    fun `a step that has run out is a boundary, not just the end of the program`() {
+        val list = steps(7, 3, 7)
+        val state = running(list)
+
+        val cue = timerCue(list, state, countdownTicks = true, now = 7_000)
+
+        assertTrue("the run has moved on and the caller has to settle and signal", cue.boundary)
+        assertNull(cue.tickSecond)
+    }
+
+    @Test
+    fun `a settled state standing inside its own step is not a boundary`() {
+        val list = steps(7, 3, 7)
+
+        val cue = timerCue(list, settledAt(list, 7_000), countdownTicks = true, now = 7_000)
+
+        assertFalse("settled and signalled: the next thing owed is a tick, not another beep", cue.boundary)
+    }
+
+    /**
+     * Every transition of a whole 7:3 set reports a boundary exactly once — the assertion the
+     * old flag could never have made, and the one the owner's missing "hang" beep needed.
+     */
+    @Test
+    fun `every step change of a 7 to 3 set is reported as a boundary`() {
+        val program = WorkoutProgram(
+            name = "Repeaters",
+            prepareSec = 0,
+            groups = listOf(
+                ProgramGroup(
+                    name = "Repeaters",
+                    blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = 6)),
+                )
+            ),
+        )
+        val list = program.flatten()
+        var state = startRun(list, 0)
+        var now = 0L
+        var boundaries = 0
+        var guard = 0
+
+        while (guard++ < 500) {
+            val cue = timerCue(list, state, countdownTicks = true, now = now)
+            if (cue.boundary) {
+                state = settleRun(list, state, now)
+                if (state.finished) break
+                boundaries++
+                continue
+            }
+            now = cue.wakeAtMs
+        }
+
+        // eleven steps, so ten changes between them; the eleventh signal is the start itself
+        assertEquals(10, boundaries)
     }
 
     /**

@@ -175,7 +175,27 @@ fun timerCue(
         return TimerCue(boundary = false, tickSecond = null, wakeAtMs = now)
     }
     val settled = settleRun(steps, state, now)
-    if (settled.finished || now >= settled.stepEndAtMs) {
+    /*
+     * ── A boundary is the state having MOVED, not the clock being past a number ───
+     * This used to read `now >= settled.stepEndAtMs`, which cannot be true: [settleRun] walks
+     * forward until exactly that is false, so the only way through was `finished` — the end of
+     * the whole program. Every boundary INSIDE a program therefore reported `false` here, and
+     * the countdown loop consequently never advanced the run at all. It went on ticking
+     * correctly against a state frozen on the first step, because this function settles
+     * internally before working out the ticks, so nothing looked wrong from the outside.
+     *
+     * What that cost: the loop is described everywhere as the first line and the exact alarm
+     * as a backstop, and it was the other way round. The ALARM was the only thing that ever
+     * moved a run from one step to the next or made a boundary signal. A backstop that is
+     * really the only mechanism is a single point of failure, and on 7:3 the alarms it hangs
+     * on are three and seven seconds apart — the shortest, most easily throttled, most easily
+     * coalesced alarms the platform has to deliver. When one arrives late the boundary is
+     * late; when it arrives more than SIGNAL_LATENESS_MS late into a seven second hang, the
+     * lateness rule drops it in silence and the instruction to hang is simply never given.
+     *
+     * The right test is whether the run has passed a boundary since the state was written.
+     */
+    if (settled.finished || settled.stepIndex != state.stepIndex) {
         return TimerCue(boundary = true, tickSecond = null, wakeAtMs = now)
     }
 

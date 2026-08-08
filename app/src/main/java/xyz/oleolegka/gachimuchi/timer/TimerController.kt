@@ -688,6 +688,24 @@ class TimerController internal constructor(
     }
 
     /**
+     * Runs one pass of the countdown by hand and says how long the loop would now sleep, or
+     * null when the loop would stop.
+     *
+     * ── Why this exists, and it is not a convenience ────────────────────────────
+     * The countdown loop cannot otherwise be tested AT ALL. It sleeps in real milliseconds
+     * against [SystemClock.elapsedRealtime], which under Robolectric only moves when a test
+     * moves it, so the coroutine simply never wakes during a test and every assertion about
+     * a protocol run has to be made by poking the controller from the side instead. That is
+     * how a run could be covered step by step and still have a whole 7:3 set go untested —
+     * and it is how a missing boundary survived three fixes and a release.
+     *
+     * With this, a test can drive the real loop the way the real loop drives itself: ask for
+     * a pass, move the clock by what it asked to sleep, ask again. Nothing about the
+     * production path changes; [restartLoop] calls the same thing.
+     */
+    internal fun countdownPass(): Long? = synchronized(lock) { loopPass() }
+
+    /**
      * One pass of the countdown: fire whatever the cue says is due and report how long to
      * sleep, or null when there is nothing left to loop for.
      *
