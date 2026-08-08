@@ -146,6 +146,15 @@ data class WorkoutOrder(
 data class OrderedExercise(
     @SerialName("exercise_id") val exerciseId: Long? = null,
     @SerialName("exercise_uid") val exerciseUid: String? = null,
+    /**
+     * Which card this entry means, for an exercise that has two — see
+     * [WorkoutExerciseAdded.side]. Matched against [WorkoutExercise.side] exactly, the same
+     * "matches or it does not" rule [exerciseId]/[exerciseUid] already follow: null names the
+     * one card an exercise that is not one-sided has, and an order event written before this
+     * field existed carries null for every entry, which is why such an event cannot rearrange a
+     * left/right split it predates — see [reordered].
+     */
+    @SerialName("side") val side: String? = null,
 ) {
     init {
         require(exerciseId != null || exerciseUid != null) {
@@ -156,6 +165,16 @@ data class OrderedExercise(
 
 /** The pair read as one reference, so no reader picks for itself which half wins. */
 fun OrderedExercise.link(): ExerciseLink = ExerciseLink(exerciseUid, exerciseId)
+
+/** [side] read as the domain compares it — see [HoldSet.sideOf], the same idea for a set. */
+val OrderedExercise.sideOf: HoldSide? get() = HoldSide.fromCode(side)
+
+/**
+ * One card named for the order event or the "add to workout" write — an exercise, and which
+ * side of it when it has one. The screen-facing counterpart of [OrderedExercise]: callers hold
+ * an [ExerciseLink] and a [HoldSide], not a payload's raw strings.
+ */
+data class OrderedCard(val exercise: ExerciseLink, val side: HoldSide? = null)
 
 /** One exercise inside a workout, with the rest chosen for it and the sets it collected. */
 data class WorkoutExercise(
@@ -184,6 +203,21 @@ data class WorkoutExercise(
      * it. Removing that one is removing its sets, and there is nothing else to take out.
      */
     val addedEventIds: List<Long> = emptyList(),
+    /**
+     * Which card of the exercise this is, or null for the ordinary exercise that has only one.
+     *
+     * On an exercise trained one limb at a time ([xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided])
+     * this is what tells two blocks of the same [exercise] apart — one [HoldSide.LEFT], one
+     * [HoldSide.RIGHT] — so they draw as two independent cards with two independent rests
+     * rather than colliding into one. See [buildWorkout] for how a block ends up with a side:
+     * the "added" row that put it here, or failing that the first set that named a side.
+     *
+     * A THIRD, SIDELESS block is possible for the same exercise, and it is not a bug: a set
+     * recorded with no side at all (a journal merged from elsewhere, an amendment that cleared
+     * it) belongs to neither hand's history and gets its own block rather than being folded
+     * into either one — the same refusal to guess [holdRecord] makes about such a set.
+     */
+    val side: HoldSide? = null,
 ) {
     /**
      * The local catalog row number, for the screens that still navigate by one.
@@ -197,6 +231,18 @@ data class WorkoutExercise(
 
     val isEmpty: Boolean get() = sets.isEmpty()
 }
+
+/**
+ * The identity of a CARD rather than of an exercise: [WorkoutExercise.exercise]'s key plus its
+ * [WorkoutExercise.side]. Two cards of one one-sided exercise share the first half and differ
+ * in the second, which is the whole reason this exists — a screen keying its list by the
+ * exercise alone would draw the left and right card of one exercise as the same row.
+ */
+val WorkoutExercise.cardKey: String get() = workoutCardKey(exercise.key, side)
+
+/** The one place [cardKey] is actually computed, so [buildWorkout] and readers agree on it. */
+private fun workoutCardKey(exerciseKey: String, side: HoldSide?): String =
+    "$exerciseKey#${side?.code ?: "-"}"
 
 /**
  * A whole workout, folded out of the journal.
@@ -479,11 +525,13 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     // rebuilding it per row would fold the whole journal for every event in it
     val live = readActivities(journal).associateBy { it.id }
 
-    // keyed by ExerciseLink.key so that an entry naming its exercise by identity and one
-    // naming it by number land in the same block; the link itself is merged as they arrive,
-    // so the block ends up knowing both
+    // keyed by [workoutCardKey] — the exercise AND its side together — so that an entry naming
+    // its exercise by identity and one naming it by number land in the same block, and so that
+    // the left and right card of a one-sided exercise land in TWO. The link itself is merged as
+    // its mentions arrive, so a block ends up knowing both the identity and the number.
     val sets = LinkedHashMap<String, MutableList<ActivityEvent>>()
     val links = LinkedHashMap<String, ExerciseLink>()
+    val sides = HashMap<String, HoldSide?>()
     val rests = HashMap<String, Int>()
     val addedRows = HashMap<String, MutableList<Long>>()
     val unkeyed = ArrayList<ActivityEvent>()
@@ -498,11 +546,12 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     var order: WorkoutOrder? = null
     var orderRowId = 0L
 
-    fun remember(link: ExerciseLink, rowId: Long): String {
-        val key = link.key
+    fun remember(link: ExerciseLink, rowId: Long, side: HoldSide?): String {
+        val key = workoutCardKey(link.key, side)
         links[key] = links[key]?.mergedWith(link) ?: link
         sets.getOrPut(key) { mutableListOf() }
         firstRow.putIfAbsent(key, rowId)
+        sides.putIfAbsent(key, side)
         return key
     }
 
@@ -523,18 +572,26 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         }
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
-            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id)
+            val side = HoldSide.fromCode(added.side)
+            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id, side)
             rests[key] = added.restSec
             addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
         val activity = live[row.id] ?: continue
         val link = activity.form.exerciseLink()
-        if (link == null) unkeyed += activity else sets.getValue(remember(link, row.id)) += activity
+        if (link == null) {
+            unkeyed += activity
+        } else {
+            // only a HoldSet ever carries a side (see HoldSet.sideOf); every other form joins
+            // the sideless block, which is the only block such an exercise can have anyway
+            val side = (activity.form as? HoldSet)?.sideOf
+            sets.getValue(remember(link, row.id, side)) += activity
+        }
     }
 
     val blocks = sets.map { (key, ofExercise) ->
-        WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty())
+        WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty(), sides[key])
     }
 
     return Workout(
@@ -576,6 +633,15 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
  * A duplicate entry (the same exercise twice) claims a block once — [taken] — so the second
  * mention finds nothing and is skipped. Nothing this app writes contains one; a merged journal
  * might, and duplicating the card would be the one answer that invents training.
+ *
+ * ── Two cards of one exercise are matched by side as well as by identity ────────
+ * [taken] and [firstRow] are keyed by [WorkoutExercise.cardKey] rather than by
+ * [ExerciseLink.key] alone, and an entry is matched only against a block whose
+ * [WorkoutExercise.side] equals the entry's own — see [OrderedExercise.sideOf]. Without that a
+ * one-sided exercise's left and right block would look like the same block twice to [taken]: the
+ * first entry naming the exercise would claim whichever of the two [firstOrNull] happened to
+ * reach first, and the second would find it already taken and fall through to "not named",
+ * landing at the end instead of where it was actually dragged to.
  */
 private fun reordered(
     blocks: List<WorkoutExercise>,
@@ -583,18 +649,19 @@ private fun reordered(
     orderRowId: Long,
     firstRow: Map<String, Long>,
 ): List<WorkoutExercise> {
-    val movable = blocks.filter { (firstRow[it.exercise.key] ?: Long.MAX_VALUE) < orderRowId }
+    val movable = blocks.filter { (firstRow[it.cardKey] ?: Long.MAX_VALUE) < orderRowId }
     if (movable.isEmpty()) return blocks
     val taken = HashSet<String>()
     val head = ArrayList<WorkoutExercise>(blocks.size)
     for (entry in wanted) {
         val link = entry.link()
-        val block = movable.firstOrNull { it.exercise.key !in taken && it.exercise.matches(link) }
-            ?: continue
-        taken += block.exercise.key
+        val block = movable.firstOrNull {
+            it.cardKey !in taken && it.exercise.matches(link) && it.side == entry.sideOf
+        } ?: continue
+        taken += block.cardKey
         head += block
     }
-    return head + blocks.filterNot { it.exercise.key in taken }
+    return head + blocks.filterNot { it.cardKey in taken }
 }
 
 /**

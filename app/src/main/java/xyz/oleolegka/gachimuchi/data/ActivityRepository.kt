@@ -18,6 +18,8 @@ import xyz.oleolegka.gachimuchi.domain.EntryAmended
 import xyz.oleolegka.gachimuchi.domain.EntryDeleted
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
@@ -46,6 +48,7 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightAt
 import xyz.oleolegka.gachimuchi.domain.ExerciseIdentity
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.OrderedExercise
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_ORDER_SET
 import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
@@ -217,10 +220,18 @@ class ActivityRepository(private val db: AppDatabase) {
      * Returns the id of the amendment, or null when [exercise] has no live set yet to amend —
      * its very first set of a session, which is the honest case where there is nothing to
      * correct because nothing was rested for.
+     *
+     * [side] narrows "the previous set" to the same CARD when the exercise is trained one limb
+     * at a time — the left hand's floor measures the pause since the left hand's own last set,
+     * and amending whichever hand happens to be more recent in the journal would occasionally
+     * attribute the wrong hand's rest to the wrong hand's set. Null matches a set with no side
+     * at all, which is every set of an exercise that is not one-sided.
      */
-    suspend fun recordActualRest(exercise: ExerciseLink, actualRestSec: Double): Long? {
+    suspend fun recordActualRest(exercise: ExerciseLink, actualRestSec: Double, side: HoldSide? = null): Long? {
         val target = readActivities(allEvents(), listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET))
-            .lastOrNull { it.form.exerciseLink()?.matches(exercise) == true }
+            .lastOrNull {
+                it.form.exerciseLink()?.matches(exercise) == true && (it.form as? HoldSet)?.sideOf == side
+            }
             ?: return null
         return amendEntry(
             target.id,
@@ -305,7 +316,8 @@ class ActivityRepository(private val db: AppDatabase) {
     }
 
     /**
-     * Puts an exercise into a workout with a chosen rest, before any set of it exists.
+     * Puts an exercise into a workout with a chosen rest, before any set of it exists — or, for
+     * one CARD of an exercise trained one limb at a time, [side] says which.
      *
      * Two writes, and they are two different facts. The journal event says "this exercise is
      * part of THAT workout, at this rest" and is history. The catalog column says "this is
@@ -316,8 +328,18 @@ class ActivityRepository(private val db: AppDatabase) {
      * The workout link is written into the COLUMN as well as the payload, so that one query
      * finds everything belonging to a workout regardless of event type — see
      * [WorkoutExerciseAdded] for why the payload carries it too.
+     *
+     * ONE CARD PER CALL. A one-sided exercise's two cards are two calls — see
+     * [copyPlannedExercises] and [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen] for the
+     * two places that fan out to both — because a card being touched is what the caller actually
+     * knows: adding the exercise fresh means both, changing one card's own rest means one.
      */
-    suspend fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int): Long {
+    suspend fun addExerciseToWorkout(
+        workoutId: Long,
+        exerciseId: Long,
+        restSec: Int,
+        side: HoldSide? = null,
+    ): Long {
         val workoutUid = db.events().byId(workoutId)?.uid
         val exerciseUid = db.exercises().byId(exerciseId)?.uid
         val id = db.events().insert(
@@ -326,7 +348,7 @@ class ActivityRepository(private val db: AppDatabase) {
                 payload = payloadJson.encodeToString(
                     WorkoutExerciseAdded(
                         workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
-                        workoutUid = workoutUid, exerciseUid = exerciseUid,
+                        workoutUid = workoutUid, exerciseUid = exerciseUid, side = side?.code,
                     )
                 ),
                 workoutId = workoutId,
@@ -364,6 +386,14 @@ class ActivityRepository(private val db: AppDatabase) {
      *
      * Reads the slot's rows directly rather than through `plannedExercises` over the whole
      * plan: same list, one query, and this path only ever holds an id.
+     *
+     * ── A one-sided exercise arrives with both its cards, here as much as from the picker ──
+     * The plan itself says nothing about a side — that question is out of scope for the plan
+     * editor (§13.7 is about composition and rest, not about hands) — but the workout it lands
+     * in is the same kind of workout a manual "add exercise" produces, and that one always gets
+     * two cards for an exercise the catalog flags [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
+     * So this fans out the same way, at the same rest, rather than leaving a plan-started
+     * workout with the one card the picker path would never produce.
      */
     suspend fun copyPlannedExercises(
         workoutId: Long,
@@ -373,10 +403,17 @@ class ActivityRepository(private val db: AppDatabase) {
         val planned = slotExercises(slotId)
         if (planned.isEmpty()) return emptyList()
         val events = allEvents()
-        return planned.map { entry ->
-            val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
-                ?: restHintSec(settings, events, exercise(entry.exerciseId)?.let { toRef(it) })
-            addExerciseToWorkout(workoutId, entry.exerciseId, rest)
+        return planned.flatMap { entry ->
+            val ref = exercise(entry.exerciseId)?.let { toRef(it) }
+            val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC } ?: restHintSec(settings, events, ref)
+            if (ref?.oneSided == true) {
+                listOf(
+                    addExerciseToWorkout(workoutId, entry.exerciseId, rest, HoldSide.LEFT),
+                    addExerciseToWorkout(workoutId, entry.exerciseId, rest, HoldSide.RIGHT),
+                )
+            } else {
+                listOf(addExerciseToWorkout(workoutId, entry.exerciseId, rest))
+            }
         }
     }
 
@@ -397,14 +434,20 @@ class ActivityRepository(private val db: AppDatabase) {
      * Returns the id of the row written, or null when [order] is empty: an order that names
      * nothing states nothing, and writing it would only mean the next reader has one more row to
      * fold to reach the same answer.
+     *
+     * [order] names CARDS, not exercises — see [OrderedCard] — so that dragging the left card of
+     * a one-sided exercise past its own right card states a whole order the way every other drag
+     * does, rather than trying to move "the exercise" as if it had only one place to be.
      */
-    suspend fun setWorkoutExerciseOrder(workoutId: Long, order: List<ExerciseLink>): Long? {
+    suspend fun setWorkoutExerciseOrder(workoutId: Long, order: List<OrderedCard>): Long? {
         if (order.isEmpty()) return null
         val workoutUid = db.events().byId(workoutId)?.uid
-        val entries = order.map { link ->
+        val entries = order.map { card ->
+            val link = card.exercise
             OrderedExercise(
                 exerciseId = link.id,
                 exerciseUid = link.uid ?: link.id?.let { db.exercises().byId(it)?.uid },
+                side = card.side?.code,
             )
         }
         return db.events().insert(
