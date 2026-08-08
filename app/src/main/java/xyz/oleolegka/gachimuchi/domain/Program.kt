@@ -117,6 +117,12 @@ data class WorkoutProgram(
     /** Free-text heading this program is filed under on the timer tab. Blank means none. */
     @SerialName("category") val category: String = "",
     @SerialName("uid") val uid: String = newUid(),
+    /**
+     * Kept out of the timer tab's list (schema version 20) — see
+     * [xyz.oleolegka.gachimuchi.data.db.ProgramEntity.hidden]. Presentation only: a hidden
+     * program still resolves as a protocol, still runs, still shows on the identity chip.
+     */
+    @SerialName("hidden") val hidden: Boolean = false,
 )
 
 /** Programs under one heading, in the order they are stored. */

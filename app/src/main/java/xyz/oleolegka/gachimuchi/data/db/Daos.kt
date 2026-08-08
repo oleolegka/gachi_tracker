@@ -145,6 +145,20 @@ interface ExerciseDao {
      */
     @Query("UPDATE exercises SET bodyweight_share = :share WHERE space_id = :spaceId AND id = :id")
     suspend fun setBodyweightShare(id: Long, share: Double?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Whether any exercise's protocol IS this program — the live fact
+     * [xyz.oleolegka.gachimuchi.data.ProgramRepository.save] freezes a program's content on.
+     *
+     * Scoped through `exercises` rather than carrying a `space_id` of its own: the question is
+     * "does a catalog row point here", and the row that would point here already carries the
+     * profile. A program shared by several exercises (identical numbers, or a hand-authored
+     * program deliberately pointed at by more than one — see `ExerciseEntity.protocolProgramId`)
+     * answers true from the first match; which exercise it was does not matter to a caller
+     * asking only "may this be rewritten".
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM exercises WHERE protocol_program_id = :programId)")
+    suspend fun existsWithProtocolProgram(programId: Long): Boolean
 }
 
 /**
@@ -220,6 +234,10 @@ interface ProgramDao {
 
     @Query("DELETE FROM programs WHERE space_id = :spaceId AND id = :id")
     suspend fun deleteProgram(id: Long, spaceId: Long = LOCAL_SPACE_ID)
+
+    /** Keeps a program out of the library list, or brings it back — see [ProgramEntity.hidden]. */
+    @Query("UPDATE programs SET hidden = :hidden WHERE space_id = :spaceId AND id = :id")
+    suspend fun setHidden(id: Long, hidden: Boolean, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 /**
