@@ -139,7 +139,7 @@ class ExerciseCatalogTest {
         val ref = repo.toRef(repo.exercise(id)!!)
         repeat(4) { repo.record(strengthSetOf(ref, "2026-08-01", reps = 5, weightKg = 70.0)) }
 
-        assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Bench press", null, null))
+        assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Bench press"))
 
         val stored = repo.exercise(id)!!
         assertEquals("Bench press", stored.name)
@@ -152,43 +152,51 @@ class ExerciseCatalogTest {
     }
 
     /**
-     * Correcting a protocol, and the caveat that comes with it stated as an assertion rather
-     * than as a sentence in a document: the sets stay, and the sets recorded before the
-     * correction still carry the protocol they were WRITTEN with.
+     * The owner's rule, as an assertion: "such a thing cannot happen: it breaks the
+     * statistics. If yesterday it was one protocol and today another, that is a NEW exercise."
      *
-     * That is the honest record of a typo being fixed — the hangs happened under whatever
-     * protocol was actually run, and the app was told the wrong numbers. It is also why this
-     * edit is not the way to record having moved to a different protocol: that is a different
-     * exercise (§12-A) and gets a row and a history of its own.
+     * [ActivityRepository.editExercise] no longer TAKES a protocol — this is proved twice:
+     * the signature itself has no parameter left to pass one through (a compile-time
+     * guarantee, not a runtime one), and this test pins the runtime half of it: renaming an
+     * exercise leaves `protocolProgramId` and everything the library program under it says
+     * exactly as they were, sets included.
      */
     @Test
-    fun `correcting a protocol moves the catalog and leaves the sets saying what they said`() = runTest {
+    fun `renaming an exercise never moves its protocol`() = runTest {
         val id = hangs(7.0, 3.0)
         val before = repo.toRef(repo.exercise(id)!!)
         repo.record(holdSetOf(before, "2026-08-01", addedKg = 10.0, holdSec = 7.0))
+        val programIdBefore = repo.exercise(id)!!.protocolProgramId
 
-        assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Hangs", workSec = 10.0, restSec = 5.0))
+        assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Hang"))
 
         val after = repo.exercise(id)!!
+        assertEquals("the row still points at the same library program", programIdBefore, after.protocolProgramId)
         val afterRef = repo.toRef(after)
-        assertEquals(10.0, afterRef.workSec!!, 1e-9)
-        assertEquals(5.0, afterRef.restSec!!, 1e-9)
+        assertEquals(7.0, afterRef.workSec!!, 1e-9)
+        assertEquals(3.0, afterRef.restSec!!, 1e-9)
         val sets = holdSetsOfExercise(repo.allEvents(), afterRef.link)
         assertEquals("the set has to stay with the exercise", 1, sets.size)
-        assertEquals("the snapshot on the set is not rewritten", 7.0, sets.single().workSec!!, 1e-9)
+        assertEquals(7.0, sets.single().workSec!!, 1e-9)
     }
 
+    /**
+     * The collision path still exists without a protocol parameter to drive it: two exercises
+     * created on the IDENTICAL protocol pair share one library program (`resolveOrCreateProtocolProgram`'s
+     * "found" rule matches on shape and numbers, not on the exercise's name), so renaming one
+     * onto the other's name collides on (name, form, program uid) exactly as it always could.
+     */
     @Test
     fun `an edit onto an identity that is taken is refused and names what took it`() = runTest {
-        val sevenThree = hangs(7.0, 3.0)
-        hangs(10.0, 5.0)
+        val a = hangs(7.0, 3.0)
+        repo.ensureExercise("Hangs deep", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
 
-        val result = repo.editExercise(sevenThree, "Hangs", workSec = 10.0, restSec = 5.0)
+        val result = repo.editExercise(a, "Hangs deep")
 
         assertTrue("expected a refusal, got $result", result is ExerciseEdit.Taken)
-        assertEquals("Hangs", (result as ExerciseEdit.Taken).name)
+        assertEquals("Hangs deep", (result as ExerciseEdit.Taken).name)
         // and nothing moved
-        assertEquals(7.0, repo.toRef(repo.exercise(sevenThree)!!).workSec!!, 1e-9)
+        assertEquals("Hangs", repo.exercise(a)!!.name)
         assertEquals(2, repo.allExercises().size)
     }
 
@@ -196,8 +204,8 @@ class ExerciseCatalogTest {
     fun `an edit of an exercise that is gone, and an edit to a blank name, are refused`() = runTest {
         val id = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH)
 
-        assertEquals(ExerciseEdit.Blank, repo.editExercise(id, "   ", null, null))
-        assertEquals(ExerciseEdit.Gone, repo.editExercise(id + 999, "Anything", null, null))
+        assertEquals(ExerciseEdit.Blank, repo.editExercise(id, "   "))
+        assertEquals(ExerciseEdit.Gone, repo.editExercise(id + 999, "Anything"))
         assertEquals("Bench press", repo.exercise(id)!!.name)
     }
 
@@ -206,10 +214,7 @@ class ExerciseCatalogTest {
     fun `an edit that changes nothing is saved rather than refused as a duplicate`() = runTest {
         val id = hangs(7.0, 3.0)
 
-        assertEquals(
-            ExerciseEdit.Saved,
-            repo.editExercise(id, "Hangs", workSec = 7.0, restSec = 3.0),
-        )
+        assertEquals(ExerciseEdit.Saved, repo.editExercise(id, "Hangs"))
         assertEquals(1, repo.allExercises().size)
     }
 

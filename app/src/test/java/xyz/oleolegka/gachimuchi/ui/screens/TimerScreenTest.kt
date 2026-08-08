@@ -39,6 +39,7 @@ class TimerScreenTest : ScreenTest() {
     private var edited: WorkoutProgram? = null
     private var editRequested = 0
     private var deleted: Long? = null
+    private var hiddenToggled: WorkoutProgram? = null
 
     private val actions = TimerActions(
         enable = { enabled++ },
@@ -90,6 +91,7 @@ class TimerScreenTest : ScreenTest() {
                     edited = it
                 },
                 onDeleteProgram = { deleted = it },
+                onToggleHiddenProgram = { hiddenToggled = it },
                 onImportPrograms = {},
                 onSettings = {},
                 onEnable = { enabled++ },

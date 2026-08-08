@@ -107,12 +107,13 @@ class FormDetailScreenTest : ScreenTest() {
     }
 
     /**
-     * The dialog opens on what the exercise IS, not on empty fields: an edit that starts blank
-     * is an edit that quietly clears the protocol of anybody who only meant to fix a typo.
+     * The dialog opens on what the exercise IS: the name in an editable field, the protocol
+     * as READ TEXT — it is a fact about the exercise now, not a field, because the protocol
+     * cannot be changed here any more (see `ui/components/ExerciseEditor.kt`'s
+     * `EditExerciseDialog`).
      *
-     * The numbers are asserted as "7" rather than "7.0" on purpose — that is how they were
-     * typed, and a field that re-renders them with a decimal point reads as the app having
-     * changed something.
+     * The protocol is asserted as "7 : 3" — work and rest together, as the fixed fact is
+     * shown, not as two separate typeable numbers the way it used to be.
      */
     @Test
     fun `the edit dialog opens on the values the exercise already has`() {
@@ -125,27 +126,27 @@ class FormDetailScreenTest : ScreenTest() {
         // twice: the heading the screen already had, and the field the dialog opened with
         compose.onAllNodesWithText("Hangs").assertCountEquals(2)
         compose.onNodeWithText("Name").assertIsDisplayed()
-        compose.onNodeWithText("7").assertIsDisplayed()
-        compose.onNodeWithText("3").assertIsDisplayed()
+        compose.onNodeWithText("7 : 3").assertIsDisplayed()
         compose.onNodeWithText("Save").assertIsDisplayed()
     }
 
     /**
-     * The caveat is on the screen, not only in a KDoc: correcting the catalog does not
-     * rewrite what the sets say they were performed at, and an exercise genuinely moved to
-     * another protocol is a different exercise.
+     * The caveat is on the screen, not only in a KDoc: the protocol is fixed, and an exercise
+     * genuinely moved to another protocol is a different exercise, created as one.
      */
     @Test
-    fun `the edit dialog says what the correction does to the history`() {
+    fun `the edit dialog says the protocol is fixed and why`() {
         detail()
         openMenu()
 
         compose.onNodeWithText("Edit exercise").performClick()
         settle()
 
-        compose.onNodeWithText("still carry the protocol", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("is a different exercise", substring = true).assertIsDisplayed()
-        // and the form is stated as the thing that cannot move
+        compose.onNodeWithText("Fixed.", substring = true).assertIsDisplayed()
+        // the screen opens the sentence, so the C is capital - and this matcher is case
+        // sensitive, which is what made the lower-cased version of this line fail
+        compose.onNodeWithText("Create it as a new", substring = true).assertIsDisplayed()
+        // and the form is stated as the thing that cannot move either
         compose.onNodeWithText("The form stays holds", substring = true).assertIsDisplayed()
     }
 }

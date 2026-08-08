@@ -409,6 +409,25 @@ data class ProgramEntity(
     val category: String = "",
     /** Stable identity of this program across devices and exports — see [newUid]. */
     val uid: String = newUid(),
+    /**
+     * Whether this program is kept out of the library list (schema version 20) — the same
+     * PRESENTATION choice [ExerciseEntity.hidden] already is, made by the same argument in
+     * reverse: a program CANNOT be edited by content once an exercise's protocol IS it (see
+     * `ProgramRepository.save`'s freeze), so hiding is what "I don't want to look at this one
+     * any more" has to mean instead of deleting it.
+     *
+     * A hidden program keeps running exactly as before: it is still what
+     * [ExerciseEntity.protocolProgramId] resolves to, still what a set's protocol snapshot is
+     * taken from, still what the identity chip on the exercise's detail screen reads. Hiding
+     * touches ONE thing — whether the program is offered by
+     * [xyz.oleolegka.gachimuchi.domain.programSections] on the timer tab — the same boundary
+     * [ExerciseEntity.hidden] draws for the exercise picker.
+     *
+     * NOT NULL with false for every row that predates it, on the same grounds as
+     * [ExerciseEntity.oneSided]: nothing in the library was hidden before there was a way to
+     * say so.
+     */
+    val hidden: Boolean = false,
 )
 
 /**

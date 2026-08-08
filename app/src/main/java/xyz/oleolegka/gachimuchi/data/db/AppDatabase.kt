@@ -42,7 +42,7 @@ import xyz.oleolegka.gachimuchi.domain.normPhrase
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 19,
+    version = 20,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1458,6 +1458,86 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 19 -> 20: a program in the library can be HIDDEN, and once an exercise's
+         * protocol IS a program, that program's content freezes.
+         *
+         * ── The freeze itself is not schema ──────────────────────────────────────────
+         * "A referenced program cannot be edited by content" is enforced in
+         * [xyz.oleolegka.gachimuchi.data.ProgramRepository.save], which checks — LIVE, at
+         * every write — whether any row of `exercises` currently names this program through
+         * `protocol_program_id`. There is no column for it and nothing here computes it once
+         * and bakes it in, on the same grounds `identity_key` is recomputed by CODE rather
+         * than carried across a migration as a stored fact (see [MIGRATION_14_15]): whether a
+         * program is somebody's protocol can change on a later write (an exercise repointed to
+         * a different program), and a frozen snapshot of that answer would go stale the moment
+         * it did.
+         *
+         * ── `hidden`, additive, and why the rebuild anyway ───────────────────────────
+         * NOT NULL with false for every row that predates it — nothing in the library was
+         * hidden before there was a way to say so, on the same grounds [MIGRATION_14_15] gives
+         * for the exercise catalog's own `hidden`. SQLite refuses to add a NOT NULL column to a
+         * populated table without a DEFAULT, and a DEFAULT clause added that way would stay on
+         * the column forever, leaving an upgraded phone with `hidden INTEGER NOT NULL DEFAULT
+         * 0` where a fresh install has `hidden INTEGER NOT NULL` — invisible to Room's own
+         * identity hash and caught only by [SchemaParityTest]. So `programs` is rebuilt exactly
+         * as [MIGRATION_17_18] rebuilds `exercises`: a `_new_programs` table with the column in
+         * place, every existing row copied across with `hidden = 0`, the old table dropped, the
+         * new one renamed, indices and the `sqlite_sequence` counter restored.
+         *
+         * `program_groups` cascades from `programs` — dropping the parent WITH FOREIGN KEYS
+         * ENABLED would take the groups (and through them the blocks) with it, and Room only
+         * turns foreign keys on in `onOpen`, which runs after migrations. Off here, so the
+         * rebuild is safe for the same reason every earlier one naming this hazard is.
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v20` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'programs'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_programs` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`prepare_sec` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`exercise_id` INTEGER, " +
+                        "`category` TEXT NOT NULL, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`hidden` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_programs` (`id`, `space_id`, `name`, `prepare_sec`, " +
+                        "`position`, `created_at`, `exercise_id`, `category`, `uid`, `hidden`) " +
+                        "SELECT `id`, `space_id`, `name`, `prepare_sec`, `position`, `created_at`, " +
+                        "`exercise_id`, `category`, `uid`, 0 FROM `programs`"
+                )
+                db.execSQL("DROP TABLE `programs`")
+                db.execSQL("ALTER TABLE `_new_programs` RENAME TO `programs`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_programs_space_id_id` " +
+                        "ON `programs` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_programs_uid` ON `programs` (`uid`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v20`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v20`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v20`")
+            }
+        }
+
+        /**
          * The last row id `INSERT`ed on this connection — SQLite's own `last_insert_rowid()`,
          * used inside [MIGRATION_18_19] to learn the autoincrement id of a row this migration
          * just wrote with raw `execSQL`, which returns nothing.
@@ -1852,7 +1932,7 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

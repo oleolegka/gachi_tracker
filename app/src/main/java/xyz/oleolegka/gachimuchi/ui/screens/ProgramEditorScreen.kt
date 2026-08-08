@@ -59,6 +59,24 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * ── The numbers are steppers, not text fields ───────────────────────────────────
  * Same reason as the logging screen: seven seconds becomes eight with one tap and no
  * keyboard. The text field is still there underneath for the cases a stepper is slow at.
+ *
+ * ── [locked]: an existing exercise's protocol, opened for a look ────────────────
+ * True when some exercise's protocol currently IS [initial] — see
+ * [xyz.oleolegka.gachimuchi.data.ProgramRepository.isReferenced], which this is computed from
+ * before the screen ever opens. Locked, the lead-in and every group and block are shown as
+ * READ TEXT rather than fields: "such a thing cannot happen: it breaks the statistics. If
+ * yesterday it was one protocol and today another, that is a NEW exercise" is the owner's own
+ * words for why this screen must not be the second door onto the same mistake the exercise
+ * editor already closed (`ui/components/ExerciseEditor.kt`'s `EditExerciseDialog`).
+ *
+ * NOT locked: the name, the category and the exercise link. None of the three is part of an
+ * identity keyed on the program's uid (`domain/Catalog.kt`'s `ExerciseIdentity`), and a name a
+ * migration generated ("Hangs 20mm protocol", identical across five unrelated exercises) is
+ * exactly the kind of thing worth being able to fix on a program already in use.
+ *
+ * This is UI convenience, not the enforcement — [xyz.oleolegka.gachimuchi.data.
+ * ProgramRepository.save] refuses the content rewrite on its own, live, whatever this screen
+ * showed. Locked here only means nobody is shown a control that would then do nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -68,6 +86,8 @@ fun ProgramEditorScreen(
     candidates: List<ExerciseRef>,
     /** Headings already in use, so the same one is not spelled two ways. */
     categories: List<String>,
+    /** Whether [initial] is some exercise's protocol right now — see the KDoc above. */
+    locked: Boolean = false,
     onSave: (WorkoutProgram) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -134,13 +154,24 @@ fun ProgramEditorScreen(
                 )
             }
 
-            item {
-                SecondsField(
-                    label = "Get ready before the first effort, seconds",
-                    value = program.prepareSec,
-                    onValueChange = { program = program.copy(prepareSec = it) },
-                    steps = listOf(5.0, 10.0),
-                )
+            if (locked) {
+                item { LockedNotice() }
+                item {
+                    Text(
+                        "Get ready before the first effort: ${program.prepareSec} s",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.inkSecondary,
+                    )
+                }
+            } else {
+                item {
+                    SecondsField(
+                        label = "Get ready before the first effort, seconds",
+                        value = program.prepareSec,
+                        onValueChange = { program = program.copy(prepareSec = it) },
+                        steps = listOf(5.0, 10.0),
+                    )
+                }
             }
 
             item {
@@ -160,34 +191,40 @@ fun ProgramEditorScreen(
             }
 
             itemsIndexedGroups(program) { index, group ->
-                GroupCard(
-                    group = group,
-                    canRemove = program.groups.size > 1,
-                    onChange = { updated ->
-                        program = program.copy(
-                            groups = program.groups.toMutableList().also { it[index] = updated }
-                        )
-                    },
-                    onRemove = {
-                        program = program.copy(
-                            groups = program.groups.toMutableList().also { it.removeAt(index) }
-                        )
-                    },
-                )
+                if (locked) {
+                    LockedGroupCard(group)
+                } else {
+                    GroupCard(
+                        group = group,
+                        canRemove = program.groups.size > 1,
+                        onChange = { updated ->
+                            program = program.copy(
+                                groups = program.groups.toMutableList().also { it[index] = updated }
+                            )
+                        },
+                        onRemove = {
+                            program = program.copy(
+                                groups = program.groups.toMutableList().also { it.removeAt(index) }
+                            )
+                        },
+                    )
+                }
             }
 
-            item {
-                OutlinedButton(
-                    onClick = {
-                        program = program.copy(
-                            groups = program.groups + ProgramGroup(
-                                name = "Set ${program.groups.size + 1}",
-                                blocks = listOf(ProgramBlock(name = "Work", workSec = 30, restSec = 30)),
+            if (!locked) {
+                item {
+                    OutlinedButton(
+                        onClick = {
+                            program = program.copy(
+                                groups = program.groups + ProgramGroup(
+                                    name = "Set ${program.groups.size + 1}",
+                                    blocks = listOf(ProgramBlock(name = "Work", workSec = 30, restSec = 30)),
+                                )
                             )
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text("Add a group") }
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Add a group") }
+                }
             }
 
             item {
@@ -299,6 +336,51 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedGroups(
 ) {
     program.groups.forEachIndexed { index, group ->
         item(key = "group-$index") { content(index, group) }
+    }
+}
+
+/**
+ * Why the content controls below are missing — see [ProgramEditorScreen]'s own KDoc on
+ * [locked][ProgramEditorScreen] for the rule this states in one screen-facing sentence.
+ */
+@Composable
+private fun LockedNotice() {
+    val colors = LocalGachiColors.current
+    Card(Modifier.fillMaxWidth()) {
+        Text(
+            "This program is a running exercise's protocol, so its timing is fixed: " +
+                "changing it here would change the exercise's history along with it. Rename " +
+                "it or move it to another category freely - to change the timing, create a " +
+                "new exercise with the protocol you want.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkSecondary,
+            modifier = Modifier.padding(12.dp),
+        )
+    }
+}
+
+/** A group's content, read rather than edited — see [LockedNotice]. */
+@Composable
+private fun LockedGroupCard(group: ProgramGroup) {
+    val colors = LocalGachiColors.current
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(group.name, style = MaterialTheme.typography.titleMedium)
+            group.blocks.forEach { block ->
+                Text(
+                    "${block.name}: ${block.workSec}s work, ${block.restSec}s rest" +
+                        if (block.repeats > 1) ", x${block.repeats}" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            if (group.repeats > 1) {
+                Text(
+                    "Repeated x${group.repeats}, ${group.restBetweenRepeatsSec}s between",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
+            }
+        }
     }
 }
 

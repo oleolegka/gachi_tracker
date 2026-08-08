@@ -81,10 +81,10 @@ fun rememberExerciseEditor(): ExerciseEditor {
             exercise = exercise,
             program = program,
             onDismiss = { editing = null },
-            onSave = { name, work, rest, oneSided, share ->
+            onSave = { name, oneSided, share ->
                 editing = null
                 scope.launch {
-                    val result = repo.editExercise(exercise.id, name, work, rest)
+                    val result = repo.editExercise(exercise.id, name)
                     /*
                      * The two flags are their own columns and their own writes: correcting a
                      * name, declaring the exercise one-handed and saying what share of you it
@@ -135,7 +135,7 @@ fun rememberExerciseEditor(): ExerciseEditor {
 }
 
 /**
- * The correction itself: the name, and for a hold the work:rest protocol.
+ * The correction itself: the name — the protocol is shown, never asked for.
  *
  * ── And two things that are not corrections ────────────────────────────────────
  * "One hand at a time" and "how much of you it lifts" are statements about the exercise that
@@ -151,9 +151,17 @@ fun rememberExerciseEditor(): ExerciseEditor {
  * screen as a statement of fact, with the sentence that says why — a control that is simply
  * absent invites the same question every time.
  *
- * The numbers follow exactly the rule the creation form uses: positive or not filled in, and
- * the protocol is a pair or nothing. See `CreateExerciseForm` in ui/screens/ExercisePicker.kt
- * for why a zero is treated as an empty field rather than as a zero.
+ * ── The protocol is shown and cannot be changed either ─────────────────────────
+ * The owner's rule: "such a thing cannot happen: it breaks the statistics. If yesterday it was
+ * one protocol and today another, that is a NEW exercise." Work/Rest used to be an editable
+ * pair here, resolved through the same lookup [ActivityRepository.ensureExercise] uses for a
+ * NEW exercise and repointed onto this row as a "correction" — which is exactly the hole this
+ * screen now closes: the row's `identity_key` includes the protocol, so silently repointing it
+ * moved a running exercise onto a different protocol under the SAME identity, with every set
+ * already logged staying put underneath. The fields below are a fact, not an input, on the
+ * same footing the form already was. An exercise with no protocol stays with none: "no
+ * protocol" is itself part of what this row is, and cannot be added after the fact any more
+ * than a protocol can be corrected.
  */
 @Composable
 private fun EditExerciseDialog(
@@ -161,18 +169,12 @@ private fun EditExerciseDialog(
     /** The resolved protocol program [exercise.protocolProgramId] names, or null for none. */
     program: WorkoutProgram?,
     onDismiss: () -> Unit,
-    onSave: (String, Double?, Double?, Boolean, Double?) -> Unit,
+    onSave: (String, Boolean, Double?) -> Unit,
 ) {
     val hold = exercise.form == ExerciseForm.HOLD.code
     val lifted = hold || exercise.form == ExerciseForm.STRENGTH.code
     val protocolBlock = program?.firstBlock()
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
-    var work by remember(exercise.id, program) {
-        mutableStateOf(protocolBlock?.workSec?.toDouble().asField())
-    }
-    var rest by remember(exercise.id, program) {
-        mutableStateOf(protocolBlock?.restSec?.toDouble().asField())
-    }
     var oneSided by remember(exercise.id) { mutableStateOf(exercise.oneSided) }
     var percent by remember(exercise.id) { mutableStateOf(exercise.bodyweightShare.asPercentField()) }
 
@@ -194,18 +196,25 @@ private fun EditExerciseDialog(
                     label = { Text("Name") },
                 )
                 if (hold) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
-                            singleLine = true, label = { Text("Work, s") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        )
-                        OutlinedTextField(
-                            value = rest, onValueChange = { rest = it }, modifier = Modifier.weight(1f),
-                            singleLine = true, label = { Text("Rest, s") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        )
-                    }
+                    Text(
+                        "Protocol (work : rest, seconds)",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Text(
+                        if (protocolBlock != null) {
+                            "${protocolBlock.workSec} : ${protocolBlock.restSec}"
+                        } else {
+                            "None"
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Fixed. The protocol is part of what makes this exercise the exercise " +
+                            "it is; changing it would put today's sets under yesterday's " +
+                            "history. Trained on a different protocol now? Create it as a new " +
+                            "exercise - it starts a history of its own.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
                 if (hold) {
                     /*
@@ -272,14 +281,6 @@ private fun EditExerciseDialog(
                     )
                 }
                 Text(
-                    "This corrects what the catalog SAYS. The sets already logged stay with " +
-                        "this exercise, and the ones recorded before the correction still carry " +
-                        "the protocol they were written with. An exercise you have genuinely " +
-                        "moved to another protocol is a different exercise - create it instead, " +
-                        "and it starts its own history from today.",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                Text(
                     "The form stays ${ExerciseForm.fromCodeOrTick(exercise.form).title.lowercase()}: " +
                         "it decides the shape every set of this exercise was written in, and " +
                         "changing it would leave that history unreadable.",
@@ -291,13 +292,8 @@ private fun EditExerciseDialog(
             TextButton(
                 enabled = name.isNotBlank() && !percentBad,
                 onClick = {
-                    val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else protocolBlock?.workSec?.toDouble()
-                    val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else protocolBlock?.restSec?.toDouble()
-                    val pair = if (w != null && r != null) w to r else null
                     onSave(
                         name.trim(),
-                        pair?.first,
-                        pair?.second,
                         oneSided,
                         if (lifted) share else exercise.bodyweightShare,
                     )

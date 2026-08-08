@@ -54,4 +54,23 @@ class InputTest {
         assertNull(parsePace("4:75")) // 75 seconds is a typo, not a pace
         assertNull(parsePace(""))
     }
+
+    /**
+     * A protocol is stored as a program and a program's steps are whole seconds, so the
+     * fraction has to go somewhere. It goes to the NEAREST whole second here, at the field,
+     * rather than to truncation later inside the store, where 7.6 would quietly become 7.
+     */
+    @Test
+    fun `protocol seconds are whole, and rounded rather than truncated`() {
+        assertEquals(8.0, parseProtocolSeconds("7.6")!!, 1e-9)
+        assertEquals(7.0, parseProtocolSeconds("7.4")!!, 1e-9)
+        assertEquals(7.0, parseProtocolSeconds("7")!!, 1e-9)
+        assertEquals(8.0, parseProtocolSeconds("7,6")!!, 1e-9) // the comma keyboard, too
+        // a protocol of zero seconds is not a protocol; the set validator rejects it outright
+        assertNull(parseProtocolSeconds("0"))
+        assertNull(parseProtocolSeconds("0.4"))
+        assertNull(parseProtocolSeconds("-3"))
+        assertNull(parseProtocolSeconds(""))
+        assertNull(parseProtocolSeconds("-"))
+    }
 }

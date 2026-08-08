@@ -44,7 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
 import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
-import xyz.oleolegka.gachimuchi.domain.parseNumber
+import xyz.oleolegka.gachimuchi.domain.parseProtocolSeconds
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.fmtDay
@@ -369,8 +369,10 @@ private fun CreateExerciseForm(
                  * The protocol is a pair or nothing at all: half of it would be rejected by
                  * the same validator on the very first set.
                  */
-                val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else null
-                val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else null
+                // whole seconds only, and rounded rather than truncated: see
+                // [parseProtocolSeconds] for why the rule lives in the domain
+                val w = if (hold) parseProtocolSeconds(work) else null
+                val r = if (hold) parseProtocolSeconds(rest) else null
                 val pair = if (w != null && r != null) w to r else null
                 onCreate(name.trim(), form, pair?.first, pair?.second)
             },

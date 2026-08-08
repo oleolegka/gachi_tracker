@@ -699,6 +699,39 @@ data class EventEntityV15(
     @ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
 )
 
+/**
+ * Programs from version 8 to version 19: today's shape minus `hidden`, which
+ * [xyz.oleolegka.gachimuchi.data.db.AppDatabase.Companion.MIGRATION_19_20] adds.
+ *
+ * A DEDICATED shadow class, unlike every "historical" fixture below this comment used to be —
+ * they reused [xyz.oleolegka.gachimuchi.data.db.ProgramEntity] directly, which was safe only
+ * because that class had not changed shape since [ProgramEntityV3] gained a `uid` in
+ * MIGRATION_7_8. The moment `hidden` was added to it, every fixture reusing it directly started
+ * creating a `programs` table with a column no real phone at that version ever had — and
+ * MIGRATION_18_19's own raw `INSERT`, which correctly does not mention a column that does not
+ * exist yet at that point in the walk, then failed its NOT NULL constraint on a column belonging
+ * to the future rather than to the version under test. See [SchemaV12Database] through
+ * [SchemaV18Database], all of which use this instead now.
+ */
+@Entity(
+    tableName = "programs",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+    ],
+)
+data class ProgramEntityV8(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    @ColumnInfo(name = "prepare_sec") val prepareSec: Int,
+    val position: Int = 0,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "exercise_id") val exerciseId: Long? = null,
+    val category: String = "",
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+)
+
 /** The catalog of versions 8 to 12: identity, preferences, and nothing about sides. */
 @Entity(
     tableName = "exercises",
@@ -739,7 +772,7 @@ interface LegacyCatalogDaoV12 {
         ExerciseEntityV12::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
-        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        ProgramEntityV8::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
     ],
@@ -797,7 +830,7 @@ interface LegacyCatalogDaoV14 {
         ExerciseEntityV14::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
-        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        ProgramEntityV8::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
     ],
@@ -889,7 +922,7 @@ interface LegacyEventDaoV15 {
         ExerciseEntityV17::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
-        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        ProgramEntityV8::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
     ],
@@ -918,7 +951,7 @@ interface LegacyEventDaoV16 {
         ExerciseEntityV17::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
-        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        ProgramEntityV8::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
     ],
@@ -941,7 +974,7 @@ abstract class SchemaV16Database : RoomDatabase() {
         ExerciseEntityV17::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
-        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        ProgramEntityV8::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
     ],
@@ -1015,7 +1048,7 @@ interface LegacyCatalogDaoV18 {
         ExerciseEntityV18::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
-        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        ProgramEntityV8::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
     ],
@@ -1201,6 +1234,25 @@ class MigrationTest {
         val fresh = openCurrent()
         assertEquals(0, fresh.events().count())
         assertEquals(0, fresh.programs().countPrograms())
+    }
+
+    // --- version 19 -> 20: a program in the library can be hidden ------------------------
+
+    /**
+     * MIGRATION_19_20 is additive on a table [MIGRATION_18_19] already rebuilds — this walks a
+     * phone through the WHOLE chain (via [writeVersion1], which lands one program by way of the
+     * 18 -> 19 fold) and checks the one new column reads what every migration before it
+     * promises: nothing was hidden before there was a way to say so.
+     */
+    @Test
+    fun `every program carried up from an old phone reads as not hidden`() = runTest {
+        writeVersion1()
+
+        val db = openCurrent()
+        val programs = ProgramRepository(db).allPrograms()
+
+        assertEquals(1, programs.size)
+        assertTrue("a program from before hiding existed must not read as hidden", programs.none { it.hidden })
     }
 
     // --- version 2 -> 3: the program's exercise link and its category -----------------------

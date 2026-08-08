@@ -201,6 +201,17 @@ fun GachiApp(viewModel: MainViewModel) {
     val programCategories = remember(programs) { knownCategories(programs) }
 
     /*
+     * Every program id some exercise's protocol currently IS — the UI-side mirror of
+     * ProgramRepository.isReferenced, computed here from state already loaded rather than by
+     * a second query, because both this screen's lock and TimerScreen's freeze badge need the
+     * same answer on every recomposition of a live catalog. The enforcement itself lives in
+     * the repository (see save's own KDoc); this is only what decides which controls to show.
+     */
+    val referencedProgramIds = remember(state.exercises) {
+        state.exercises.mapNotNull { it.protocolProgramId }.toSet()
+    }
+
+    /*
      * Opening the entry card. Kept current by rememberUpdatedState so the lambdas handed to
      * the day screens never have to be rebuilt: handing out fresh ones per recomposition
      * would recompose both screens several times a second while a countdown runs.
@@ -370,6 +381,7 @@ fun GachiApp(viewModel: MainViewModel) {
             initial = editorTarget.program,
             candidates = holdExercises,
             categories = programCategories,
+            locked = editorTarget.program?.id?.let { it != 0L && it in referencedProgramIds } == true,
             onSave = {
                 viewModel.saveProgram(it)
                 editing = null
@@ -574,6 +586,9 @@ fun GachiApp(viewModel: MainViewModel) {
                         onRunProgram = viewModel::runProgram,
                         onEditProgram = { editing = EditorTarget(it) },
                         onDeleteProgram = viewModel::deleteProgram,
+                        onToggleHiddenProgram = { program ->
+                            viewModel.setProgramHidden(program.id, !program.hidden)
+                        },
                         onImportPrograms = viewModel::importPrograms,
                         onSettings = viewModel::updateTimerSettings,
                         onEnable = enableTimer,
