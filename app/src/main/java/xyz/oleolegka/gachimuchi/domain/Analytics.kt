@@ -33,6 +33,11 @@ import java.time.temporal.ChronoUnit
  * both would be a number with no unit that grows fastest when the training changes shape. Every
  * product surveyed either shows them apart or shows only one of them; none converts honestly.
  *
+ * That rule is carried by the TYPE: [ValueFormat.KILOGRAMS] and [ValueFormat.KILOGRAM_SECONDS]
+ * are separate members, one series carries one of them, and every place that prints or scales a
+ * number goes through it. Two series can only share an axis by being handed to one chart, and a
+ * chart takes a single format — so the two cannot meet without somebody deleting a parameter.
+ *
  * What compares a week of barbell work with a week of hangs is [workingSetTally] — the count of
  * working sets, which is dimensionless and therefore the only total the two weeks can share.
  */
@@ -40,8 +45,17 @@ import java.time.temporal.ChronoUnit
 /** One day of a daily series: the ISO day and the aggregated value. */
 data class DayPoint(val opDate: String, val value: Double)
 
-/** How a value should be rendered. The domain names the kind; `ui/Format.kt` prints it. */
-enum class ValueFormat { KILOGRAMS, SECONDS, PACE, DISTANCE, COUNT }
+/**
+ * How a value should be rendered. The domain names the kind; `ui/Format.kt` prints it.
+ *
+ * [KILOGRAM_SECONDS] is an IMPULSE ([holdImpulseKgSec]) and is a kind of its own precisely so
+ * that it can never be mistaken for [KILOGRAMS]: they are different quantities on different
+ * scales with no exchange rate between them (see the file header). It carried [COUNT] until
+ * this member existed, which printed the bare number and left the unit to the series label —
+ * honest as far as it went, but the axis, the tile headline and the delta caption all said
+ * nothing about what the number was measured in.
+ */
+enum class ValueFormat { KILOGRAMS, KILOGRAM_SECONDS, SECONDS, PACE, DISTANCE, COUNT }
 
 /**
  * How several days collapse into one bar or point when the chart is drawn at a coarser
@@ -564,12 +578,10 @@ fun volumeSeries(
         ExerciseForm.HOLD -> {
             val holds = mine.mapNotNull { it.form as? HoldSet }
             if (holds.any { holdImpulseKgSec(it) != null }) FormSeries(
-                // the unit is in the LABEL because [ValueFormat] has no kilogram-second member:
-                // adding one means adding a branch to four exhaustive `when`s in ui/Format.kt,
-                // which is the screen layer this change is deliberately not touching. A count
-                // prints the bare number, so nothing renders it as kilograms in the meantime —
-                // and that is the one rendering that must never happen (see below)
-                SeriesSpec("Impulse, kg·s", ValueFormat.COUNT, Aggregation.SUM),
+                // the unit is in the FORMAT, not in the label: [ValueFormat.KILOGRAM_SECONDS]
+                // is its own kind for the reason the file header gives, and it is a kind
+                // rather than kilograms so that nothing can ever put the two on one axis
+                SeriesSpec("Impulse", ValueFormat.KILOGRAM_SECONDS, Aggregation.SUM),
                 byDay(mine) { ofDay ->
                     ofDay.sumOf { ev -> (ev.form as? HoldSet)?.let { holdImpulseKgSec(it) } ?: 0.0 }
                 },

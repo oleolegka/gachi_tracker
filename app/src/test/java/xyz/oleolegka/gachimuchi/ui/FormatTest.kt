@@ -52,6 +52,55 @@ class FormatTest {
         assertEquals("", axisUnit(ValueFormat.COUNT, 9.0))
     }
 
+    /**
+     * An impulse prints its unit everywhere a number is printed.
+     *
+     * It used to be declared a [ValueFormat.COUNT] with "kg·s" glued onto the series label,
+     * so the axis, the tile headline and the delta caption all showed a bare five-figure
+     * number and only the card title said what it was measured in.
+     */
+    @Test
+    fun `an impulse carries its kilogram-seconds through every way of printing it`() {
+        assertEquals("2940 kg·s", fmtValue(2940.0, ValueFormat.KILOGRAM_SECONDS))
+        assertEquals("2940" to "kg·s", fmtValueParts(2940.0, ValueFormat.KILOGRAM_SECONDS))
+        assertEquals("2940", fmtAxis(2940.0, ValueFormat.KILOGRAM_SECONDS))
+        assertEquals("kg·s", axisUnit(ValueFormat.KILOGRAM_SECONDS, 2940.0))
+        assertEquals("+2940 kg·s", fmtDelta(2940.0, ValueFormat.KILOGRAM_SECONDS))
+        assertEquals("-840 kg·s", fmtDelta(-840.0, ValueFormat.KILOGRAM_SECONDS))
+    }
+
+    /**
+     * The unit does not follow the magnitude, and that is the point: the axis title is chosen
+     * from a series' LARGEST value while every tick is formatted alone, so a compacting
+     * threshold would print small ticks in one unit under a title naming another.
+     */
+    @Test
+    fun `a big impulse is not compacted into thousands behind the axis title's back`() {
+        assertEquals("kg·s", axisUnit(ValueFormat.KILOGRAM_SECONDS, 176_400.0))
+        assertEquals("176400", fmtAxis(176_400.0, ValueFormat.KILOGRAM_SECONDS))
+        // and a small tick of the same axis reads in the same unit as the title
+        assertEquals("5000", fmtAxis(5_000.0, ValueFormat.KILOGRAM_SECONDS))
+        // the fraction goes: a tenth of a kg·s is a hundredth of a second of hanging
+        assertEquals("2941 kg·s", fmtValue(2940.6, ValueFormat.KILOGRAM_SECONDS))
+        assertEquals("0 kg·s", fmtValue(0.0, ValueFormat.KILOGRAM_SECONDS))
+    }
+
+    /**
+     * Kilograms and kilogram-seconds are different quantities with no exchange rate, and the
+     * printing must never let one pass for the other — a tonnage and an impulse of the same
+     * number are not the same amount of anything.
+     */
+    @Test
+    fun `kilograms and kilogram-seconds never print the same`() {
+        val kg = fmtValue(2940.0, ValueFormat.KILOGRAMS)
+        val kgSec = fmtValue(2940.0, ValueFormat.KILOGRAM_SECONDS)
+        assert(kg != kgSec) { "an impulse printed as a weight: $kg" }
+        assert(!kgSec.endsWith(" kg")) { "an impulse must not end in kilograms: $kgSec" }
+        assert(axisUnit(ValueFormat.KILOGRAM_SECONDS, 1.0) != axisUnit(ValueFormat.KILOGRAMS, 1.0))
+        assertEquals("kg" to "kg·s", fmtValueParts(1.0, ValueFormat.KILOGRAMS).second
+            to fmtValueParts(1.0, ValueFormat.KILOGRAM_SECONDS).second)
+    }
+
     @Test
     fun `a delta is signed in plain ASCII, never with an arrow glyph`() {
         assertEquals("+6 kg", fmtDelta(6.0, ValueFormat.KILOGRAMS))
