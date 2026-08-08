@@ -8,6 +8,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,9 +69,12 @@ fun rememberExerciseEditor(): ExerciseEditor {
         EditExerciseDialog(
             exercise = exercise,
             onDismiss = { editing = null },
-            onSave = { name, edge, work, rest ->
+            onSave = { name, edge, work, rest, oneSided ->
                 editing = null
                 scope.launch {
+                    // the side flag is its own column and its own write: correcting a name
+                    // and declaring the exercise one-handed are different claims
+                    if (oneSided != exercise.oneSided) repo.setOneSided(exercise.id, oneSided)
                     val result = repo.editExercise(exercise.id, name, edge, work, rest)
                     message = when (result) {
                         is ExerciseEdit.Saved -> null
@@ -123,13 +127,14 @@ fun rememberExerciseEditor(): ExerciseEditor {
 private fun EditExerciseDialog(
     exercise: ExerciseEntity,
     onDismiss: () -> Unit,
-    onSave: (String, Double?, Double?, Double?) -> Unit,
+    onSave: (String, Double?, Double?, Double?, Boolean) -> Unit,
 ) {
     val hold = exercise.form == ExerciseForm.HOLD.code
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
     var edge by remember(exercise.id) { mutableStateOf(exercise.edgeMm.asField()) }
     var work by remember(exercise.id) { mutableStateOf(exercise.protocolWorkSec.asField()) }
     var rest by remember(exercise.id) { mutableStateOf(exercise.protocolRestSec.asField()) }
+    var oneSided by remember(exercise.id) { mutableStateOf(exercise.oneSided) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -162,6 +167,26 @@ private fun EditExerciseDialog(
                         )
                     }
                 }
+                if (hold) {
+                    /*
+                     * The one switch here that is not a correction of a typo.
+                     *
+                     * It is what splits the record per hand, and until it existed anywhere in
+                     * the UI the whole per-side feature was unreachable: the entry form asks
+                     * for a hand only when the exercise claims to need one, and nothing could
+                     * make it claim that. Found from the phone, 2026-08-08.
+                     */
+                    FilterChip(
+                        selected = oneSided,
+                        onClick = { oneSided = !oneSided },
+                        label = { Text("One hand at a time") },
+                    )
+                    Text(
+                        "Each hand keeps its own record, and every set of this exercise is " +
+                            "asked which hand it was.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 Text(
                     "This corrects what the catalog SAYS. The sets already logged stay with " +
                         "this exercise, and the ones recorded before the correction still carry " +
@@ -190,6 +215,7 @@ private fun EditExerciseDialog(
                         if (hold) parseNumber(edge)?.takeIf { it > 0 } else exercise.edgeMm,
                         pair?.first,
                         pair?.second,
+                        oneSided,
                     )
                 },
             ) { Text("Save") }
