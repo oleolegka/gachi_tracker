@@ -21,7 +21,7 @@ class SessionTest {
         JournalEvent(nextId++, ts, 1, 1, form.type, form.toPayload())
 
     private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
-    private val hangs = ExerciseRef(2, "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+    private val hangs = ExerciseRef(2, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
     private val run = ExerciseRef(3, "Running", ExerciseForm.CARDIO)
     private val emil = ExerciseRef(4, "Emil hangs", ExerciseForm.DURATION)
     private val stretch = ExerciseRef(5, "Stretching", ExerciseForm.TICK)
@@ -51,9 +51,8 @@ class SessionTest {
     }
 
     @Test
-    fun `a hold set inherits edge and protocol from the exercise and never asks for them`() {
+    fun `a hold set inherits the protocol from the exercise and never asks for it`() {
         val set = holdSetOf(hangs, day, addedKg = 8.0, reps = 5)
-        assertEquals(20.0, set.edgeMm!!, 1e-9)
         assertEquals(7.0, set.workSec!!, 1e-9)
         assertEquals(3.0, set.restSec!!, 1e-9)
         assertEquals(hangs.id, set.exerciseId)
@@ -141,7 +140,7 @@ class SessionTest {
         val session = buildSession(events, day)
         assertEquals(2, session.groups.size)
         assertEquals("Bench press", session.groups[0].name)  // it appeared first
-        assertEquals("Hangs 20 mm", session.groups[1].name)
+        assertEquals("Hangs", session.groups[1].name)
         assertEquals(3, session.groups[0].sets.size)
         assertEquals(4, session.setCount)
         assertEquals(
@@ -288,20 +287,18 @@ class SessionTest {
     // --- a catalog row that carries a zero ---------------------------------------------
 
     @Test
-    fun `a hold exercise with a zero edge and protocol can still be logged`() {
+    fun `a hold exercise with a zero protocol can still be logged`() {
         /*
          * The regression this pins: the create form used to store whatever `parseNumber`
-         * returned, so "0" in the edge or protocol field became a 0.0 on the catalog row.
-         * `holdSetOf` then handed that straight to the HoldSet validator, which rejects a
-         * non-positive edge by throwing — inside the Add button's click handler, i.e. as a
-         * crash of the app on its primary action rather than as a message.
+         * returned, so "0" in a protocol field became a 0.0 on the catalog row. `holdSetOf`
+         * then handed that straight to the HoldSet validator, which rejects a non-positive
+         * protocol by throwing — inside the Add button's click handler, i.e. as a crash of
+         * the app on its primary action rather than as a message.
          */
-        val broken = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, edgeMm = 0.0, workSec = 0.0, restSec = 0.0)
-        assertNull(broken.edge)
+        val broken = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = 0.0, restSec = 0.0)
         assertNull(broken.protocol)
 
         val set = holdSetOf(broken, day, addedKg = 5.0, reps = 4)
-        assertNull(set.edgeMm)
         assertNull(set.workSec)
         assertNull(set.restSec)
         assertEquals(5.0, set.addedKg!!, 0.0)
@@ -318,11 +315,9 @@ class SessionTest {
     }
 
     @Test
-    fun `a negative edge is treated as never filled in rather than written`() {
-        val negative = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, edgeMm = -5.0, workSec = 7.0, restSec = 3.0)
-        assertNull(negative.edge)
-        // the protocol beside it is untouched: only the broken value is dropped
-        assertNotNull(negative.protocol)
-        assertNull(holdSetOf(negative, day, reps = 3).edgeMm)
+    fun `a negative protocol is treated as never filled in rather than written`() {
+        val negative = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = -7.0, restSec = 3.0)
+        assertNull(negative.protocol)
+        assertNull(holdSetOf(negative, day, reps = 3).workSec)
     }
 }

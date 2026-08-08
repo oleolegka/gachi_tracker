@@ -18,8 +18,8 @@ import org.junit.Test
 class RunLogTest {
 
     private val hangs = ExerciseRef(
-        id = 42, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
-        edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+        id = 42, name = "Hangs", form = ExerciseForm.HOLD,
+        workSec = 7.0, restSec = 3.0,
     )
 
     /** 15 s lead-in, then four sets of six 7:3 hangs with three minutes between them. */
@@ -348,9 +348,9 @@ class RunLogTest {
         assertEquals(3, written.size)
         assertEquals(listOf(6, 6, 2), written.map { it.reps })
         assertTrue(written.all { it.exerciseId == 42L })
-        assertTrue(written.all { it.activity == "Hangs 20 mm" })
-        // §12-A: edge and protocol come from the exercise and are snapshotted on every set
-        assertTrue(written.all { it.edgeMm == 20.0 && it.workSec == 7.0 && it.restSec == 3.0 })
+        assertTrue(written.all { it.activity == "Hangs" })
+        // §12-A: the protocol comes from the exercise and is snapshotted on every set
+        assertTrue(written.all { it.workSec == 7.0 && it.restSec == 3.0 })
         assertTrue(written.all { it.addedKg == 8.0 && it.ownWeight })
         assertTrue(written.all { it.opDate == day })
         // the pause is written on every set but the last, where there is none

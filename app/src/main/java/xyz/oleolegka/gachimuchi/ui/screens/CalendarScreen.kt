@@ -127,7 +127,6 @@ fun CalendarScreen(
     onCreateExercise: ((
         name: String,
         form: ExerciseForm,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         then: (Long) -> Unit,

@@ -80,8 +80,8 @@ class CelebrationCueTest {
         Dispatchers.resetMain()
     }
 
-    private suspend fun ref(name: String, form: ExerciseForm, edge: Double? = null, work: Double? = null, rest: Double? = null) =
-        repo.exercise(repo.ensureExercise(name, form, edge, work, rest))!!.toRef()
+    private suspend fun ref(name: String, form: ExerciseForm, work: Double? = null, rest: Double? = null) =
+        repo.exercise(repo.ensureExercise(name, form, work, rest))!!.toRef()
 
     /** Subscribes before the first set: cues are not buffered for a late listener. */
     private fun CoroutineScope.collectCues(into: Channel<CelebrationCue>): Job =
@@ -115,7 +115,7 @@ class CelebrationCueTest {
     fun `a hold set is a set too, and its record is the added weight`() = runBlocking {
         val cues = Channel<CelebrationCue>(Channel.UNLIMITED)
         val job = collectCues(cues)
-        val hangs = ref("Hangs 20 mm", ExerciseForm.HOLD, edge = 20.0, work = 7.0, rest = 3.0)
+        val hangs = ref("Hangs", ExerciseForm.HOLD, work = 7.0, rest = 3.0)
 
         viewModel.addSet(holdSetOf(hangs, day, addedKg = 8.0, reps = 5))
         assertFalse(cues.next().isRecord)

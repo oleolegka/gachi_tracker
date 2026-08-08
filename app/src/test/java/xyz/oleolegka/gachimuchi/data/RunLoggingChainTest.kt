@@ -105,7 +105,7 @@ class RunLoggingChainTest {
         TimerController(context).also { controllers += it }
 
     private suspend fun hangs() = repo.exercise(
-        repo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+        repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
     )!!.toRef()
 
     /** Lets the whole program elapse and delivers the alarm that notices it has. */
@@ -170,7 +170,7 @@ class RunLoggingChainTest {
         val written = session.groups.single().sets.map { it.form as HoldSet }
         assertEquals(listOf(2, 2), written.map { it.reps })
         assertTrue(written.all { it.exerciseId == exercise.id })
-        assertEquals(20.0, written.first().edgeMm!!, 1e-9)
+        assertEquals(7.0, written.first().workSec!!, 1e-9)
     }
 
     @Test
@@ -338,7 +338,7 @@ class RunLoggingChainTest {
 
         val first = timer.floors.floors.value.single()
         assertEquals(exercise.id, first.exerciseId)
-        assertEquals("Hangs 20 mm", first.exerciseName)
+        assertEquals("Hangs", first.exerciseName)
         // the default, since the journal has only one entry and so no gap to measure
         assertEquals(timer.settings.value.defaultRestSec * 1000L, first.orderedMs)
 
@@ -404,7 +404,7 @@ class RunLoggingChainTest {
         // 4. and the user is told, by name and by count, rather than left to go and look
         val receipt = viewModel.logReceipt.value
         assertNotNull(receipt)
-        assertEquals("Hangs 20 mm", receipt!!.exerciseName)
+        assertEquals("Hangs", receipt!!.exerciseName)
         assertEquals(2, receipt.setCount)
         assertEquals(2, receipt.eventIds.size)
 

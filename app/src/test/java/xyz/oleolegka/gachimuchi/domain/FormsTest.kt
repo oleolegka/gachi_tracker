@@ -100,12 +100,26 @@ class FormsTest {
     @Test
     fun `a form round-trips through the journal without losing fields`() {
         val hold = HoldSet(
-            activity = "Hangs 20 mm · 7:3", reps = 5, workSec = 7.0, restSec = 3.0,
-            edgeMm = 20.0, addedKg = 12.0, ownWeight = true, exerciseId = 7,
+            activity = "Hangs · 7:3", reps = 5, workSec = 7.0, restSec = 3.0,
+            addedKg = 12.0, ownWeight = true, exerciseId = 7,
             restAfterSec = 180.0, opDate = "2026-08-06",
         )
         val back = formFromEvent(TYPE_HOLD_SET, hold.toPayload())
         assertEquals(hold, back)
+    }
+
+    /**
+     * A payload written before the hangboard edge left the domain model still reads: the key
+     * is simply ignored, not treated as damage — see [HoldSet]'s own KDoc.
+     */
+    @Test
+    fun `a payload carrying the old edge_mm key still decodes, the key just disappears`() {
+        val payload = """{"activity":"Hangs 20mm","work_sec":7.0,"rest_sec":3.0,"edge_mm":20.0,""" +
+            """"added_kg":12.0,"own_weight":true,"exercise_id":7,"op_date":"2026-08-06",""" +
+            """"activity_key":"hangs 20mm"}"""
+        val form = formFromEvent(TYPE_HOLD_SET, payload) as HoldSet
+        assertEquals(7.0, form.workSec!!, 1e-9)
+        assertEquals(12.0, form.addedKg!!, 1e-9)
     }
 
     @Test

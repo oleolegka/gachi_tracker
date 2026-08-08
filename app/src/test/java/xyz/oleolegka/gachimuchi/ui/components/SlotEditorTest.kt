@@ -406,8 +406,8 @@ class SlotEditorTest : ScreenTest() {
 
     /**
      * Planning picks from what is already trained. Creating an exercise asks the identity
-     * questions (form, edge, protocol) that belong to the moment of the first set, days
-     * after a plan is written, so the button is not there to be pressed.
+     * questions (form, protocol) that belong to the moment of the first set, days after a
+     * plan is written, so the button is not there to be pressed.
      */
     @Test
     fun `the picker opened from the plan offers no way to invent a new exercise`() {
@@ -468,12 +468,12 @@ class SlotEditorTest : ScreenTest() {
      * Two exercises of one name, told apart by the thing that makes them two.
      *
      * This became possible only when creating an exercise stopped deduplicating by name — up
-     * to then a second "Hangs" on another edge was silently handed the first one's row. A list
-     * showing two identical lines would put the same failure back one step later, with the user
-     * picking whichever came first and their sets landing in an arbitrary history.
+     * to then a second "Hangs" on another protocol was silently handed the first one's row. A
+     * list showing two identical lines would put the same failure back one step later, with
+     * the user picking whichever came first and their sets landing in an arbitrary history.
      */
     @Test
-    fun `two exercises of one name are told apart by the edge and the protocol`() {
+    fun `two exercises of one name are told apart by the protocol`() {
         screen {
             SlotEditorDialog(
                 initial = null,
@@ -482,8 +482,8 @@ class SlotEditorTest : ScreenTest() {
                 today = day,
                 state = UiState(
                     exercises = listOf(
-                        exerciseEntity(1, "Hangs", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0),
-                        exerciseEntity(2, "Hangs", ExerciseForm.HOLD, edgeMm = 15.0, workSec = 7.0, restSec = 3.0),
+                        exerciseEntity(1, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0),
+                        exerciseEntity(2, "Hangs", ExerciseForm.HOLD, workSec = 10.0, restSec = 5.0),
                     ),
                     loading = false,
                 ),
@@ -500,8 +500,8 @@ class SlotEditorTest : ScreenTest() {
         settle()
 
         compose.onAllNodesWithText("Hangs").assertCountEquals(2)
-        compose.onNodeWithText("20 mm", substring = true).assertExists()
-        compose.onNodeWithText("15 mm", substring = true).assertExists()
+        compose.onNodeWithText("7:3", substring = true).assertExists()
+        compose.onNodeWithText("10:5", substring = true).assertExists()
     }
 
     // --- editing an existing session -----------------------------------------------------------

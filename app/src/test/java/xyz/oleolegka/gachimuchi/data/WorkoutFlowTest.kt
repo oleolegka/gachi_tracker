@@ -315,14 +315,14 @@ class WorkoutFlowTest {
     @Test
     fun `ensureExercise refreshes the rest of an exercise it found but nothing else about it`() = runTest {
         val id = repo.ensureExercise(
-            "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
             defaultRestSec = 150,
         )
 
-        // the same exercise looked up again — the same four values, said in another spelling —
-        // with a new rest: the rest is a preference and moves, the identity does not
+        // the same exercise looked up again — the same values, said in another spelling — with
+        // a new rest: the rest is a preference and moves, the identity does not
         val again = repo.ensureExercise(
-            "hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
             defaultRestSec = 240,
         )
         assertEquals(id, again)
@@ -330,12 +330,11 @@ class WorkoutFlowTest {
         val stored = repo.exercise(id)!!
         assertEquals(240, stored.defaultRestSec)
         assertEquals(ExerciseForm.HOLD.code, stored.form)
-        assertEquals("Hangs 20 mm", stored.name)
-        assertEquals(20.0, stored.edgeMm!!, 1e-9)
+        assertEquals("Hangs", stored.name)
         assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
 
         // and saying nothing about the rest leaves the remembered one alone
-        repo.ensureExercise("hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+        repo.ensureExercise("hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
         assertEquals(240, repo.exercise(id)!!.defaultRestSec)
     }
 

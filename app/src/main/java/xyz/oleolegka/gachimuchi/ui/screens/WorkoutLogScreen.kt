@@ -166,7 +166,6 @@ data class WorkoutLogActions(
     val createExercise: (
         name: String,
         form: ExerciseForm,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         then: (Long) -> Unit,
@@ -565,8 +564,8 @@ fun WorkoutLogScreen(
             startInCreate = state.exercises.isEmpty(),
             // picked or created, the next question is the same one, so both land on it
             onPick = { id -> askingRestFor = id },
-            onCreate = { name, form, edge, work, rest ->
-                actions.createExercise(name, form, edge, work, rest) { id -> askingRestFor = id }
+            onCreate = { name, form, work, rest ->
+                actions.createExercise(name, form, work, rest) { id -> askingRestFor = id }
             },
             onDismiss = { picking = false },
         )

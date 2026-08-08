@@ -321,8 +321,8 @@ private fun initialHoldSec(entry: ActivityForm): String =
  * The entry as the drafts would have it.
  *
  * A `copy` of the original rather than a fresh form, so everything nobody edited survives
- * untouched: the exercise link, the edge and protocol snapshot of a hang, the body weight
- * recorded at the time, the rest that was measured after the set. Building a new form from the
+ * untouched: the exercise link, the protocol snapshot of a hang, the body weight recorded
+ * at the time, the rest that was measured after the set. Building a new form from the
  * visible fields would silently drop all of it — and the body-weight snapshot in particular is
  * unrecoverable, since it is what somebody weighed on a day now in the past.
  *

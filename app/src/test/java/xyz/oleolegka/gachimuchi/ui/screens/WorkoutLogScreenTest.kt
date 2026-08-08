@@ -72,8 +72,8 @@ class WorkoutLogScreenTest : ScreenTest() {
      * is part of its identity (§12-A), so it is on the catalog row rather than asked per set.
      */
     private val hangs = ExerciseRef(
-        id = 3, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
-        edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+        id = 3, name = "Hangs", form = ExerciseForm.HOLD,
+        workSec = 7.0, restSec = 3.0,
     )
 
     /**
@@ -84,8 +84,8 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val catalog = listOf(
         exerciseEntity(1, "Bench press").copy(defaultRestSec = 150),
         exerciseEntity(2, "Abs").copy(defaultRestSec = 90),
-        exerciseEntity(3, "Hangs 20 mm", ExerciseForm.HOLD)
-            .copy(defaultRestSec = 240, edgeMm = 20.0, protocolWorkSec = 7.0, protocolRestSec = 3.0),
+        exerciseEntity(3, "Hangs", ExerciseForm.HOLD)
+            .copy(defaultRestSec = 240, protocolWorkSec = 7.0, protocolRestSec = 3.0),
         // the flag lives on the catalog row; the side it makes the card ask for lives on the set
         exerciseEntity(4, "One-arm hang 20 mm", ExerciseForm.HOLD)
             .copy(defaultRestSec = 180, oneSided = true),
@@ -124,7 +124,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 floors = floors,
                 actions = WorkoutLogActions(
                     addExercise = { id, rest -> added += id to rest },
-                    createExercise = { _, _, _, _, _, _ -> },
+                    createExercise = { _, _, _, _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
                     removeExercise = { ids -> removedRows += ids },
@@ -596,10 +596,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, hangWorkout(journal))
 
-        compose.onNodeWithText("Hangs 20 mm").performClick()
+        compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        assertEquals(listOf("Hangs 20 mm" to null), started)
+        assertEquals(listOf("Hangs" to null), started)
         // no form and no question: a bodyweight protocol used to start with one tap and
         // still does
         compose.onAllNodesWithText("Added weight").assertCountEquals(0)
@@ -630,7 +630,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal.holdSet(hangs, "2026-08-05", addedKg = 15.0)
         show(journal, hangWorkout(journal))
 
-        compose.onNodeWithText("Hangs 20 mm").performClick()
+        compose.onNodeWithText("Hangs").performClick()
         settle()
 
         compose.onNodeWithText("Added weight").assertExists()
@@ -639,7 +639,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         assertEquals(emptyList<Pair<String, Double?>>(), started)
 
         compose.onNodeWithText("Start the set").performClick()
-        assertEquals(listOf("Hangs 20 mm" to 15.0), started)
+        assertEquals(listOf("Hangs" to 15.0), started)
     }
 
     /**
@@ -652,11 +652,11 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal.holdSet(hangs, "2026-08-05", addedKg = null)
         show(journal, hangWorkout(journal))
 
-        compose.onNodeWithText("Hangs 20 mm").performClick()
+        compose.onNodeWithText("Hangs").performClick()
         settle()
 
         compose.onAllNodesWithText("Added weight").assertCountEquals(0)
-        assertEquals(listOf("Hangs 20 mm" to null), started)
+        assertEquals(listOf("Hangs" to null), started)
     }
 
     /**
@@ -671,7 +671,7 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Set running - tap to go back to it").assertIsDisplayed()
 
-        compose.onNodeWithText("Hangs 20 mm").performClick()
+        compose.onNodeWithText("Hangs").performClick()
         settle()
 
         assertEquals(1, conductorOpened)

@@ -30,8 +30,8 @@ best weight at a given rep count, and the heaviest added weight on hangs.
 
 **An interval timer** that keeps running with the screen off and the phone in a pocket.
 Programs are built from timed blocks grouped into sets — hangboard repeaters, Tabata,
-EMOM, circuits. A hangboard exercise already knows its protocol and edge, so it expands
-into a ready program in one tap. When a run ends, the app offers to write what it counted
+EMOM, circuits. A hangboard exercise already knows its protocol, so it expands into a
+ready program in one tap. When a run ends, the app offers to write what it counted
 into the journal; nothing is recorded until you confirm it. Programs export to and import
 from JSON files ([format](docs/program-file-format.md)).
 
@@ -52,10 +52,9 @@ ships with the app.
 
 ## Two things worth knowing
 
-**Hangboard exercises are defined by name, edge and protocol.** Hangs on a 20 mm edge at
-7:3 and hangs on a 15 mm edge are different exercises with separate histories, because
-they are different training. The number tracked — and the record kept — is the added
-weight.
+**Hangboard exercises are defined by name and protocol.** Hangs at 7:3 and hangs at 10:5
+are different exercises with separate histories, because they are different training.
+The number tracked — and the record kept — is the added weight.
 
 **Nothing is ever deleted.** Cancelling a set records a reversal rather than erasing the
 original, so the history stays honest about what happened and when.

@@ -185,19 +185,6 @@ class AnalyticsTest {
         assertTrue(recordsOf(a, ExerciseLink.ofId(5), ExerciseForm.TICK).isEmpty())
     }
 
-    // --- hangboard siblings --------------------------------------------------------------
-
-    @Test
-    fun `hangboard siblings share a base key once the measurements are stripped`() {
-        assertEquals("hangs", holdBaseKey("Hangs 20 mm - 7:3"))
-        assertEquals("hangs", holdBaseKey("Hangs 15 mm - 7:3"))
-        assertEquals("hangs", holdBaseKey("Hangs 20 mm - 10:50"))
-        // a different exercise does not get merged in
-        assertTrue(holdBaseKey("Pull-ups") != holdBaseKey("Hangs 20 mm - 7:3"))
-        // a name with no measurements at all survives whole, so it forms a group of one
-        assertEquals("front lever", holdBaseKey("Front lever"))
-    }
-
     // --- heatmap --------------------------------------------------------------------------
 
     @Test
@@ -416,25 +403,6 @@ class AnalyticsTest {
             listOf(DayPoint("2026-08-01", 100.0)),
         )
         assertNull(single.delta())
-    }
-
-    // --- hangboard siblings ------------------------------------------------------------------------
-
-    @Test
-    fun `siblings are grouped by base name and ordered from the widest edge down`() {
-        val catalog = listOf(
-            HoldSibling(1, "Hangs 15 mm - 7:3", 15.0, 7.0, 3.0),
-            HoldSibling(2, "Hangs 20 mm - 7:3", 20.0, 7.0, 3.0),
-            HoldSibling(3, "Hangs 20 mm - 10:50", 20.0, 10.0, 50.0),
-            HoldSibling(4, "Front lever", null, null, null),
-        )
-        val siblings = holdSiblings(catalog, 2)
-        // the exercise asked about is included, and the thinner edge sorts last (harder)
-        assertEquals(listOf(3L, 2L, 1L), siblings.map { it.exerciseId })
-
-        // an exercise with no siblings is a group of one, and the screen hides the switcher
-        assertEquals(listOf(4L), holdSiblings(catalog, 4).map { it.exerciseId })
-        assertTrue(holdSiblings(catalog, 999).isEmpty())
     }
 
     // --- the check-in presence window ------------------------------------------------------------------

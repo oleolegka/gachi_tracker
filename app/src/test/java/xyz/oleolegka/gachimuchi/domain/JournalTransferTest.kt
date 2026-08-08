@@ -33,7 +33,6 @@ class JournalTransferTest {
         uid: String,
         name: String = "Bench press",
         form: Int = ExerciseForm.STRENGTH.code,
-        edge: Double? = null,
         work: Double? = null,
         rest: Double? = null,
     ) = PortableExercise(
@@ -41,7 +40,6 @@ class JournalTransferTest {
         name = name,
         form = form,
         createdAt = "2026-08-01T09:00:00",
-        edgeMm = edge,
         protocolWorkSec = work,
         protocolRestSec = rest,
     )
@@ -282,21 +280,20 @@ class JournalTransferTest {
     }
 
     /**
-     * And the half that must NOT merge. §12-A: the edge and the protocol are part of what a
-     * hangboard exercise IS, so two rows that share a name and differ in either are two
-     * histories. The form is in there too, for the reason [ExerciseIdentity] gives.
+     * And the half that must NOT merge. §12-A: the protocol is part of what a hangboard
+     * exercise IS, so two rows that share a name and differ in it are two histories. The form
+     * is in there too, for the reason [ExerciseIdentity] gives.
      */
     @Test
-    fun `a different edge, protocol or form keeps two histories apart`() {
-        val stored = listOf(exercise("0198c2ef-0000-7000-8000-000000000001", "Hangs", ExerciseForm.HOLD.code, edge = 20.0, work = 7.0, rest = 3.0))
+    fun `a different protocol or form keeps two histories apart`() {
+        val stored = listOf(exercise("0198c2ef-0000-7000-8000-000000000001", "Hangs", ExerciseForm.HOLD.code, work = 7.0, rest = 3.0))
 
-        val otherEdge = exercise("0198c2ef-0000-7000-8000-000000000002", "Hangs", ExerciseForm.HOLD.code, edge = 15.0, work = 7.0, rest = 3.0)
-        val otherProtocol = exercise("0198c2ef-0000-7000-8000-000000000003", "Hangs", ExerciseForm.HOLD.code, edge = 20.0, work = 10.0, rest = 5.0)
-        val otherForm = exercise("0198c2ef-0000-7000-8000-000000000004", "Hangs", ExerciseForm.DURATION.code, edge = 20.0, work = 7.0, rest = 3.0)
+        val otherProtocol = exercise("0198c2ef-0000-7000-8000-000000000003", "Hangs", ExerciseForm.HOLD.code, work = 10.0, rest = 5.0)
+        val otherForm = exercise("0198c2ef-0000-7000-8000-000000000004", "Hangs", ExerciseForm.DURATION.code, work = 7.0, rest = 3.0)
 
-        val merge = mergeExercises(listOf(otherEdge, otherProtocol, otherForm), stored)
+        val merge = mergeExercises(listOf(otherProtocol, otherForm), stored)
 
-        assertEquals(3, merge.toInsert.size)
+        assertEquals(2, merge.toInsert.size)
         assertTrue("none of these is the stored exercise", merge.aliases.isEmpty())
     }
 

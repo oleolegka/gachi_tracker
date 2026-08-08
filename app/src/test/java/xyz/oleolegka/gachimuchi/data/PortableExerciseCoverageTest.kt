@@ -21,10 +21,10 @@ import xyz.oleolegka.gachimuchi.domain.PortableExercise
  * [id] and `spaceId` are local plumbing (domain/Catalog.kt's [xyz.oleolegka.gachimuchi.domain.CatalogRow]
  * explains why): a row number and a space id mean nothing off the phone that assigned them, and
  * the backup refers to everything by [ExerciseEntity.uid] instead. `identityKey` is derived —
- * from [ExerciseEntity.name], [ExerciseEntity.form], [ExerciseEntity.edgeMm],
- * [ExerciseEntity.protocolWorkSec] and [ExerciseEntity.protocolRestSec] — and is recomputed by
- * every reader rather than trusted from one, so a portable form carrying it would be a second,
- * possibly stale, copy of the truth.
+ * from [ExerciseEntity.name], [ExerciseEntity.form], [ExerciseEntity.protocolWorkSec] and
+ * [ExerciseEntity.protocolRestSec] — and is recomputed by every reader rather than trusted
+ * from one, so a portable form carrying it would be a second, possibly stale, copy of the
+ * truth.
  *
  * This test does NOT check that the value round-trips correctly, only that the field exists on
  * both sides — see JournalBackupTest and JournalTransferTest for the round-trip itself. What it

@@ -335,9 +335,9 @@ private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.f
  * for "nothing was ever set".
  *
  * A stored value outside (0, 1] is treated as absent rather than used, on exactly the grounds
- * [ExerciseRef.edge] gives for a zero edge: a catalog row can carry rubbish (a row that
- * arrives from another journal, a value typed before the field was validated), and a chart
- * quietly drawn from a share of 4.0 is worse than a chart that says nothing.
+ * [ExerciseRef.protocol] gives for a zero work or rest: a catalog row can carry rubbish (a row
+ * that arrives from another journal, a value typed before the field was validated), and a
+ * chart quietly drawn from a share of 4.0 is worse than a chart that says nothing.
  */
 internal fun usableShare(share: Double?): Double? = share?.takeIf { it > 0.0 && it <= 1.0 }
 
@@ -665,58 +665,6 @@ fun heaviestSet(activities: List<ActivityEvent>, exercise: ExerciseLink): Exerci
         exercise, RecordHit.Axis.WEIGHT_AT_REPS, best.weightKg!!, day,
         "heaviest set ${fmtNum(best.weightKg)} kg x ${best.reps}",
     )
-}
-
-// --- hangboard siblings (§12-A) --------------------------------------------------------
-
-/** Tokens that carry a hangboard's measurements rather than its name. */
-private val MEASUREMENT_WORDS = setOf("mm", "cm", "s", "sec", "kg", "min")
-
-/**
- * The base name shared by the §12-A siblings of a hangboard exercise.
- *
- * "Hangs 20 mm - 7:3" and "Hangs 15 mm - 7:3" are two different catalog rows on purpose
- * (edge and protocol are part of the identity), but on the detail screen they have to be
- * reachable from one another, otherwise comparing this week's 20 mm against last week's
- * 15 mm means walking back to the overview.
- *
- * The grouping is derived from the NAME, with the numbers and the unit words dropped, and
- * that is a heuristic: an exercise named without its edge in the title lands in its own
- * group of one, and the switcher simply does not appear. The edge and protocol shown in
- * the header do NOT come from this parsing — they come from the structured columns on the
- * catalog row, so a wrong guess here can never misreport a measurement.
- */
-fun holdBaseKey(name: String): String {
-    val norm = normPhrase(name) ?: return ""
-    val kept = norm.split(' ').filter { token ->
-        token.isNotBlank() &&
-            token.none { it.isDigit() } &&
-            token !in MEASUREMENT_WORDS
-    }
-    return kept.joinToString(" ").ifBlank { norm }
-}
-
-/** A hangboard exercise as the sibling switcher needs it: identity plus its measurements. */
-data class HoldSibling(
-    val exerciseId: Long,
-    val name: String,
-    val edgeMm: Double?,
-    val workSec: Double?,
-    val restSec: Double?,
-)
-
-/**
- * The §12-A siblings of a hold exercise, INCLUDING the one asked about, ordered by edge
- * (thinnest last — a thinner edge is the harder exercise) and then by name.
- *
- * Returns a single-element list when the exercise has no siblings; the screen then hides
- * the switcher rather than showing a chip row with one chip in it.
- */
-fun holdSiblings(catalog: List<HoldSibling>, exerciseId: Long): List<HoldSibling> {
-    val self = catalog.firstOrNull { it.exerciseId == exerciseId } ?: return emptyList()
-    val base = holdBaseKey(self.name)
-    return catalog.filter { holdBaseKey(it.name) == base }
-        .sortedWith(compareByDescending<HoldSibling> { it.edgeMm ?: Double.MAX_VALUE }.thenBy { it.name })
 }
 
 /**

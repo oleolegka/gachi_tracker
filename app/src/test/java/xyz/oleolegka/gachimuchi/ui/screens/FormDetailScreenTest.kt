@@ -43,7 +43,6 @@ class FormDetailScreenTest : ScreenTest() {
         name = "Hangs",
         form = ExerciseForm.HOLD.code,
         createdAt = "2026-08-01T10:00:00",
-        edgeMm = 20.0,
         protocolWorkSec = 7.0,
         protocolRestSec = 3.0,
     )
@@ -85,9 +84,9 @@ class FormDetailScreenTest : ScreenTest() {
 
     /**
      * The dialog opens on what the exercise IS, not on empty fields: an edit that starts blank
-     * is an edit that quietly clears the edge of anybody who only meant to fix a typo.
+     * is an edit that quietly clears the protocol of anybody who only meant to fix a typo.
      *
-     * The numbers are asserted as "20" rather than "20.0" on purpose — that is how they were
+     * The numbers are asserted as "7" rather than "7.0" on purpose — that is how they were
      * typed, and a field that re-renders them with a decimal point reads as the app having
      * changed something.
      */
@@ -102,7 +101,6 @@ class FormDetailScreenTest : ScreenTest() {
         // twice: the heading the screen already had, and the field the dialog opened with
         compose.onAllNodesWithText("Hangs").assertCountEquals(2)
         compose.onNodeWithText("Name").assertIsDisplayed()
-        compose.onNodeWithText("20").assertIsDisplayed()
         compose.onNodeWithText("7").assertIsDisplayed()
         compose.onNodeWithText("3").assertIsDisplayed()
         compose.onNodeWithText("Save").assertIsDisplayed()
@@ -111,7 +109,7 @@ class FormDetailScreenTest : ScreenTest() {
     /**
      * The caveat is on the screen, not only in a KDoc: correcting the catalog does not
      * rewrite what the sets say they were performed at, and an exercise genuinely moved to
-     * another edge is a different exercise.
+     * another protocol is a different exercise.
      */
     @Test
     fun `the edit dialog says what the correction does to the history`() {
@@ -121,7 +119,7 @@ class FormDetailScreenTest : ScreenTest() {
         compose.onNodeWithText("Edit exercise").performClick()
         settle()
 
-        compose.onNodeWithText("still carry the edge", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("still carry the protocol", substring = true).assertIsDisplayed()
         compose.onNodeWithText("is a different exercise", substring = true).assertIsDisplayed()
         // and the form is stated as the thing that cannot move
         compose.onNodeWithText("The form stays holds", substring = true).assertIsDisplayed()

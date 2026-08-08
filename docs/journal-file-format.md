@@ -51,7 +51,6 @@ phone, and it carries programs too.
       "name": "Bench press",
       "form": 1,
       "created_at": "2026-08-01T09:00:00",
-      "edge_mm": null,
       "protocol_work_sec": null,
       "protocol_rest_sec": null,
       "default_rest_sec": 150,
@@ -127,17 +126,22 @@ already a uid.
 | `name` | string | yes | Must not be blank. |
 | `form` | integer | yes | 1 strength, 2 holds, 3 cardio, 4 duration, 5 check-in, 6 body weight. An unknown code is refused. |
 | `created_at` | string | yes | When the row was made. |
-| `edge_mm` | number | no | Hangboard edge; part of identity (§12-A). |
-| `protocol_work_sec` / `protocol_rest_sec` | number | no | The work:rest protocol; part of identity. |
+| `protocol_work_sec` / `protocol_rest_sec` | number | no | The work:rest protocol; part of identity (§12-A). |
 | `default_rest_sec` | integer | no | The rest last chosen for this exercise. |
 | `led_by_protocol` | boolean | no | Run sets by the protocol, or just count the rest. `null` means "decide from whether a protocol exists". |
 | `one_sided` | boolean | no | A set is done one side at a time. |
 | `bodyweight_share` | number | no | How much of the body weight this exercise actually lifts. |
 | `hidden` | boolean | no | Kept out of the pickers. Not part of the identity — a hidden row and a shown one still merge. |
 
-The stored `identity_key` is **not** in the file: it is the four defining values folded into
-one string, and it is recomputed on the way in. A key carried in a file could disagree with
-the columns it claims to summarise.
+The stored `identity_key` is **not** in the file: it is the defining values (name, form and
+protocol) folded into one string, and it is recomputed on the way in. A key carried in a
+file could disagree with the columns it claims to summarise.
+
+`edge_mm` used to be one of these fields (the hangboard edge, in mm) and no longer is —
+removed along with the rest of the edge attribute (schema version 18). A file exported by an
+older build that still carries the key decodes without complaint; `ignoreUnknownKeys` drops
+it. There is no payload rewrite for old files on disk: a file is read once, on import, and
+this app no longer has anywhere to put the value even if it kept it.
 
 The catalog, the plan and the programs are carried **column by column**, unlike an event
 payload. That is a standing obligation on whoever adds a column: a column added to `exercises`
@@ -207,11 +211,11 @@ exactly as they are. That is what makes importing the same file twice safe, whic
 situation this is built for — somebody who is not sure whether they already restored.
 
 - **Events** merge by `uid`. A second import of one file adds nothing at all.
-- **The catalog** merges by `uid` first, then by identity: name (normalized) + form + edge +
-  work:rest protocol. The name alone is not enough — §12-A makes "Hangs 20 mm 7:3" and
-  "Hangs 15 mm 7:3" two exercises. The form is in the identity for the mirror-image reason: a
-  "Plank" logged as a duration and a "Plank" logged as strength write different payload shapes,
-  and welding them produces one history half the readers cannot read.
+- **The catalog** merges by `uid` first, then by identity: name (normalized) + form +
+  work:rest protocol. The name alone is not enough — §12-A makes "Hangs" at 7:3 and "Hangs"
+  at 10:5 two exercises. The form is in the identity for the mirror-image reason: a "Plank"
+  logged as a duration and a "Plank" logged as strength write different payload shapes, and
+  welding them produces one history half the readers cannot read.
 - **Slots and programs** merge by `uid`. A program arriving under a name already taken by a
   different program is marked — `Tabata 20:10 (imported)` — never merged over.
 - **The report** counts what was added, what was already here, and what did not fit, and is

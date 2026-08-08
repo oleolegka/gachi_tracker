@@ -398,17 +398,25 @@ data class StrengthSet(
 /**
  * A hold / hang / hangboard set. ONE EVENT = ONE SET.
  *
- * §12-A (SUPERSEDES form 2 of §3): hangboard identity = name + EDGE (mm) + PROTOCOL
- * (work:rest), so "Hangs 20 mm · 7:3" and "Hangs 15 mm · 7:3" are DIFFERENT catalog
- * exercises, and the tracked variable — the personal record — is ADDED WEIGHT
- * ([addedKg]). Edge and protocol therefore live as attributes of the exercise
- * ([xyz.oleolegka.gachimuchi.data.db.ExerciseEntity]).
+ * §12-A (SUPERSEDES form 2 of §3): hangboard identity = name + PROTOCOL (work:rest), so
+ * "Hangs" at 7:3 and "Hangs" at 10:5 are DIFFERENT catalog exercises, and the tracked
+ * variable — the personal record — is ADDED WEIGHT ([addedKg]). The protocol therefore
+ * lives as an attribute of the exercise ([xyz.oleolegka.gachimuchi.data.db.ExerciseEntity]).
  *
- * The [edgeMm]/[workSec]/[restSec] fields are KEPT here as a snapshot of the exercise
- * attributes at the time of the set — exactly the payload keys the Python bot writes
- * (otherwise the two journals would drift apart). Identity is NOT derived from them:
- * it comes from [exerciseId]. If an exercise's edge is ever corrected, the snapshot in
- * old events still shows how it was recorded back then.
+ * The [workSec]/[restSec] fields are KEPT here as a snapshot of the exercise's protocol at
+ * the time of the set — exactly the payload keys the Python bot writes (otherwise the two
+ * journals would drift apart). Identity is NOT derived from them: it comes from
+ * [exerciseId]. If an exercise's protocol is ever corrected, the snapshot in old events
+ * still shows how it was recorded back then.
+ *
+ * ── `edge_mm` used to live here too, and does not any more ──────────────────────
+ * The hangboard edge (millimetres) was a climbing-specific value the app no longer models:
+ * it has been folded into the exercise NAME instead (see `MIGRATION_17_18` in
+ * `data/db/AppDatabase.kt`), and this class no longer has a field for it. `ignoreUnknownKeys`
+ * on [journalFileJson] means an old backup that still carries an `"edge_mm"` key decodes
+ * fine — the key is simply dropped on the way in — and this app never writes it again. A
+ * separate Python bot is documented to read/write this same payload shape and may still
+ * expect the key; that divergence is a known, accepted consequence and is out of scope here.
  *
  * [restAfterSec] is the pause BETWEEN sets; [workSec]/[restSec] are the protocol
  * WITHIN a set. Different quantities, independent of each other.
@@ -425,7 +433,6 @@ data class HoldSet(
     @SerialName("hold_sec") val holdSec: Double? = null,
     @SerialName("work_sec") val workSec: Double? = null,
     @SerialName("rest_sec") val restSec: Double? = null,
-    @SerialName("edge_mm") val edgeMm: Double? = null,
     @SerialName("added_kg") override val addedKg: Double? = null,
     @SerialName("own_weight") override val ownWeight: Boolean = false,
     /** What you weighed when this hang was recorded — see [StrengthSet.bodyweightKg]. */
@@ -466,7 +473,6 @@ data class HoldSet(
         requirePosOrNull("hold_sec", holdSec)
         requirePosOrNull("work_sec", workSec)
         requirePosOrNull("rest_sec", restSec)
-        requirePosOrNull("edge_mm", edgeMm)
         requirePosOrNull("bodyweight_kg", bodyweightKg)
         requireNonZeroOrNull("added_kg", addedKg)
         requireIsoDate(opDate)

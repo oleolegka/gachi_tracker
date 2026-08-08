@@ -533,9 +533,18 @@ fun <T> SegmentControl(
     }
 }
 
-// --- chips (hangboard identity, §12-A) -----------------------------------------------------------------
+// --- chips -----------------------------------------------------------------------------------------------
 
-/** A sibling switcher chip. The selected one is outlined in the form's own colour. */
+/**
+ * A small pill chip with a selected state, outlined in [accent] when chosen.
+ *
+ * It started life as the §12-A hold-sibling switcher's own chip (comparing hangboard
+ * exercises by edge — the switcher and the edge attribute it compared are both gone now, see
+ * `MIGRATION_17_18` in `data/db/AppDatabase.kt`), but it is a generic reusable component: the
+ * plan editor also uses it for name suggestions and quick-time picking (`SlotEditor.kt`), and
+ * neither of those is hangboard-related. Kept as-is on purpose — only the one real §12-A call
+ * site left with the feature it served.
+ */
 @Composable
 fun SiblingChip(
     text: String,
@@ -566,7 +575,7 @@ fun SiblingChip(
     }
 }
 
-/** An identity fact of a hangboard exercise: "edge 20 mm", "protocol 7:3", "metric weight". */
+/** An identity fact of a hangboard exercise: "protocol 7:3", "metric weight". */
 @Composable
 fun IdentityChip(label: String, value: String, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current

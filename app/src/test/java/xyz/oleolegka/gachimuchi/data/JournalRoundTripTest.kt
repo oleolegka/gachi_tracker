@@ -113,11 +113,10 @@ class JournalRoundTripTest {
     private suspend fun ref(
         name: String,
         form: ExerciseForm,
-        edge: Double? = null,
         work: Double? = null,
         rest: Double? = null,
     ): ExerciseRef =
-        repo.exercise(repo.ensureExercise(name, form, edgeMm = edge, workSec = work, restSec = rest))!!.toRef()
+        repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!.toRef()
 
     /**
      * How a catalog exercise is named to the reducers, looked up the way a screen does it.
@@ -145,7 +144,7 @@ class JournalRoundTripTest {
     private suspend fun writeAMonth(): List<ActivityForm> {
         val bench = ref("Bench press", ExerciseForm.STRENGTH)
         val squat = ref("Squat", ExerciseForm.STRENGTH)
-        val hangs = ref("Hangs 20 mm", ExerciseForm.HOLD, edge = 20.0, work = 7.0, rest = 3.0)
+        val hangs = ref("Hangs", ExerciseForm.HOLD, work = 7.0, rest = 3.0)
         val running = ref("Running", ExerciseForm.CARDIO)
         val stretching = ref("Stretching", ExerciseForm.DURATION)
         val bouldering = ref("Bouldering gym", ExerciseForm.TICK)
@@ -183,8 +182,8 @@ class JournalRoundTripTest {
             // strength, own body weight: the other half of the form's own branching
             write(strengthSetOf(bench, day, reps = 8, ownWeight = true, addedKg = 10.0 + index))
 
-            // holds: added weight is the tracked variable (§12-A), edge and protocol are
-            // snapshots of the exercise
+            // holds: added weight is the tracked variable (§12-A), the protocol is a
+            // snapshot of the exercise
             repeat(4) { set ->
                 write(holdSetOf(hangs, day, addedKg = 5.0 + index * 0.5, reps = 6 - set % 2, holdSec = 7.0))
             }
@@ -259,7 +258,7 @@ class JournalRoundTripTest {
         writeAMonth()
         val events = repo.allEvents()
         val bench = linkOf("Bench press")
-        val hangs = linkOf("Hangs 20 mm")
+        val hangs = linkOf("Hangs")
         val running = linkOf("Running")
 
         // 6 strength sets of the bench a day: five with an implement and one on body weight
@@ -273,7 +272,7 @@ class JournalRoundTripTest {
         val holds = holdSetsOfExercise(events, hangs)
         assertEquals(4 * DAY_COUNT, holds.size)
         // the identity snapshot rides along on every set (§12-A)
-        assertTrue(holds.all { it.edgeMm == 20.0 && it.workSec == 7.0 && it.restSec == 3.0 })
+        assertTrue(holds.all { it.workSec == 7.0 && it.restSec == 3.0 })
         assertEquals(5.0 + (DAY_COUNT - 1) * 0.5, lastHoldSet(events, hangs)!!.addedKg!!, 1e-9)
 
         assertEquals(5000.0 + (DAY_COUNT - 1) * 100, lastCardio(events, running)!!.distanceM!!, 1e-9)
@@ -327,7 +326,7 @@ class JournalRoundTripTest {
         // 11 strength + 4 holds + cardio + duration + tick + weigh-in
         assertEquals(19, session.setCount)
         assertEquals(
-            listOf("Bench press", "Squat", "Hangs 20 mm", "Running", "Stretching", "Bouldering gym", "Body weight"),
+            listOf("Bench press", "Squat", "Hangs", "Running", "Stretching", "Bouldering gym", "Body weight"),
             session.groups.map { it.name }.distinct(),
         )
     }
@@ -369,7 +368,7 @@ class JournalRoundTripTest {
 
         val hold = forms.filterIsInstance<HoldSet>().first()
         assertEquals(7.0, hold.holdSec!!, 1e-9)
-        assertEquals(20.0, hold.edgeMm!!, 1e-9)
+        assertEquals(7.0, hold.workSec!!, 1e-9)
         assertTrue("a hangboard set is always about added weight", hold.ownWeight)
 
         val cardio = forms.filterIsInstance<Cardio>().first()

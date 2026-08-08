@@ -105,14 +105,14 @@ class JournalBackupTest {
      */
     private suspend fun writeAPhone() {
         val benchId = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH, defaultRestSec = 150)
-        val hangsId = repo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+        val hangsId = repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
         val boulderId = repo.ensureExercise("Bouldering gym", ExerciseForm.TICK)
         // a catalog row whose every optional column is set, and nothing logged against it: the
         // reference tables are carried column by column rather than opaquely, so a column added
         // to `exercises` and forgotten here would come back as its default and say nothing
         val oneArmId = repo.ensureExercise(
             "One-arm hang", ExerciseForm.HOLD,
-            edgeMm = 20.0, workSec = 10.0, restSec = 5.0, defaultRestSec = 240,
+            workSec = 10.0, restSec = 5.0, defaultRestSec = 240,
         )
         repo.setOneSided(oneArmId, true)
         repo.setBodyweightShare(oneArmId, 0.65)
@@ -201,7 +201,6 @@ class JournalBackupTest {
             // and said once in the open, because the file text agreeing is a proof that reads
             // as an accident: every optional column of a catalog row came back as it was
             val oneArm = other.exercises().all().single { it.name == "One-arm hang" }
-            assertEquals(20.0, oneArm.edgeMm!!, 1e-9)
             assertEquals(10.0, oneArm.protocolWorkSec!!, 1e-9)
             assertEquals(5.0, oneArm.protocolRestSec!!, 1e-9)
             assertEquals(240, oneArm.defaultRestSec)
@@ -343,7 +342,7 @@ class JournalBackupTest {
             val named = slot.exercises.map { line ->
                 other.exercises().all().single { it.id == line.exerciseId }.name
             }
-            assertEquals(listOf("Bench press", "Hangs 20 mm"), named)
+            assertEquals(listOf("Bench press", "Hangs"), named)
             assertEquals(listOf(150, null), slot.exercises.map { it.restSec })
 
             val program = ProgramRepository(other).allPrograms().single()
@@ -352,7 +351,7 @@ class JournalBackupTest {
             assertEquals(15, program.prepareSec)
             assertNotNull("the program's exercise link has to survive", program.exerciseId)
             assertEquals(
-                "Hangs 20 mm",
+                "Hangs",
                 other.exercises().all().single { it.id == program.exerciseId }.name,
             )
         } finally {
@@ -438,7 +437,7 @@ class JournalBackupTest {
         writeAPhone()
         val file = accepted(backup.export())
         val gutted = file.copy(
-            exercises = file.exercises.filter { it.name != "Hangs 20 mm" },
+            exercises = file.exercises.filter { it.name != "Hangs" },
             programs = emptyList(), // the program names it too, and that is a different note
         )
 
@@ -458,7 +457,7 @@ class JournalBackupTest {
     fun `a program naming an exercise the file does not carry arrives unlinked and says so`() = runTest {
         writeAPhone()
         val file = accepted(backup.export())
-        val gutted = file.copy(exercises = file.exercises.filter { it.name != "Hangs 20 mm" })
+        val gutted = file.copy(exercises = file.exercises.filter { it.name != "Hangs" })
 
         val other = freshDb()
         try {

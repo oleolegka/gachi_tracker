@@ -197,14 +197,14 @@ class ProgramTest {
     @Test
     fun `a hangboard exercise expands into its own protocol without being asked anything`() {
         val exercise = ExerciseRef(
-            id = 1, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
-            edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            id = 1, name = "Hangs", form = ExerciseForm.HOLD,
+            workSec = 7.0, restSec = 3.0,
         )
         val program = programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180, prepareSec = 15)
         assertNotNull(program)
         val steps = program!!.flatten()
 
-        assertEquals("Hangs 20 mm", program.name)
+        assertEquals("Hangs", program.name)
         assertEquals(24, steps.count { it.kind == StepKind.WORK })
         assertTrue(steps.filter { it.kind == StepKind.WORK }.all { it.durationSec == 7 })
         assertEquals(StepKind.PREPARE, steps.first().kind)
@@ -238,8 +238,8 @@ class ProgramTest {
     @Test
     fun `a program built from an exercise remembers which exercise that was`() {
         val hangs = ExerciseRef(
-            id = 42, name = "Hangs 20 mm", form = ExerciseForm.HOLD,
-            edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            id = 42, name = "Hangs", form = ExerciseForm.HOLD,
+            workSec = 7.0, restSec = 3.0,
         )
 
         val built = programFromExercise(hangs, reps = 6, sets = 4, restBetweenSetsSec = 180)!!

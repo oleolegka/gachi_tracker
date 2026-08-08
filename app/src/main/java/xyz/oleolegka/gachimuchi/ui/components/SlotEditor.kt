@@ -144,7 +144,6 @@ fun SlotEditorDialog(
     onCreateExercise: ((
         name: String,
         form: ExerciseForm,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         then: (Long) -> Unit,
@@ -197,14 +196,14 @@ fun SlotEditorDialog(
             onPick = { id -> draft = draft.withExerciseAdded(id) },
             /*
              * Planning can create, and once could not. The argument for refusing was that the
-             * identity questions (form, edge, protocol) belong to the moment of the first set
-             * — which sounds right and is wrong in the hand: planning Tuesday's hangs on a
-             * 15 mm edge you have never hung is exactly what a plan is for, and the picker
-             * offered no way out of the dead end. Reported from the phone, 2026-08-08.
+             * identity questions (form, protocol) belong to the moment of the first set — which
+             * sounds right and is wrong in the hand: planning Tuesday's hangs on a protocol you
+             * have never tried is exactly what a plan is for, and the picker offered no way out
+             * of the dead end. Reported from the phone, 2026-08-08.
              */
             onCreate = onCreateExercise?.let { create ->
-                { name, form, edge, work, rest ->
-                    create(name, form, edge, work, rest) { id ->
+                { name, form, work, rest ->
+                    create(name, form, work, rest) { id ->
                         draft = draft.withExerciseAdded(id)
                     }
                 }
