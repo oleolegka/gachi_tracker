@@ -382,8 +382,8 @@ private fun CreateExerciseForm(
                  * The protocol is a pair or nothing at all: half of it would be rejected by
                  * the same validator on the very first set.
                  */
-                val w = if (hold) parseCount(work)?.takeIf { it > 0 }?.toDouble() else null
-                val r = if (hold) parseCount(rest)?.takeIf { it > 0 }?.toDouble() else null
+                val w = if (hold) wholeSecondsOrNull(work) else null
+                val r = if (hold) wholeSecondsOrNull(rest) else null
                 val pair = if (w != null && r != null) w to r else null
                 onCreate(name.trim(), form, pair?.first, pair?.second)
             },
@@ -392,3 +392,15 @@ private fun CreateExerciseForm(
         ) { Text("Create and use") }
     }
 }
+
+/**
+ * A Work/Rest field as a positive whole number of seconds, or null for "empty, or not a
+ * usable protocol value" — the same "positive, or it was never filled in" rule
+ * [CreateExerciseForm] applies to the pair as a whole, arithmetic pulled out on its own so it
+ * can be tested without Compose, on the same footing [percentAsShare] is in
+ * `ui/components/ExerciseEditor.kt`.
+ *
+ * ROUNDS TO THE NEAREST WHOLE SECOND rather than truncating — see the note at this function's
+ * one call site for what used to truncate instead, and where.
+ */
+internal fun wholeSecondsOrNull(text: String): Double? = parseCount(text)?.takeIf { it > 0 }?.toDouble()
