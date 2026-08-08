@@ -38,11 +38,14 @@ import xyz.oleolegka.gachimuchi.domain.Granularity
 import xyz.oleolegka.gachimuchi.domain.HoldSibling
 import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
+import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import xyz.oleolegka.gachimuchi.domain.granularity
 import xyz.oleolegka.gachimuchi.domain.holdSiblings
+import xyz.oleolegka.gachimuchi.domain.onAxis
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.recordsOf
+import xyz.oleolegka.gachimuchi.domain.timeAxis
 import xyz.oleolegka.gachimuchi.domain.trendSeries
 import xyz.oleolegka.gachimuchi.domain.volumeSeries
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -137,8 +140,26 @@ fun FormDetailScreen(
     // the bucket width follows the window, so a year is weeks rather than 365 bars
     val spanDays = remember(trendAll, volumeAll) { historySpanDays(trendAll, volumeAll, today) }
     val granularity = period.granularity(spanDays)
-    val trend = trendAll?.inPeriod(period, today)?.bucketed(granularity)
-    val volume = volumeAll?.inPeriod(period, today)?.bucketed(granularity)
+    /*
+     * ONE TIME AXIS FOR THE SCREEN, built from the window and handed to both charts.
+     *
+     * Each chart used to take its own points and stretch them across its own card, so the
+     * trend ran to the day of the last 1RM and the volume beside it ran to the day of the
+     * last session — two pictures of different stretches of time, drawn the same width, one
+     * above the other. Comparing them by eye is the entire reason they are stacked.
+     *
+     * The series are narrowed to the window first and PLACED on the axis after, so a metric
+     * that has nothing in this window comes out empty rather than compressing the axis onto
+     * whatever it does have. Why the axis is built from the period and not from the data is
+     * on `TimeAxis` in domain/Analytics.kt.
+     */
+    val trendWindow = remember(trendAll, period, today) { trendAll?.inPeriod(period, today) }
+    val volumeWindow = remember(volumeAll, period, today) { volumeAll?.inPeriod(period, today) }
+    val axis = remember(trendWindow, volumeWindow, period, granularity, today) {
+        timeAxis(listOfNotNull(trendWindow, volumeWindow), period, granularity, today)
+    }
+    val trend = remember(trendWindow, axis) { trendWindow?.onAxis(axis) }
+    val volume = remember(volumeWindow, axis) { volumeWindow?.onAxis(axis) }
 
     Scaffold(
         modifier = modifier,
@@ -254,11 +275,13 @@ fun FormDetailScreen(
                     title = trendAll?.spec?.label ?: "Trend",
                     subtitle = chartSubtitle(trend, granularity),
                     series = trend,
-                    emptyTitle = trendEmptyTitle(form),
-                    emptyHint = trendEmptyHint(form),
+                    // "log a couple of sessions and the line appears" is a lie to somebody
+                    // who has logged plenty and is looking at the wrong month
+                    emptyTitle = if (trendAll == null) trendEmptyTitle(form) else WINDOW_EMPTY_TITLE,
+                    emptyHint = if (trendAll == null) trendEmptyHint(form) else WINDOW_EMPTY_HINT,
                 ) { series ->
                     LineChart(
-                        points = series.points,
+                        slots = series.slots,
                         format = series.spec.format,
                         lowerIsBetter = series.spec.lowerIsBetter,
                         lineColor = colors.forForm(form),
@@ -272,10 +295,10 @@ fun FormDetailScreen(
                         title = volumeAll.spec.label,
                         subtitle = chartSubtitle(volume, granularity),
                         series = volume,
-                        emptyTitle = "Nothing in this window",
-                        emptyHint = "Pick a longer period, or log a session and it lands here.",
+                        emptyTitle = WINDOW_EMPTY_TITLE,
+                        emptyHint = WINDOW_EMPTY_HINT,
                     ) { series ->
-                        BarChart(points = series.points, format = series.spec.format)
+                        BarChart(slots = series.slots, format = series.spec.format)
                     }
                 }
             }
@@ -285,15 +308,23 @@ fun FormDetailScreen(
     }
 }
 
+/**
+ * What a metric that exists but has nothing in THIS window says. The window is the thing to
+ * change, and saying so is different from saying the metric has never been recorded.
+ */
+private const val WINDOW_EMPTY_TITLE = "Nothing in this window"
+private const val WINDOW_EMPTY_HINT =
+    "Pick a longer period, or log a session and it lands here."
+
 /** A chart in its card, or the reason there is no chart. */
 @Composable
 private fun ChartCard(
     title: String,
     subtitle: String,
-    series: FormSeries?,
+    series: SeriesOnAxis?,
     emptyTitle: String,
     emptyHint: String,
-    chart: @Composable (FormSeries) -> Unit,
+    chart: @Composable (SeriesOnAxis) -> Unit,
 ) {
     val colors = LocalGachiColors.current
     if (series == null || series.isEmpty) {
@@ -316,7 +347,7 @@ private fun ChartCard(
                 Text(subtitle, fontSize = 11.sp, color = colors.inkMuted)
             }
             // one point is a dot, not a trend: say so rather than drawing a chart of it
-            if (series.points.size == 1) {
+            if (series.filled == 1) {
                 Text(
                     "Only one entry in this window - not a trend yet.",
                     fontSize = 12.sp,
@@ -420,9 +451,9 @@ private fun periodNote(period: Period, granularity: Granularity): String =
  * somewhere: bare tick numbers are exactly the "chart without labelled axes" complaint
  * this screen was rewritten to fix.
  */
-private fun chartSubtitle(series: FormSeries?, granularity: Granularity): String {
+private fun chartSubtitle(series: SeriesOnAxis?, granularity: Granularity): String {
     val unit = series?.let {
-        axisUnit(it.spec.format, it.points.maxOfOrNull { p -> p.value } ?: 0.0)
+        axisUnit(it.spec.format, it.values.maxOrNull() ?: 0.0)
     }.orEmpty()
     val width = granularityWord(granularity)
     return if (unit.isBlank()) width else "$unit - $width"
