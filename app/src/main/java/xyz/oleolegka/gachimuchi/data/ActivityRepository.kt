@@ -39,6 +39,10 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
 import xyz.oleolegka.gachimuchi.domain.bodyweightAt
 import xyz.oleolegka.gachimuchi.domain.ExerciseIdentity
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.OrderedExercise
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_ORDER_SET
+import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
@@ -330,6 +334,47 @@ class ActivityRepository(private val db: AppDatabase) {
         }
     }
 
+    /**
+     * States the order the exercises of a workout are to be done in.
+     *
+     * ── One row per drop, carrying the WHOLE order ──────────────────────────────
+     * Not "move this one after that one" — see [TYPE_WORKOUT_ORDER_SET] for the reasoning, of
+     * which the short form is that a full list merges by "last writer wins" and a sequence of
+     * moves does not. It is written on the DROP and not on every swap the finger passes
+     * through, so dragging one card the length of the list is one event and not six.
+     *
+     * The identity of each exercise is filled in from the catalog where the journal did not
+     * already carry one, so the row is as portable as this phone can make it. An exercise this
+     * database has no row for is still written, by number — it is in the workout, and leaving it
+     * out of the order would quietly move it to the bottom of the list.
+     *
+     * Returns the id of the row written, or null when [order] is empty: an order that names
+     * nothing states nothing, and writing it would only mean the next reader has one more row to
+     * fold to reach the same answer.
+     */
+    suspend fun setWorkoutExerciseOrder(workoutId: Long, order: List<ExerciseLink>): Long? {
+        if (order.isEmpty()) return null
+        val workoutUid = db.events().byId(workoutId)?.uid
+        val entries = order.map { link ->
+            OrderedExercise(
+                exerciseId = link.id,
+                exerciseUid = link.uid ?: link.id?.let { db.exercises().byId(it)?.uid },
+            )
+        }
+        return db.events().insert(
+            event(
+                type = TYPE_WORKOUT_ORDER_SET,
+                payload = payloadJson.encodeToString(
+                    WorkoutOrder(workoutId = workoutId, order = entries, workoutUid = workoutUid)
+                ),
+                // in the column as well as the payload, so one query still finds every row of a
+                // workout whatever its type — same as "exercise added" and "finished"
+                workoutId = workoutId,
+                workoutUid = workoutUid,
+            )
+        )
+    }
+
     /** Remembers the rest chosen for an exercise — see [ExerciseDao.setDefaultRest]. */
     suspend fun setDefaultRest(exerciseId: Long, restSec: Int?) =
         db.exercises().setDefaultRest(exerciseId, restSec)
@@ -487,6 +532,7 @@ class ActivityRepository(private val db: AppDatabase) {
         when (type) {
             TYPE_WORKOUT_STARTED -> payloadJson.decodeFromString<WorkoutStarted>(text)
             TYPE_WORKOUT_EXERCISE_ADDED -> payloadJson.decodeFromString<WorkoutExerciseAdded>(text)
+            TYPE_WORKOUT_ORDER_SET -> payloadJson.decodeFromString<WorkoutOrder>(text)
             else -> formFromEvent(type, text)
         }
     }
