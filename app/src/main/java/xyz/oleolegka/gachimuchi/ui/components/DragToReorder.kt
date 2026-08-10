@@ -67,6 +67,21 @@ class ReorderState internal constructor(private val listState: LazyListState) {
     /** Told the whole order the card in hand now implies. The caller owns the list. */
     internal var onOrder: (List<String>) -> Unit = {}
 
+    /**
+     * Which GROUP a row belongs to, or the same answer for every row when the caller has none
+     * to draw — the default, which makes this class behave exactly as it did before groups
+     * existed.
+     *
+     * A card may be carried to another slot but never into another group: [start] measures
+     * where its own group begins and ends among the rows on screen, and [drag] refuses to
+     * report a slot outside it. Two callers use this today for two different reasons to draw
+     * the same rule — a workout's active and finished cards must never mix (owner's decision,
+     * §14.2) — but the rule itself belongs here rather than at either call site, because "stay
+     * inside your own group" is exactly the same arithmetic [drag] already does to stay inside
+     * the list.
+     */
+    internal var groupOf: (String) -> Any? = { null }
+
     /** The row in the hand, or null when nothing is being dragged. */
     var draggedKey: String? by mutableStateOf(null)
         private set
@@ -76,6 +91,12 @@ class ReorderState internal constructor(private val listState: LazyListState) {
 
     /** The order the rows were in at that moment — what a new arrangement is built out of. */
     private var picked: List<String> = emptyList()
+
+    /**
+     * The span of [picked] the card in hand may move within — see [groupOf]. Always covers at
+     * least the card's own starting slot, so it is never empty.
+     */
+    private var groupBounds: IntRange = IntRange.EMPTY
 
     private var startOffset = 0
     private var startSize = 0
@@ -99,6 +120,11 @@ class ReorderState internal constructor(private val listState: LazyListState) {
         startSize = info.size
         travelled = 0f
         draggedKey = key
+        // measured against THIS snapshot, same as everything else start() fixes for the
+        // gesture — see the class header on why nothing here re-reads the list mid-drag
+        val group = groupOf(key)
+        val ownGroup = picked.indices.filter { groupOf(picked[it]) == group }
+        groupBounds = ownGroup.first()..ownGroup.last()
     }
 
     /** Puts the row down. The caller decides what to do with the order it has been left with. */
@@ -107,6 +133,7 @@ class ReorderState internal constructor(private val listState: LazyListState) {
         travelled = 0f
         slots = emptyList()
         picked = emptyList()
+        groupBounds = IntRange.EMPTY
     }
 
     /** Moves the row by [deltaY] pixels and states the order that now implies. */
@@ -118,8 +145,12 @@ class ReorderState internal constructor(private val listState: LazyListState) {
 
         val centre = startOffset + travelled + startSize / 2f
         // the last slot whose middle the card's middle has got past, and the first slot when it
-        // has got past none of them — which is the clamp at the top of the list
-        val to = slots.indexOfLast { (offset, size) -> offset + size / 2f <= centre }.coerceAtLeast(0)
+        // has got past none of them — which is the clamp at the top of the list; groupBounds
+        // clamps it a second time to the card's own group, which is a stricter version of the
+        // same rule and never wider than the list-wide one
+        val to = slots.indexOfLast { (offset, size) -> offset + size / 2f <= centre }
+            .coerceAtLeast(0)
+            .coerceIn(groupBounds)
         if (to == from) return
 
         val wanted = picked.moved(from, to)
@@ -157,11 +188,14 @@ fun rememberReorderState(
     listState: LazyListState,
     keys: () -> List<String>,
     onOrder: (List<String>) -> Unit,
+    /** See [ReorderState.groupOf]. Defaulted to "everything is one group" — today's behaviour. */
+    groupOf: (String) -> Any? = { null },
 ): ReorderState {
     val state = remember(listState) { ReorderState(listState) }
     SideEffect {
         state.keys = keys
         state.onOrder = onOrder
+        state.groupOf = groupOf
     }
     return state
 }

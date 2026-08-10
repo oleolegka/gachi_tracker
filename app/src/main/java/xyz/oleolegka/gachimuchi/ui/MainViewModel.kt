@@ -360,6 +360,35 @@ class MainViewModel(
         viewModelScope.launch { repo.finishWorkout(workoutId) }
     }
 
+    /**
+     * Marks one CARD done — see [ActivityRepository.finishWorkoutExercise] — and stops timing
+     * its rest.
+     *
+     * The two are one action from here, and that is a decision worth stating rather than
+     * leaving implicit: a card that no longer offers a "log a set" button has nothing left
+     * for a countdown to be FOR, and a beep arriving under a card the user has just declared
+     * done reads as the app disagreeing with them. Nothing is lost by dismissing rather than
+     * pausing it — a floor is only ever "not before" a NEXT set, and the next set on this card
+     * starts a fresh one the same way it always has, finished or not.
+     */
+    fun finishWorkoutExercise(workoutId: Long, exercise: ExerciseLink, side: HoldSide? = null) {
+        exercise.id?.let { timer.floors.dismiss(it, side?.code) }
+        viewModelScope.launch { repo.finishWorkoutExercise(workoutId, exercise, side) }
+    }
+
+    /**
+     * Puts a card that was marked done back among the active ones, by deleting the event that
+     * said it was finished — see [ActivityRepository.unfinishWorkoutExercise].
+     *
+     * NOTHING is restarted here, and that is deliberate: the rest countdown dismissed on the
+     * way in measured a pause that is now minutes in the past, and starting it again would put
+     * a number on the screen that describes nothing. The next set on this card starts a fresh
+     * one, exactly as it does for a card that was never finished at all.
+     */
+    fun unfinishWorkoutExercise(eventId: Long) {
+        viewModelScope.launch { repo.unfinishWorkoutExercise(eventId) }
+    }
+
     // --- celebration -------------------------------------------------------------------
     //
     // The ViewModel only says WHAT happened; whether anything is shown, and which picture,

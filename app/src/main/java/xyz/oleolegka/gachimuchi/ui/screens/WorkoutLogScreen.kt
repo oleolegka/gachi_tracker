@@ -16,7 +16,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -50,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.MAX_STEP_SEC
@@ -231,6 +234,24 @@ data class WorkoutLogActions(
      * leading to one run that cannot say which hand it counted.
      */
     val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?, side: HoldSide?) -> Unit,
+
+    /**
+     * Mark one CARD done — see `ActivityRepository.finishWorkoutExercise` (§14.2).
+     *
+     * A status and not a lock, the same rule [finish] follows for the whole workout: the card
+     * keeps everything already on it and can still be written into. What changes is that the
+     * card stops offering to take a tap, collapses, and joins the finished group above every
+     * active card.
+     */
+    val finishExercise: (exercise: ExerciseLink, side: HoldSide?) -> Unit,
+
+    /**
+     * Undo [finishExercise] for one card: deletes the "card finished" event named by the
+     * block itself — the same reversal every other entry in this app gets, and why this asks
+     * for an id rather than an exercise: the card the screen is holding already has the one
+     * event that made it finished.
+     */
+    val unfinishExercise: (eventId: Long) -> Unit,
 
     /** Go back to the set already running. It has never stopped; this only shows it again. */
     val openConductor: () -> Unit,
