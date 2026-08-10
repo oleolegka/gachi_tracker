@@ -81,6 +81,15 @@ enum class RunOrigin {
  * see at a glance which set was cut short. [restAfterSec] is the pause the program actually
  * put between this set and the next one — known exactly, unlike the pause the session feed
  * has to derive from the gap between two writes, which is why it is worth recording.
+ *
+ * [incomplete] is the same mark [LoadedSet.incomplete] is everywhere else — "the reps happened
+ * but the target was not carried through" — and it lives here rather than being asked for
+ * separately once the sets are written, because the run knows nothing about which effort fell
+ * short; only the person who was on the bar does, and
+ * [xyz.oleolegka.gachimuchi.ui.components.RunLogDialog] is where they say so, one row at a
+ * time, the same dialog where they already correct the rep count. OFF for every set
+ * the timer produces: whether an effort was carried through is not something the timer counted
+ * and not something worth guessing at.
  */
 @Serializable
 data class CompletedSet(
@@ -89,6 +98,7 @@ data class CompletedSet(
     @SerialName("planned_reps") val plannedReps: Int,
     @SerialName("work_sec") val workSec: Int,
     @SerialName("rest_after_sec") val restAfterSec: Int?,
+    @SerialName("incomplete") val incomplete: Boolean = false,
 )
 
 /**
@@ -335,6 +345,10 @@ private fun isoDateOf(wallMs: Long, zone: ZoneId): String =
  * card was this run started from", not asked again here. A run with no side (the ordinary
  * two-handed case, or one started from the timer tab rather than a card) leaves it null, the
  * same as an entry card with nothing to ask.
+ *
+ * [CompletedSet.incomplete] is carried onto its own [HoldSet] and nothing else's — a fingerboard
+ * session is six hangs and a lifter who fell off the fourth said so about the fourth, not about
+ * the other five (see [xyz.oleolegka.gachimuchi.ui.components.RunLogDialog]).
  */
 fun holdSetsFromRun(
     exercise: ExerciseRef,
@@ -353,6 +367,7 @@ fun holdSetsFromRun(
             reps = set.reps,
             holdSec = set.workSec.toDouble(),
             restAfterSec = if (index < live.lastIndex) set.restAfterSec?.toDouble() else null,
+            incomplete = set.incomplete,
             side = side,
         )
     }
