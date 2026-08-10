@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -82,42 +83,51 @@ class AmendmentFlowTest {
         val bench = ref("Bench press")
         val eventId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), attachToWorkout = false)
 
-        assertNotNull(repo.amendEntry(eventId, fields("reps" to 8, "weight_kg" to 62.5)))
+        val newId = repo.amendEntry(eventId, fields("reps" to 8, "weight_kg" to 62.5))
+        assertNotNull(newId)
+        assertNotEquals("the correction is a NEW row, not the old one rewritten", eventId, newId)
 
         val set = strengthSetsOfExercise(repo.allEvents(), bench.link).single()
         assertEquals(8, set.reps)
         assertEquals(62.5, set.weightKg!!, 1e-9)
-        // and the correction is an APPEND: the set and the amendment are two rows
-        assertEquals(2, repo.eventCount())
+        // the original, the new full version and the marker superseding the original: three rows
+        assertEquals(3, repo.eventCount())
     }
 
     @Test
-    fun `a whole form can be handed in and the exercise it names is ignored`() = runTest {
+    fun `a whole form can be handed in, exercise and all - moving a set is a deletion and a new entry now`() = runTest {
         val bench = ref("Bench press")
         val squat = ref("Squat")
         val eventId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), attachToWorkout = false)
 
-        // the editor holds a filled-in form, not a diff, and it necessarily names an exercise.
-        // Handing in the WRONG exercise on purpose: it must be dropped rather than obeyed.
+        // the editor never builds a candidate naming a different exercise (EntryEditorDialog),
+        // but the repository itself no longer refuses one: a full rewrite protects nothing an
+        // old patch onto the SAME row's identity needed protecting, and this is now exactly the
+        // "delete it, log it again correctly" act TYPE_ENTRY_AMENDED's own KDoc always asked for
         repo.amendEntry(eventId, strengthSetOf(squat, day, reps = 3, weightKg = 90.0))
 
         val events = repo.allEvents()
-        assertTrue("the set must not have moved to the other exercise", strengthSetsOfExercise(events, squat.link).isEmpty())
-        val set = strengthSetsOfExercise(events, bench.link).single()
+        assertTrue("the original stays under its own exercise, superseded rather than rewritten", strengthSetsOfExercise(events, bench.link).isEmpty())
+        val set = strengthSetsOfExercise(events, squat.link).single()
         assertEquals(3, set.reps)
         assertEquals(90.0, set.weightKg!!, 1e-9)
-        assertEquals("Bench press", set.exercise)
+        assertEquals("Squat", set.exercise)
+        // the original is still there, unread but not gone - includeDeleted still finds it
+        assertEquals(2, readActivities(events, includeDeleted = true).size)
     }
 
     @Test
-    fun `an amendment that would move a set to another exercise is refused`() = runTest {
+    fun `patching just the exercise id through the JsonObject overload is no longer refused either`() = runTest {
         val bench = ref("Bench press")
         val eventId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), attachToWorkout = false)
 
-        assertThrows(IllegalArgumentException::class.java) {
-            kotlinx.coroutines.runBlocking { repo.amendEntry(eventId, fields("exercise_id" to 99)) }
-        }
-        assertEquals("nothing may have been written", 1, repo.eventCount())
+        // nothing this app ships does this (recordActualRest and renameWorkout never touch an
+        // exercise or workout key) - it is exercised here only to document that the check is
+        // gone, on purpose, per the model change: see amendEntry's own KDoc for the risk this
+        // narrow overload still carries, unlike the whole-form one above
+        val newId = repo.amendEntry(eventId, fields("exercise_id" to 99))
+        assertNotNull(newId)
+        assertEquals(3, repo.eventCount())
     }
 
     @Test

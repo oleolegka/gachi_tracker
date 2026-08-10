@@ -560,7 +560,7 @@ class WorkoutFlowTest {
     @Test
     fun `a floor's measured rest lands on the set before it, not on the gap between writes`() = runTest {
         val bench = ref("Bench press", ExerciseForm.STRENGTH)
-        val firstId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
 
         /*
          * Standing in for MainViewModel.addSet: a floor had genuinely been counting down for
@@ -572,7 +572,10 @@ class WorkoutFlowTest {
         repo.recordActualRest(bench.link, 90.0)
         repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5))
 
-        val first = readActivities(repo.allEvents()).single { it.id == firstId }.form as StrengthSet
+        // amending the first set writes a NEW row under a NEW id, so it is found by what it
+        // says rather than by the id it no longer has (domain/Amendments.kt's full-version model)
+        val first = readActivities(repo.allEvents()).first().form as StrengthSet
+        assertEquals(60.0, first.weightKg!!, 1e-9)
         assertEquals(90.0, first.restAfterSec!!, 1e-9)
 
         // and the session feed - what the screen actually draws - reads the same number,

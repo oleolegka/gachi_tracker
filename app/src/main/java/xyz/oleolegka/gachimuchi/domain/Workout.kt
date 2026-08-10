@@ -636,8 +636,17 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      * the sets went through readActivities and were dropped, the "exercise added" rows did not
      * go through anything at all. liveEvents is idempotent, so handing it on costs nothing.
      */
-    val journal = liveEvents(events)
-    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }
+    val view = journalView(events)
+    val journal = events.mapNotNull { view.revised(it) }
+    /*
+     * [workoutId] may name a `workout_started` row that has since been CORRECTED — its own date
+     * or name amended, which writes a new row under a new id (see domain/Amendments.kt's header
+     * on rows other rows point at by uid). A caller holding the id from before that correction
+     * — every screen that opened this workout and kept its id around — must still find it, so
+     * the id is resolved forward the same way a child's `workout_id` column already is.
+     */
+    val resolvedId = view.canonicalId(workoutId)
+    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == resolvedId }
         ?: return null
 
     // parsed once: readActivities is what drops deleted sets and unreadable payloads, and
@@ -851,8 +860,11 @@ private fun reordered(
  * export.
  */
 fun workoutEventIds(events: List<JournalEvent>, workoutId: Long): List<Long> {
-    val journal = liveEvents(events)
-    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }?.first
+    val view = journalView(events)
+    val journal = events.mapNotNull { view.revised(it) }
+    // see buildWorkout for why the incoming id has to be resolved forward first
+    val resolvedId = view.canonicalId(workoutId)
+    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == resolvedId }?.first
         ?: return emptyList()
     return listOf(startRow.id) +
         journal.filter { it.id != startRow.id && it.workoutRef()?.matches(startRow) == true }

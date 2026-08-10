@@ -22,6 +22,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.journalView
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
@@ -576,13 +577,36 @@ class ActivityRepository(private val db: AppDatabase) {
      * should do nothing rather than crash.
      */
     suspend fun deleteEntry(eventId: Long): Long? {
-        val uid = db.events().byId(eventId)?.uid ?: return null
+        val target = currentVersionOf(eventId) ?: return null
         return db.events().insert(
             event(
                 type = TYPE_ENTRY_DELETED,
-                payload = payloadJson.encodeToString(EntryDeleted(targetUid = uid)),
+                payload = payloadJson.encodeToString(EntryDeleted(targetUid = target.uid)),
             )
         )
+    }
+
+    /**
+     * The row [eventId] names, resolved forward to whatever is CURRENTLY live if it has since
+     * been corrected.
+     *
+     * ── Why a numeric id is not enough on its own any more ──────────────────────
+     * A caller can hold this id from before the row it names was corrected — a workout screen
+     * that opened workout #7 and kept that number around is the case that matters, because
+     * [renameWorkout] and a date correction both write a NEW start row under a NEW id (see
+     * domain/Amendments.kt's header, "A correction is now a whole new row"). Acting on the OLD
+     * id directly — as [db.events][xyz.oleolegka.gachimuchi.data.db.EventDao.byId] alone would,
+     * since the old row is never removed from the table — would supersede the row that is
+     * ALREADY superseded, leaving the truly current one untouched by the very action aimed at
+     * it. [xyz.oleolegka.gachimuchi.domain.JournalView.canonicalUid] is the fold that already
+     * knows the current end of that chain; this is [deleteEntry] and [amendEntry] asking it
+     * before deciding what "the row named by [eventId]" means.
+     */
+    private suspend fun currentVersionOf(eventId: Long): JournalEvent? {
+        val raw = db.events().byId(eventId)?.toJournalEvent() ?: return null
+        val events = allEvents()
+        val canonical = journalView(events).canonicalUid(raw.uid)
+        return if (canonical == raw.uid) raw else events.firstOrNull { it.uid == canonical } ?: raw
     }
 
     /**
@@ -610,7 +634,7 @@ class ActivityRepository(private val db: AppDatabase) {
      * name — or null when [eventId] names no row (see [deleteEntry]).
      */
     suspend fun amendEntry(eventId: Long, fields: JsonObject): Long? {
-        val target = db.events().byId(eventId) ?: return null
+        val target = currentVersionOf(eventId) ?: return null
         require(fields.isNotEmpty()) { "an amendment with no fields corrects nothing" }
         // parsed exactly as a reader would, so a patch that would make the entry unreadable
         // fails here instead of making it disappear later
@@ -661,7 +685,7 @@ class ActivityRepository(private val db: AppDatabase) {
      * making that a rule the model itself enforces.
      */
     suspend fun amendEntry(eventId: Long, updated: ActivityForm): Long? {
-        val target = db.events().byId(eventId) ?: return null
+        val target = currentVersionOf(eventId) ?: return null
         return writeNewVersion(target, updated.type, updated.toPayload())
     }
 
@@ -675,7 +699,7 @@ class ActivityRepository(private val db: AppDatabase) {
      * not by the table), so the marker names a real row from the moment it exists — there is no
      * window where the target is dead and nothing yet stands in its place.
      */
-    private suspend fun writeNewVersion(target: EventEntity, type: String, payload: String): Long {
+    private suspend fun writeNewVersion(target: JournalEvent, type: String, payload: String): Long {
         val newVersion = event(type = type, payload = payload, workoutId = target.workoutId, workoutUid = target.workoutUid)
         val newId = db.events().insert(newVersion)
         db.events().insert(
