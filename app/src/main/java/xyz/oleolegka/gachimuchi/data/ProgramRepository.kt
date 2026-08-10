@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.data
 
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
@@ -75,8 +76,16 @@ class ProgramRepository(private val db: AppDatabase) {
      * ever shown a field that would then do nothing, but the refusal lives HERE as well, on
      * the same reasoning [saveSlot]'s own KDoc gives for validating at both ends — a caller
      * that reaches this method some other way must not be able to walk around the rule.
+     *
+     * ── One program, one transaction ──────────────────────────────────────────────
+     * Every branch below is DELETE-THEN-INSERT or INSERT-THEN-INSERT across three tables, and
+     * a process dying midway used to leave a program that briefly (or, if it happened to be the
+     * moment the phone died for good, permanently) had no groups and no blocks at all — a
+     * program the library editor would show as empty, not as the one it replaced a moment
+     * before. `withTransaction` makes the whole rewrite atomic: the old shape, or the new one,
+     * and nothing in between ever readable.
      */
-    suspend fun save(program: WorkoutProgram): Long {
+    suspend fun save(program: WorkoutProgram): Long = db.withTransaction {
         val id = if (program.id == 0L) {
             db.programs().insertProgram(
                 ProgramEntity(
@@ -140,7 +149,7 @@ class ProgramRepository(private val db: AppDatabase) {
                     }
                 }
             }
-            return program.id
+            return@withTransaction program.id
         }
 
         // only reached for an INSERT — an update returns above, frozen or not, because a
@@ -170,7 +179,7 @@ class ProgramRepository(private val db: AppDatabase) {
                 )
             }
         }
-        return id
+        id
     }
 
     suspend fun delete(id: Long) = db.programs().deleteProgram(id)
@@ -209,10 +218,18 @@ class ProgramRepository(private val db: AppDatabase) {
      * Guarded rather than idempotent-by-overwrite on purpose: if the user has edited
      * "Tabata 20:10" into their own thing, restoring the shipped version on the next
      * launch would be the app quietly undoing their work.
+     *
+     * ── All the starters, or none — the guard above is why ─────────────────────────
+     * A process dying after the third starter and before the fourth used to leave exactly
+     * three programs in the library forever: the NEXT launch reads `countPrograms() > 0` and
+     * never tries again, on the same "do not overwrite what the user may have already touched"
+     * reasoning this method exists for. There is no way to tell "three because the seed was
+     * cut short" from "three because the owner deleted the rest" after the fact, so the
+     * first launch that seeds anything has to seed everything.
      */
     suspend fun seedStartersIfEmpty() {
         if (db.programs().countPrograms() > 0) return
-        starterPrograms().forEach { save(it) }
+        db.withTransaction { starterPrograms().forEach { save(it) } }
     }
 
     private fun assemble(

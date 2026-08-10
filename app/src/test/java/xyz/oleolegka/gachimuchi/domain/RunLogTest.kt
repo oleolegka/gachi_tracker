@@ -358,6 +358,22 @@ class RunLogTest {
         assertNull(written.last().restAfterSec)
     }
 
+    /**
+     * The mark [xyz.oleolegka.gachimuchi.ui.components.RunLogDialog] now offers per row: one
+     * hang out of a whole session marked "not completed" lands on that set alone, exactly as it
+     * would from a hand-written entry — see [HoldSet.incomplete].
+     */
+    @Test
+    fun `an incomplete mark on one row carries onto that set alone`() {
+        val sets = completedSets(steps, endedAtIndex = steps.lastIndex, finished = true)
+            .map { if (it.setNumber == 3) it.copy(incomplete = true) else it }
+
+        val written = holdSetsFromRun(hangs, day, sets, addedKg = 8.0)
+
+        assertEquals(4, written.size)
+        assertEquals(listOf(false, false, true, false), written.map { it.incomplete })
+    }
+
     @Test
     fun `a set edited down to zero is not written, and the last live set carries no pause`() {
         val sets = completedSets(steps, endedAtIndex = steps.lastIndex, finished = true)
