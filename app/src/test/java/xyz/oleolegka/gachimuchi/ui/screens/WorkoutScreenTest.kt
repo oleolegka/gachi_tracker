@@ -40,6 +40,8 @@ class WorkoutScreenTest : ScreenTest() {
 
     private var continued = 0
     private var closed = 0
+    private val renamed = mutableListOf<Pair<Long, String?>>()
+    private val reopened = mutableListOf<Long>()
 
     private fun workoutScreen(
         journal: Journal,
@@ -54,6 +56,8 @@ class WorkoutScreenTest : ScreenTest() {
                 workoutId = workoutId,
                 onContinue = if (running) ({ continued++ }) else null,
                 onClose = { closed++ },
+                onRenameWorkout = { id, name -> renamed += id to name },
+                onUnfinishWorkout = { id -> reopened += id },
             )
         }
     }
@@ -219,5 +223,63 @@ class WorkoutScreenTest : ScreenTest() {
         workoutScreen(Journal(), workoutId = 404L)
 
         compose.onNodeWithText("This workout is no longer in the journal.").assertIsDisplayed()
+    }
+
+    // --- naming and reopening, from the workout's own screen (§14.3, §13) -------------------
+    //
+    // The dialog itself carries a text field, which under Robolectric never settles at this
+    // class's phone-width window (see [WorkoutEntryEditingTest]'s own header) — so the one test
+    // that actually opens it sits there, at 600 dp, and this file keeps only what a button's
+    // label and a plain click can prove without one.
+
+    @Test
+    fun `an unnamed workout offers to name it, not to rename it`() {
+        val journal = Journal()
+        workoutScreen(journal, twoExerciseWorkout(journal))
+
+        compose.onNodeWithText("Name it").assertIsDisplayed()
+        compose.onNodeWithText("Rename").assertDoesNotExist()
+    }
+
+    /**
+     * THE regression: a workout's own start row is superseded by a whole new one on every
+     * rename, and every set recorded before the rename still points at the OLD row. The screen
+     * that renamed it is still holding that old id afterwards — it is the same screen, and
+     * nothing tells it otherwise — so this is the id the resolution has to work for.
+     */
+    @Test
+    fun `renaming mid-session keeps the sets already recorded under the old id`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+
+        journal.renameWorkout(workout, "Push day", at = "18:12")
+
+        workoutScreen(journal, workout)
+
+        compose.onNodeWithText("Push day").assertIsDisplayed()
+        compose.onNodeWithText("Bench press").assertIsDisplayed()
+        compose.onNodeWithText("60 kg × 5 reps").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a finished workout offers to reopen it, and names the finish event`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        val done = journal.finishWorkout(workout, iso, at = "19:00")
+        workoutScreen(journal, workout)
+
+        compose.onNodeWithText("Reopen").performClick()
+
+        assertEquals(listOf(done), reopened)
+    }
+
+    @Test
+    fun `a workout still going offers no way to reopen it`() {
+        val journal = Journal()
+        workoutScreen(journal, twoExerciseWorkout(journal))
+
+        compose.onNodeWithText("Reopen").assertDoesNotExist()
     }
 }

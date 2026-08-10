@@ -282,6 +282,16 @@ class ActivityRepository(private val db: AppDatabase) {
     }
 
     /**
+     * Undoes [finishWorkout]: deletes its "workout finished" event, the whole-workout twin of
+     * [unfinishWorkoutExercise] and the same reversal every other entry in this app gets. A
+     * workout finished by mistake goes back to being open, everything already recorded in it
+     * untouched — there was never a lock to lift, only a mark to take back.
+     *
+     * Returns the id of the deletion, or null when [eventId] names no row here.
+     */
+    suspend fun unfinishWorkout(eventId: Long): Long? = deleteEntry(eventId)
+
+    /**
      * Marks one CARD of a workout done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. The per-card
      * sibling of [finishWorkout]: a status, not a lock, and undone by
      * [unfinishWorkoutExercise] rather than by a re-open, because there is nothing here to

@@ -20,11 +20,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
+import xyz.oleolegka.gachimuchi.domain.DraftCard
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
+import xyz.oleolegka.gachimuchi.domain.draftWorkout
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
@@ -112,6 +114,8 @@ class WorkoutLogScreenTest : ScreenTest() {
     private val undone = mutableListOf<Long>()
     /** The rows an exercise removed from the workout took with it. */
     private val removedRows = mutableListOf<List<Long>>()
+    /** Which exercise and side each removal named, alongside [removedRows]. */
+    private val removedFor = mutableListOf<Pair<Long?, HoldSide?>>()
     /** Every order this screen has stated, whole, in the order it stated them. */
     private val reordered = mutableListOf<List<OrderedCard>>()
     /** Which exercise, at which plate, for which hand — the third element is the card's own side. */
@@ -124,6 +128,7 @@ class WorkoutLogScreenTest : ScreenTest() {
     /** Cards marked done, and the finish events undone, so tests can assert on either. */
     private val finishedCards = mutableListOf<Pair<String?, HoldSide?>>()
     private val unfinished = mutableListOf<Long>()
+    private val unfinishedWorkout = mutableListOf<Long>()
 
     /** A monotonic instant the floors are placed around, so no test races a real clock. */
     private val now = 1_000_000L
@@ -155,11 +160,12 @@ class WorkoutLogScreenTest : ScreenTest() {
                     createExercise = { _, _, _, _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
-                    removeExercise = { ids -> removedRows += ids },
+                    removeExercise = { ids, exerciseId, side -> removedRows += ids; removedFor += exerciseId to side },
                     reorderExercises = { order -> reordered += order },
                     finish = { finishes++ },
                     finishExercise = { exercise, side -> finishedCards += exercise.uid to side },
                     unfinishExercise = { eventId -> unfinished += eventId },
+                    unfinishWorkout = { eventId -> unfinishedWorkout += eventId },
                     startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
                     openConductor = { conductorOpened++ },
                     close = { closed++ },
@@ -167,6 +173,40 @@ class WorkoutLogScreenTest : ScreenTest() {
                 liveExerciseId = liveExerciseId,
                 readySummary = readySummary,
                 onDismissSummary = { summaryDismissed++ },
+                nowMs = now,
+            )
+        }
+    }
+
+    /**
+     * The draft path (§13.1): no workout in the journal at all, only staged cards the screen
+     * is handed straight — there is no [Journal] behind this one on purpose, since a draft by
+     * definition has written nothing yet.
+     */
+    private fun showDraft(cards: List<DraftCard> = emptyList()) {
+        val state = UiState(exercises = catalog, loading = false)
+        screen {
+            WorkoutLogScreen(
+                state = state,
+                workoutId = null,
+                draftWorkout = draftWorkout(iso, null, cards, state::linkOf),
+                settings = TimerSettings(),
+                floors = emptyList(),
+                actions = WorkoutLogActions(
+                    addExercise = { id, rest, side -> added += Triple(id, rest, side) },
+                    createExercise = { _, _, _, _, _ -> },
+                    addSet = { form -> logged += form },
+                    undoSet = { id -> undone += id },
+                    removeExercise = { ids, exerciseId, side -> removedRows += ids; removedFor += exerciseId to side },
+                    reorderExercises = { order -> reordered += order },
+                    finish = { finishes++ },
+                    finishExercise = { exercise, side -> finishedCards += exercise.uid to side },
+                    unfinishExercise = { eventId -> unfinished += eventId },
+                    unfinishWorkout = { eventId -> unfinishedWorkout += eventId },
+                    startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
+                    openConductor = { conductorOpened++ },
+                    close = { closed++ },
+                ),
                 nowMs = now,
             )
         }
@@ -644,8 +684,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         show(journal, workout)
 
         compose.onNodeWithText("Fri 7 Aug - 1 exercise, 2 sets - finished 19:42").assertIsDisplayed()
-        // the button says the state rather than offering it again
-        compose.onNodeWithText("Finished").assertIsDisplayed()
+        // the button offers the way back rather than a dead label — see "Reopen" below (§13)
+        compose.onNodeWithText("Reopen").assertIsDisplayed()
     }
 
     /** And an unfinished one says nothing about an end it has not reached. */
@@ -843,6 +883,33 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Remove").performClick()
         assertEquals(listOf(listOf(2L, 4L, 5L)), removedRows)
+        // named by exercise and side too — see the next test for what that is for
+        assertEquals(listOf(bench.id to null), removedFor)
+    }
+
+    /**
+     * A second type of row a card can own was added ([TYPE_WORKOUT_EXERCISE_FINISHED]) and it
+     * was left out of the removal here for a day before being caught — the exact class of bug
+     * this pins: a new kind of event a card can carry has to be added to the removal by hand,
+     * and nothing stops a THIRD one from being forgotten the same way. Its own row, [addedRows]
+     * and the SETS are the three sources today; this test fails the moment any one of the three
+     * is dropped from the sum.
+     */
+    @Test
+    fun `removing a finished card takes its own finish row with it, or a ghost is left behind`() {
+        val journal = Journal()
+        val workout = supersetWorkout(journal)
+        val done = journal.finishCard(workout, iso, bench, at = "18:20")
+        show(journal, workout)
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Remove from this workout").performClick()
+        settle()
+        compose.onNodeWithText("Remove").performClick()
+
+        // 2 = added, 4 and 5 = the two sets, and `done` = the "card finished" row itself
+        assertEquals(listOf(listOf(2L, 4L, 5L, done)), removedRows)
     }
 
     /** An exercise added and never done takes only its own row, and says so. */
@@ -1012,5 +1079,99 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Remove from this workout").assertExists()
         assertTrue("a press that never moved is not a reordering", reordered.isEmpty())
+    }
+
+    // --- reopening a workout that was finished too soon (§13) -------------------------------
+
+    @Test
+    fun `finishing offers to undo it, right where the button was`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Finish").performClick()
+        assertEquals(1, finishes)
+    }
+
+    @Test
+    fun `a finished workout offers Reopen instead of Finish, and names the finish event`() {
+        val journal = Journal()
+        val workout = supersetWorkout(journal)
+        val done = journal.finishWorkout(workout, iso, at = "19:00")
+        show(journal, workout)
+
+        compose.onNodeWithText("Finish").assertDoesNotExist()
+        compose.onNodeWithText("Reopen").performClick()
+
+        assertEquals(listOf(done), unfinishedWorkout)
+    }
+
+    // --- the workout that has not started yet (§13.1) ----------------------------------------
+    //
+    // No [Journal] behind any of these: a draft is exactly the state of having written
+    // nothing at all, which is the whole point of it existing.
+
+    @Test
+    fun `a draft offers to start the workout, not to finish it`() {
+        showDraft()
+
+        compose.onNodeWithText("Start workout").assertIsDisplayed()
+        compose.onNodeWithText("Finish").assertDoesNotExist()
+        compose.onNodeWithText("Reopen").assertDoesNotExist()
+    }
+
+    /**
+     * A staged card draws exactly like a real one — this is [draftWorkout] doing its job of
+     * shaping the draft as a [xyz.oleolegka.gachimuchi.domain.Workout] the screen already knows
+     * how to draw, rather than a second layout this file would have to keep in step with the
+     * first one.
+     */
+    @Test
+    fun `staged cards are drawn with the rest they were given`() {
+        showDraft(listOf(DraftCard(bench.id, 150), DraftCard(abs.id, 90)))
+
+        compose.onNodeWithText("Bench press").assertIsDisplayed()
+        compose.onNodeWithText("rest 2:30").assertIsDisplayed()
+        compose.onNodeWithText("Abs").assertIsDisplayed()
+        compose.onNodeWithText("rest 1:30").assertIsDisplayed()
+    }
+
+    /**
+     * THE explicit button §13.1 asks for. It sits where "Finish" always has — see
+     * [WorkoutLogActions.finish] — because turning a draft into a real workout and closing a
+     * real one are exactly the two things this one slot on the top bar has ever done, one at a
+     * time, never both at once.
+     */
+    @Test
+    fun `the button that starts a draft is the same slot Finish always was`() {
+        showDraft(listOf(DraftCard(bench.id, 150)))
+
+        compose.onNodeWithText("Start workout").performClick()
+        assertEquals(1, finishes)
+    }
+
+    @Test
+    fun `a staged card cannot be marked done - there is no workout yet to finish it in`() {
+        showDraft(listOf(DraftCard(bench.id, 150)))
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+
+        compose.onNodeWithText("Mark as done").assertDoesNotExist()
+        compose.onNodeWithText("Remove from this workout").assertExists()
+    }
+
+    /** Removing a staged card has no rows to name — there is nothing in the journal yet. */
+    @Test
+    fun `removing a staged card names it by exercise, not by rows it never got`() {
+        showDraft(listOf(DraftCard(bench.id, 150), DraftCard(abs.id, 90)))
+
+        compose.onNodeWithText("Bench press").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Remove from this workout").performClick()
+        settle()
+        compose.onNodeWithText("Remove").performClick()
+
+        assertEquals(listOf(emptyList<Long>()), removedRows)
+        assertEquals(listOf(bench.id to null), removedFor)
     }
 }

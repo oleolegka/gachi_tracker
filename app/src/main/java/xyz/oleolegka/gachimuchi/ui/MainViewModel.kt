@@ -24,6 +24,7 @@ import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.CelebrationCue
 import xyz.oleolegka.gachimuchi.domain.CompletedSet
+import xyz.oleolegka.gachimuchi.domain.DraftCard
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
@@ -53,6 +54,7 @@ import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restHintSec
@@ -338,6 +340,114 @@ class MainViewModel(
         }
     }
 
+    // --- the workout that has not started yet (§13.1) ---------------------------------------
+    //
+    // Sketching a session ahead of time used to mean pressing "start", which wrote a real
+    // `workout_started` row an hour before the person meant to train and took the plan card
+    // off Today under it. "I did not want to start a workout, why did the app decide that I
+    // did." So the start event is now created LAZILY: adding exercises to a draft touches only
+    // this state, and nothing is written to the journal until an explicit "start workout" or
+    // the first set — see [promoteDraft].
+
+    /**
+     * A workout being sketched before it has actually begun. [cards] are staged locally and
+     * become real `workout_exercise_added` rows only when [promoteDraft] fires; nothing here
+     * is in the journal, so the plan card it came from (if any) stays exactly what it was.
+     */
+    data class WorkoutDraft(
+        val day: LocalDate,
+        val slotId: Long? = null,
+        val name: String? = null,
+        val cards: List<DraftCard> = emptyList(),
+    )
+
+    private val _draft = MutableStateFlow<WorkoutDraft?>(null)
+    val draft: StateFlow<WorkoutDraft?> = _draft.asStateFlow()
+
+    /**
+     * Opens a draft for [day] — pre-filled from [slotId]'s plan the same way
+     * [ActivityRepository.copyPlannedExercises] would fill a real workout, or empty for one
+     * started off-plan. Replaces whatever draft was open, on the same "starting one closes the
+     * last" grounds [ActivityRepository.startWorkout] already applies to real workouts.
+     */
+    fun beginDraft(day: LocalDate, slotId: Long? = null, name: String? = null) {
+        viewModelScope.launch {
+            val cards = if (slotId == null) {
+                emptyList()
+            } else {
+                val planned = repo.slotExercises(slotId)
+                val events = repo.allEvents()
+                val settings = timer.settings.value
+                planned.flatMap { entry ->
+                    val ref = state.value.refById(entry.exerciseId)
+                    val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
+                        ?: restHintSec(settings, events, ref)
+                    if (ref?.oneSided == true) {
+                        listOf(
+                            DraftCard(entry.exerciseId, rest, HoldSide.LEFT),
+                            DraftCard(entry.exerciseId, rest, HoldSide.RIGHT),
+                        )
+                    } else {
+                        listOf(DraftCard(entry.exerciseId, rest))
+                    }
+                }
+            }
+            _draft.value = WorkoutDraft(day, slotId, name, cards)
+        }
+    }
+
+    /** Stages an exercise into the draft, or — called again for one already there — changes its rest. */
+    fun updateDraftCard(exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+        val current = _draft.value ?: return
+        val without = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side }
+        _draft.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side))
+    }
+
+    /** Takes a card off the draft. There is nothing to undo in the journal — it was never written. */
+    fun removeDraftCard(exerciseId: Long, side: HoldSide? = null) {
+        val current = _draft.value ?: return
+        _draft.value = current.copy(cards = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side })
+    }
+
+    /** States the draft's order — the same shape a real workout's [setWorkoutExerciseOrder] does. */
+    fun reorderDraftCards(order: List<OrderedCard>) {
+        val current = _draft.value ?: return
+        val reordered = order.mapNotNull { entry ->
+            current.cards.firstOrNull { it.exerciseId == entry.exercise.id && it.side == entry.side }
+        }
+        _draft.value = current.copy(cards = reordered)
+    }
+
+    /** Leaves the draft behind without starting anything — closing the screen before either did. */
+    fun discardDraft() {
+        _draft.value = null
+    }
+
+    /**
+     * Turns the draft into a real workout: the start event, then every staged card's own
+     * "added" row — the two writes [ActivityRepository.startWorkout] and
+     * [ActivityRepository.addExerciseToWorkout] always were, just no longer made in advance of
+     * there being anything to write them for. [then] receives the new workout's id, the same
+     * way [startWorkout] hands one back, because the caller's next move needs it — to file the
+     * set that triggered this, or simply to start showing the real workout instead of the draft.
+     *
+     * [ActivityRepository.startWorkout] itself is deliberately NOT what this calls: it also
+     * copies a plan's composition, which here would duplicate the very cards [beginDraft]
+     * already staged from that same plan.
+     *
+     * A no-op when there is no draft open — the caller raced an empty state, or promoted twice
+     * for the two things that can trigger it (the button and the first set) landing together.
+     */
+    fun promoteDraft(then: (Long) -> Unit) {
+        val current = _draft.value ?: return
+        _draft.value = null
+        viewModelScope.launch {
+            val id = repo.startWorkout(current.day.toString(), current.slotId, current.name)
+            current.cards.forEach { card -> repo.addExerciseToWorkout(id, card.exerciseId, card.restSec, card.side) }
+            then(id)
+        }
+    }
+
     /**
      * Puts an exercise into a workout at a chosen rest — and, called again for one already
      * there, changes that rest.
@@ -376,6 +486,15 @@ class MainViewModel(
      */
     fun finishWorkout(workoutId: Long) {
         viewModelScope.launch { repo.finishWorkout(workoutId) }
+    }
+
+    /**
+     * Puts a workout that was marked done back in progress, by deleting the event that said
+     * it was finished — see [ActivityRepository.unfinishWorkout]. The whole-workout twin of
+     * [unfinishWorkoutExercise]: nothing already recorded is touched, and nothing is restarted.
+     */
+    fun unfinishWorkout(eventId: Long) {
+        viewModelScope.launch { repo.unfinishWorkout(eventId) }
     }
 
     /**
@@ -616,8 +735,13 @@ class MainViewModel(
 
     fun dismissFloorSummary() = timer.floors.clearSummary()
 
-    /** Takes one rest bar off, by hand. */
-    fun dismissFloor(exerciseId: Long) = timer.floors.dismiss(exerciseId)
+    /**
+     * Takes one rest bar off, by hand — [side] names the CARD, the same as everywhere else a
+     * one-sided exercise's two cards are told apart, so taking one hand's card out of a
+     * workout does not leave the other hand's rest untouched by mistake, and does not touch
+     * the OTHER hand's own countdown either.
+     */
+    fun dismissFloor(exerciseId: Long, side: HoldSide? = null) = timer.floors.dismiss(exerciseId, side?.code)
 
     /**
      * The plate answered on the way INTO the set that is running, or null when none was.
