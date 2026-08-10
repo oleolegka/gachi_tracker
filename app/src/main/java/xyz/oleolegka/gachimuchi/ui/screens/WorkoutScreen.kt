@@ -3,8 +3,10 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -171,16 +173,28 @@ fun WorkoutScreen(
             )
         },
         bottomBar = {
+            /*
+             * Scaffold gives the bottom bar slot no window insets of its own: it only turns
+             * whatever this composes to into the content's bottom padding (see Material3's
+             * Scaffold source — `bottom = bottomBarHeight ?: insets`, and that fallback to
+             * insets only fires when NOTHING is composed here at all). So the navigation bar is
+             * read here, once, whichever branch runs — including the one below with no button,
+             * where skipping it would leave the list's own fixed bottom padding as the only
+             * thing between the last row and the system bar on three-button navigation.
+             */
             if (onContinue != null) {
                 Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                     Button(
                         onClick = onContinue,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .navigationBarsPadding()
                             .padding(horizontal = 15.dp, vertical = 10.dp)
                             .heightIn(min = 52.dp),
                     ) { Text("Continue this workout", style = MaterialTheme.typography.titleMedium) }
                 }
+            } else {
+                Spacer(Modifier.navigationBarsPadding())
             }
         },
     ) { padding ->
