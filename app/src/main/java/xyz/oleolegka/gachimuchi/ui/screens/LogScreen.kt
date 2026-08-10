@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -427,7 +428,17 @@ private fun EntryPanel(
     val colors = LocalGachiColors.current
     Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            /*
+             * This panel IS the Scaffold's bottomBar, not a sheet drawn over the screen, and
+             * Scaffold gives the bottom bar slot no window insets of its own (it only turns
+             * whatever this composes to into the content's bottom padding) -- so the system
+             * navigation bar has to be read here, once. See WorkoutLogScreen's own bottom bar
+             * for the same reasoning, and why this stays correct on gesture navigation too:
+             * navigationBarsPadding reads the real inset instead of a guessed constant.
+             */
+            modifier = Modifier.fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             HorizontalDivider(color = colors.grid)
