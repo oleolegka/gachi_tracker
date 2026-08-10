@@ -638,33 +638,12 @@ fun recordsOf(
      */
     oneSided: Boolean = false,
 ): List<ExerciseRecord> = when (form) {
-    ExerciseForm.STRENGTH -> listOfNotNull(
-        strengthRecord(activities, exercise),
-        heaviestSet(activities, exercise),
-    )
+    ExerciseForm.STRENGTH -> strengthRecord(activities, exercise, oneSided) +
+        heaviestSet(activities, exercise, oneSided)
 
     ExerciseForm.HOLD -> holdRecord(activities, exercise, oneSided)
 
     else -> emptyList()
-}
-
-/**
- * The heaviest single set of a strength exercise, with its date. A second axis next to
- * the estimated 1RM: the 1RM record can be taken by a light-and-many set, and "the most I
- * have ever picked up" is a different question that lifters actually ask.
- */
-fun heaviestSet(activities: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
-    val weighted = activities.mapNotNull { ev ->
-        (ev.form as? StrengthSet)
-            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null && !it.warmup }
-            ?.let { it to ev.opDate }
-    }
-    if (weighted.isEmpty()) return null
-    val (best, day) = weighted.maxBy { it.first.weightKg!! }
-    return ExerciseRecord(
-        exercise, RecordHit.Axis.WEIGHT_AT_REPS, best.weightKg!!, day,
-        "heaviest set ${fmtNum(best.weightKg)} kg x ${best.reps}",
-    )
 }
 
 /**
