@@ -12,6 +12,7 @@ import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.ImportReport
 import xyz.oleolegka.gachimuchi.domain.JournalFile
+import xyz.oleolegka.gachimuchi.domain.journalCsv
 import xyz.oleolegka.gachimuchi.domain.PortableEvent
 import xyz.oleolegka.gachimuchi.domain.PortablePlannedExercise
 import xyz.oleolegka.gachimuchi.domain.PortableProgramRow
@@ -91,6 +92,16 @@ class JournalBackup(
             deviceId = deviceId,
         )
     }
+
+    /**
+     * The journal as a CSV table — see domain/JournalCsv.kt for what that means and why it is
+     * a different read from [export]. A thin bridge and nothing more: the two Room reads a
+     * pure function cannot do itself, handed straight to [xyz.oleolegka.gachimuchi.domain.journalCsv].
+     */
+    suspend fun exportCsv(): String = journalCsv(
+        events = db.events().all().map { it.toJournalEvent() },
+        catalog = db.exercises().all().map { it.toCatalogRow() },
+    )
 
     private suspend fun slotsOut(uidOfExercise: Map<Long, String>): List<PortableSlot> {
         val composition = db.slots().allExercises().groupBy { it.slotId }

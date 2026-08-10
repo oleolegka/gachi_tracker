@@ -214,6 +214,30 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         }
 
         item {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                OutlinedButton(onClick = journal.exportCsv) { Text("Export as CSV") }
+            }
+        }
+
+        item {
+            /*
+             * The JSON file above is THE backup - it is what a restore reads. This is a second,
+             * unrelated file for a different job: a table to open and read, not a copy to keep.
+             * Saying so here is the one place that matters, because a spreadsheet named
+             * "journal" sitting next to a JSON backup of the same name invites the wrong one to
+             * be trusted as the copy.
+             */
+            Text(
+                "A table of the training itself - one row per set, dates and numbers a " +
+                    "spreadsheet can read. It shows what the app shows: a deleted entry or a " +
+                    "corrected one is already settled, not listed twice. There is no way back " +
+                    "from this file into the app - keep the JSON above for that.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkMuted,
+            )
+        }
+
+        item {
             Text(
                 "This device",
                 style = MaterialTheme.typography.titleMedium,
