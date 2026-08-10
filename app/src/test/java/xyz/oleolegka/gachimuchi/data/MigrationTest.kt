@@ -1060,6 +1060,30 @@ abstract class SchemaV18Database : RoomDatabase() {
 }
 
 /**
+ * Version 20: every table already matches today's [xyz.oleolegka.gachimuchi.data.db.AppDatabase]
+ * entities one for one — nothing about the schema changes at the 20 -> 21 step, only content
+ * (see MIGRATION_20_21's own KDoc) — so this reuses them directly rather than freezing a
+ * snapshot, on the same grounds [SchemaV16Database] and [SchemaV17Database] already do for the
+ * journal table specifically.
+ */
+@Database(
+    entities = [
+        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity::class,
+        xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity::class,
+    ],
+    version = 20,
+    exportSchema = false,
+)
+abstract class SchemaV20Database : RoomDatabase() {
+    abstract fun events(): LegacyEventDaoV16
+}
+
+/**
  * Migrating a phone that already has a training journal on it.
  *
  * The thing being protected is not the new tables — a mistake there fails loudly on the
@@ -3547,4 +3571,75 @@ class MigrationTest {
             val again = openCurrent()
             assertEquals(6, again.exercises().all().size)
         }
+
+    // --- version 20 -> 21: a correction becomes a whole new row instead of a patch -----------
+    //
+    // The exhaustive scenarios (two amendments, amend-then-delete, delete-then-undo, the actual
+    // rest) are in domain/AmendmentMigrationTest.kt, against the pure function directly - fast,
+    // and where the real acceptance criterion (fold before == fold after) is checked. What is
+    // worth proving here, through Room, is narrower and different: that the raw SQL wiring in
+    // MIGRATION_20_21 actually reads the table it is given and writes rows the app can open.
+
+    /**
+     * A version 20 phone with one strength set, corrected once, exactly the shape
+     * [SchemaV20Database]'s doc explains reusing the current entity for is safe to build by
+     * hand.
+     */
+    private suspend fun writeVersion20WithLegacyAmendment(): String {
+        val v20 = Room.databaseBuilder(context, SchemaV20Database::class.java, dbName).build()
+        opened = v20
+
+        val set = xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            ts = "2026-08-06T10:00:00", type = TYPE_STRENGTH_SET,
+            payload = """{"exercise":"Bench press","reps":5,"weight_kg":60.0,"exercise_id":1,""" +
+                """"op_date":"2026-08-06","exercise_key":"bench press"}""",
+        )
+        v20.events().insert(set)
+        v20.events().insert(
+            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+                ts = "2026-08-06T11:00:00", type = "entry_amended",
+                payload = """{"target_uid":"${set.uid}","fields":{"weight_kg":65.0}}""",
+            )
+        )
+        v20.close()
+        opened = null
+        return set.uid
+    }
+
+    @Test
+    fun `a legacy amendment reads as a corrected set after the upgrade, through the real repository`() = runTest {
+        val originalUid = writeVersion20WithLegacyAmendment()
+
+        val db = openCurrent()
+        val repo = ActivityRepository(db)
+        val events = repo.allEvents()
+
+        val set = readActivities(events).single().form as StrengthSet
+        assertEquals(65.0, set.weightKg!!, 1e-9)
+        assertEquals(5, set.reps)
+        // the original row is untouched forever - still in the table, superseded rather than gone
+        assertEquals(2, readActivities(events, includeDeleted = true).size)
+        assertTrue(
+            "the original's own uid must not be the live one any more",
+            readActivities(events).none { it.uid == originalUid },
+        )
+    }
+
+    @Test
+    fun `an entry nobody ever corrected costs the upgrade nothing`() = runTest {
+        val v20 = Room.databaseBuilder(context, SchemaV20Database::class.java, dbName).build()
+        opened = v20
+        v20.events().insert(
+            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+                ts = "2026-08-06T10:00:00", type = TYPE_STRENGTH_SET,
+                payload = """{"exercise":"Bench press","reps":5,"weight_kg":60.0,"exercise_id":1,""" +
+                    """"op_date":"2026-08-06","exercise_key":"bench press"}""",
+            )
+        )
+        v20.close()
+        opened = null
+
+        val db = openCurrent()
+        assertEquals("nothing appended for a row nobody amended", 1, db.events().count())
+    }
 }
