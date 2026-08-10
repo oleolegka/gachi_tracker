@@ -37,6 +37,31 @@ class LastTimeTest {
     }
 
     /**
+     * THE regression this pins: correcting a set writes a whole new row at the END of the
+     * journal (domain/Amendments.kt) even though it happened whenever the row it replaces did.
+     * "60 kg x 9, 60 kg x 8, 60 kg x 6" tells a story about how the session went; fixing a typo
+     * in the FIRST set, days later, must not silently turn it into "60 kg x 8, 60 kg x 6, 60 kg
+     * x 9" just because its own row now sits at the end of the journal.
+     */
+    @Test
+    fun `correcting the first set of a session does not move it to the end of "last time"`() {
+        val journal = Journal()
+        val first = journal.strengthSet(bench, "2026-08-05", weightKg = 60.0, reps = 9, at = "18:10")
+        journal.strengthSet(bench, "2026-08-05", weightKg = 60.0, reps = 8, at = "18:15")
+        journal.strengthSet(bench, "2026-08-05", weightKg = 60.0, reps = 6, at = "18:20")
+
+        // a typo fixed a week later: the 9 was mistyped as 90 and gets corrected back
+        journal.correctStrengthSet(
+            first, bench, "2026-08-05", weightKg = 60.0, reps = 9, writtenOn = "2026-08-12", at = "12:00",
+        )
+
+        val last = lastTimeOf(journal.events, bench.link, onOrBefore = "2026-08-12")
+
+        assertEquals("2026-08-05", last?.opDate)
+        assertEquals(listOf("60.0x9", "60.0x8", "60.0x6"), summaries(last))
+    }
+
+    /**
      * The line sits directly above a card that already lists this workout's own sets. Letting
      * them through would make it repeat, in the past tense, what the reader can see.
      */
