@@ -133,8 +133,9 @@ interface ExerciseDao {
      *
      * Turning it ON re-reads the whole history of the exercise: sets logged before it named
      * no side, and they become a defect the records report rather than hide (see
-     * [xyz.oleolegka.gachimuchi.domain.holdRecord]). Nothing is rewritten to make that go
-     * away — the old sets genuinely do not say which hand did them.
+     * [xyz.oleolegka.gachimuchi.domain.holdRecord] and
+     * [xyz.oleolegka.gachimuchi.domain.strengthRecord]). Nothing is rewritten to make that go
+     * away — the old sets genuinely do not say which side did them.
      */
     @Query("UPDATE exercises SET one_sided = :oneSided WHERE space_id = :spaceId AND id = :id")
     suspend fun setOneSided(id: Long, oneSided: Boolean, spaceId: Long = LOCAL_SPACE_ID)

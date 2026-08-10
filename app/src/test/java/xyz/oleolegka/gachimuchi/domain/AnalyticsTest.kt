@@ -52,7 +52,7 @@ class AnalyticsTest {
         assertEquals(est1rm(60.0, 5), series.points[0].value, 1e-9)
         assertEquals("2026-08-03", series.points[1].opDate)
         // the trend uses the same formula as the record, so the two cannot disagree
-        assertEquals(strengthRecord(acts(events), ExerciseLink.ofId(1))!!.value, series.best!!.value, 1e-9)
+        assertEquals(strengthRecord(acts(events), ExerciseLink.ofId(1)).single().value, series.best!!.value, 1e-9)
     }
 
     @Test
@@ -174,8 +174,8 @@ class AnalyticsTest {
         val strengthRecs = recordsOf(a, ExerciseLink.ofId(1), ExerciseForm.STRENGTH)
         assertEquals(2, strengthRecs.size)
         assertEquals("2026-08-01", strengthRecs[0].opDate)
-        assertEquals(100.0, heaviestSet(a, ExerciseLink.ofId(1))!!.value, 1e-9)
-        assertTrue(heaviestSet(a, ExerciseLink.ofId(1))!!.text.contains("heaviest set"))
+        assertEquals(100.0, heaviestSet(a, ExerciseLink.ofId(1)).single().value, 1e-9)
+        assertTrue(heaviestSet(a, ExerciseLink.ofId(1)).single().text.contains("heaviest set"))
 
         assertEquals(1, recordsOf(a, ExerciseLink.ofId(2), ExerciseForm.HOLD).size)
         assertEquals(RecordHit.Axis.HOLD_WEIGHT, recordsOf(a, ExerciseLink.ofId(2), ExerciseForm.HOLD)[0].axis)

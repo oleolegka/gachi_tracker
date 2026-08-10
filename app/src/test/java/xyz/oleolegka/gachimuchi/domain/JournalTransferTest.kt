@@ -273,6 +273,29 @@ class JournalTransferTest {
         assertEquals(loaded(original), loaded(scrambled))
     }
 
+    /**
+     * The derived "side" column used to read off [HoldSet] alone; a strength set's own side
+     * (see [LoadedSet.side]) reaches it too now, in the payload verbatim AND in this column.
+     */
+    @Test
+    fun `a strength set's side reaches both the raw payload and the derived column`() {
+        val ev = event(
+            "0198c2f0-0000-7000-8000-000000000002",
+            """{"op_date":"2026-08-07","exercise":"Pistol squat","reps":5,"weight_kg":40.0,""" +
+                """"side":"left","exercise_key":"pistol squat"}""",
+            TYPE_STRENGTH_SET,
+        )
+        val text = fileOf(listOf(ev))
+
+        val lines = text.split("\n")
+        val header = splitCsvLine(lines.first())
+        // the meta row precedes it, so pick the event row by its own event_type rather than
+        // assuming a position
+        val row = splitCsvLine(lines.drop(1).first { it.contains(TYPE_STRENGTH_SET) })
+        assertEquals("left", row[header.indexOf("side")])
+        assertTrue("the raw payload carries the field verbatim as well", row[header.indexOf("payload")].contains("\"side\":\"left\""))
+    }
+
     /** A real (quote-aware) CSV row splitter, the way any spreadsheet reads one. */
     private fun splitCsvLine(line: String): List<String> {
         val cells = ArrayList<String>()

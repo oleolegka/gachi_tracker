@@ -39,6 +39,28 @@ class FormsTest {
     }
 
     @Test
+    fun `a strength set carries a side too, the same as a hold`() {
+        val written = StrengthSet(
+            exercise = "Pistol squat", reps = 5, weightKg = 40.0, side = "left", opDate = "2026-08-06",
+        ).toPayload()
+        assertTrue(written.contains("\"side\":\"left\""))
+        val back = formFromEvent(TYPE_STRENGTH_SET, written) as StrengthSet
+        assertEquals(HoldSide.LEFT, back.sideOf)
+
+        // strict on purpose, the same way HoldSet already is — see OneSidedTest
+        assertThrows(IllegalArgumentException::class.java) {
+            StrengthSet(exercise = "Pistol squat", reps = 5, weightKg = 40.0, side = "both", opDate = "2026-08-06")
+        }
+    }
+
+    @Test
+    fun `a strength set written before sides existed names no side`() {
+        val old = """{"exercise":"Bench press","reps":5,"weight_kg":60.0,"op_date":"2026-08-06",""" +
+            """"exercise_key":"bench press"}"""
+        assertNull((formFromEvent(TYPE_STRENGTH_SET, old) as StrengthSet).sideOf)
+    }
+
+    @Test
     fun `work rest protocol is only accepted as a pair`() {
         assertThrows(IllegalArgumentException::class.java) {
             HoldSet(activity = "hangs", workSec = 7.0, opDate = "2026-08-06")

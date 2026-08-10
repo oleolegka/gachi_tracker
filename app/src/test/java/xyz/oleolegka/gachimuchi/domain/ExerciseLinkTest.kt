@@ -123,13 +123,13 @@ class ExerciseLinkTest {
             trendSeries(both, byUid, ExerciseForm.STRENGTH)!!.points,
         )
         assertEquals(
-            strengthRecord(numbersOnly, byNumber)!!.value,
-            strengthRecord(both, byUid)!!.value,
+            strengthRecord(numbersOnly, byNumber).single().value,
+            strengthRecord(both, byUid).single().value,
             1e-9,
         )
         assertEquals(
-            heaviestSet(numbersOnly, byNumber)!!.value,
-            heaviestSet(both, byUid)!!.value,
+            heaviestSet(numbersOnly, byNumber).single().value,
+            heaviestSet(both, byUid).single().value,
             1e-9,
         )
     }
@@ -160,8 +160,8 @@ class ExerciseLinkTest {
         )
         val activities = readActivities(events)
 
-        assertEquals(60.0, heaviestSet(activities, ExerciseLink(benchUid, 1))!!.value, 1e-9)
-        assertEquals(150.0, heaviestSet(activities, ExerciseLink(squatUid, 1))!!.value, 1e-9)
+        assertEquals(60.0, heaviestSet(activities, ExerciseLink(benchUid, 1)).single().value, 1e-9)
+        assertEquals(150.0, heaviestSet(activities, ExerciseLink(squatUid, 1)).single().value, 1e-9)
         // and the day shows two blocks, not one block of two
         assertEquals(2, buildSession(events, "2026-08-01").groups.size)
     }

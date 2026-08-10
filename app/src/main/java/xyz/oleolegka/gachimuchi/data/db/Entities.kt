@@ -292,11 +292,11 @@ data class ExerciseEntity(
      * hang, a pistol squat, a single-leg deadlift.
      *
      * ── Why the flag is here and the side is on the set ─────────────────────────
-     * Which hand a particular hang used is a fact about that hang
-     * ([xyz.oleolegka.gachimuchi.domain.HoldSet.side]). Whether the exercise is done one hand
-     * at a time is a fact about the exercise, and it has to be answerable BEFORE any set
-     * exists — the entry card has to know to ask which hand, and the timer has to know to
-     * announce the change of hands between sets. Neither can wait for a set to be logged.
+     * Which side a particular set used is a fact about that set
+     * ([xyz.oleolegka.gachimuchi.domain.LoadedSet.side]). Whether the exercise is done one
+     * limb at a time is a fact about the exercise, and it has to be answerable BEFORE any set
+     * exists — the entry card has to know to ask which side, and the timer has to know to
+     * announce the change of sides between sets. Neither can wait for a set to be logged.
      *
      * It is also what makes a MISSING side a defect rather than a shrug: on an exercise
      * marked one-sided, a set that named no hand is a hole in the data, and the reducers say

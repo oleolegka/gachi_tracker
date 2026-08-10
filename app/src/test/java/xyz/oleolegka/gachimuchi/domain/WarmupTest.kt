@@ -107,8 +107,8 @@ class WarmupTest {
         val activities = readActivities(events)
         val link = ExerciseLink.ofId(1)
 
-        assertEquals(est1rm(60.0, 5), strengthRecord(activities, link)!!.value, 1e-9)
-        assertEquals(60.0, heaviestSet(activities, link)!!.value, 1e-9)
+        assertEquals(est1rm(60.0, 5), strengthRecord(activities, link).single().value, 1e-9)
+        assertEquals(60.0, heaviestSet(activities, link).single().value, 1e-9)
     }
 
     @Test
@@ -162,7 +162,7 @@ class WarmupTest {
         val activities = readActivities(events)
         val trend = trendSeries(activities, ExerciseLink.ofId(1), ExerciseForm.STRENGTH)!!
         assertEquals(
-            strengthRecord(activities, ExerciseLink.ofId(1))!!.value,
+            strengthRecord(activities, ExerciseLink.ofId(1)).single().value,
             trend.best!!.value,
             1e-9,
         )

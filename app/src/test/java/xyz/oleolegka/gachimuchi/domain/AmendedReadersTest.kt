@@ -67,14 +67,14 @@ class AmendedReadersTest {
 
         // a strength record is an ESTIMATED 1RM and not the bare weight, so it is stated here
         // through the same function the reducer uses rather than as a number copied out of it
-        val before = strengthRecord(readActivities(listOf(light, heavy)), benchLink)!!
+        val before = strengthRecord(readActivities(listOf(light, heavy)), benchLink).single()
         assertEquals(est1rm(100.0, 5), before.value, 1e-9)
         assertTrue("the record should quote the set it came from", before.text.contains("100"))
 
         // the 100 was a slip of the thumb for 10.0 and gets corrected: the record has to fall
         // back to the set that is now the heaviest
         val fixed = readActivities(listOf(light, heavy, amend(heavy, "weight_kg" to JsonPrimitive(10.0))))
-        assertEquals(est1rm(60.0, 5), strengthRecord(fixed, benchLink)!!.value, 1e-9)
+        assertEquals(est1rm(60.0, 5), strengthRecord(fixed, benchLink).single().value, 1e-9)
     }
 
     @Test
@@ -83,7 +83,7 @@ class AmendedReadersTest {
         val heavy = ev(bench(100.0))
         val events = listOf(light, heavy, delete(heavy))
 
-        assertEquals(est1rm(60.0, 5), strengthRecord(readActivities(events), benchLink)!!.value, 1e-9)
+        assertEquals(est1rm(60.0, 5), strengthRecord(readActivities(events), benchLink).single().value, 1e-9)
     }
 
     // --- domain/Session.kt ---
@@ -335,7 +335,7 @@ class AmendedReadersTest {
         assertTrue(dayCards(events, emptyList(), date, date, date.atTime(23, 0)).isEmpty)
         assertTrue(activityStamps(events, day, day).isEmpty())
         assertEquals(0, activityHeatmap(events, date, date).totalActivities)
-        assertNull(strengthRecord(readActivities(events), benchLink))
+        assertTrue(strengthRecord(readActivities(events), benchLink).isEmpty())
         assertNull(lastTimeOf(events, benchLink))
         assertTrue(workoutsOn(events, day).isEmpty())
         assertFalse(events.first().isControlEvent())
