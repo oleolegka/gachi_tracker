@@ -53,7 +53,8 @@ const val JOURNAL_CSV_MIME = "text/csv"
  */
 private const val UTF8_BOM = "﻿"
 
-private val CSV_HEADER = listOf(
+/** internal rather than private so the test can name a column instead of a bare index. */
+internal val CSV_HEADER = listOf(
     "date", "workout", "exercise", "form", "side",
     "weight_kg", "added_kg", "own_weight", "reps",
     "hold_sec", "rest_after_sec", "warmup",
