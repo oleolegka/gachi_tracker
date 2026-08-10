@@ -70,6 +70,36 @@ class DayCardsTest {
     private fun weighIn(opDate: String, at: String = "07:30", kg: Double = 74.2) =
         bodyweightOf(opDate, kg).let { row(it.type, it.toPayload(), "${opDate}T$at:00") }
 
+    /**
+     * A full-version correction of [target], written the way
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry] writes one today: a whole
+     * new strength-set row inheriting [target]'s happened-at time, WRITTEN on [writtenOn] —
+     * which the caller is free to set days after [target]'s own day, exactly the case that
+     * matters here. Returns the new version and the marker that supersedes [target], both
+     * still to be appended to the events list.
+     */
+    private fun correct(
+        target: JournalEvent,
+        exercise: ExerciseRef,
+        opDate: String,
+        reps: Int = 5,
+        weightKg: Double = 60.0,
+        writtenOn: String,
+        at: String,
+    ): Pair<JournalEvent, JournalEvent> {
+        val form = strengthSetOf(exercise, opDate, reps = reps, weightKg = weightKg)
+        val newVersion = JournalEvent(
+            nextId++, "${writtenOn}T$at:00", 1, 1, form.type, form.toPayload(),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        val marker = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            newVersion.ts,
+        )
+        return newVersion to marker
+    }
+
     private fun slot(id: Long, name: String, atTime: String?, day: String, uid: String? = null) =
         Slot(
             id = id, name = name, atTime = atTime, repeatRule = REPEAT_NONE, anchorDate = day,
@@ -265,6 +295,30 @@ class DayCardsTest {
 
         assertEquals("outside a workout - 1 entry", day.cards[1].subtitle)
         assertEquals("20:00", day.cards[1].timeLabel)
+    }
+
+    /**
+     * THE regression this pins: a correction is a whole new row WRITTEN whenever the fix
+     * happens, which can be days after the training itself. Reading its clock time off that
+     * write (as domain/Schedule.kt's own backdating rule would, unchanged) drops it out of the
+     * day's time range for a reason that has nothing to do with when the set was done.
+     */
+    @Test
+    fun `correcting an entry days later does not shrink the card's time range`() {
+        val iso = today.toString()
+        val first = set(fingerboard, iso, at = "19:00")
+        val second = set(fingerboard, iso, at = "19:05")
+
+        val (fixed, marker) = correct(
+            first, fingerboard, iso, reps = 8, writtenOn = "2026-08-12", at = "12:00",
+        )
+        val day = cardsOf(listOf(first, second, fixed, marker))
+
+        val card = day.cards.single()
+        assertEquals("outside a workout - 2 entries", card.subtitle)
+        // the 19:00 entry still happened at 19:00 - fixing a typo a week later must not read
+        // as if that set had never been timed at all
+        assertEquals("19:00 - 19:05", card.timeLabel)
     }
 
     @Test

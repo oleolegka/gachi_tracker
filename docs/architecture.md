@@ -44,12 +44,19 @@ shared journal. And an amendment can in principle leave a payload unreadable, wh
 skip; the repository parses the merged result before writing and refuses, so such a row can
 only arrive from outside.
 
-## A hangboard exercise is identified by name, edge and protocol
+## A hangboard exercise is identified by name and protocol
 
-Hangs on a 20 mm edge at a 7:3 work:rest protocol and hangs on a 15 mm edge are separate
-exercises with separate histories, because they are separate training. Edge and protocol
-are columns on the exercise, not fields repeated on every set, so they cannot drift within
-one exercise.
+Hangs at a 7:3 work:rest protocol and hangs at a 10:5 protocol are separate exercises with
+separate histories, because they are separate training. The protocol is a column on the
+exercise, not a field repeated on every set, so it cannot drift within one exercise.
+
+(An earlier version of this app also made the hangboard EDGE — the hangboard lip width, in
+mm — part of that identity, with a switcher on the detail screen for hopping between
+exercises that differed only by it. Both are gone: edge was a climbing-specific value with
+no comparison this app has any business making, and it now lives only in whatever the
+exercise is named, the way it always did in speech. Schema version 18 folded any edge on
+file into the exercise's name before the column left; see `MIGRATION_17_18` in
+`data/db/AppDatabase.kt`.)
 
 The tracked variable — and therefore the personal record — is the added weight. Duration
 is fixed by the protocol, so improvement shows up as load.
@@ -108,9 +115,9 @@ and circuits, and it is as deep as an editor can go and still be usable one-hand
 
 A rest between sets is not a separate feature but a program of one step.
 
-Because an exercise already carries its protocol and edge, and the journal knows how many
-reps were done last time and how long the rests actually were, "Hangs 20 mm - 7:3" expands
-into a full interval program with nothing left to ask.
+Because an exercise already carries its protocol, and the journal knows how many reps were
+done last time and how long the rests actually were, "Hangs - 7:3" expands into a full
+interval program with nothing left to ask.
 
 ## Signals go out on the alarm stream
 
@@ -424,10 +431,6 @@ the search, or create the exercise.
   reader has to make, not a type it has to accept, so a reducer written next month can read the
   raw list and be wrong in exactly the way this one was. The defence is a test that asks every
   reader the same question in one place, which catches it and cannot prevent it.
-- **Back does not undo a hop between hold siblings.** The form detail screen can switch to
-  a sibling edge or protocol in place; back closes the screen rather than stepping back
-  through the siblings visited. That in-screen move is the one thing the navigation rule
-  does not see.
 - **A workout has no name of its own.** It borrows the name of the slot it was started
   from, resolved when the card is drawn, so renaming a planned session renames every
   workout ever started from it — back through the history. A workout started off-plan has

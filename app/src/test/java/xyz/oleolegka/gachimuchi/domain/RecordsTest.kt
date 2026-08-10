@@ -88,9 +88,9 @@ class RecordsTest {
             JournalEvent(1, "t", 1, 1, TYPE_STRENGTH_SET, set(60.0, 5, day = "2026-08-01").toPayload()),
             JournalEvent(2, "t", 1, 1, TYPE_STRENGTH_SET, set(70.0, 3, day = "2026-08-05").toPayload()),
         )
-        val record = strengthRecord(readActivities(events), ExerciseLink.ofId(1))
-        assertNotNull(record)
-        assertEquals("2026-08-05", record!!.opDate)
+        // one record and not two: nothing here names a side, so this is two-limbed work
+        val record = strengthRecord(readActivities(events), ExerciseLink.ofId(1)).single()
+        assertEquals("2026-08-05", record.opDate)
         assertEquals(est1rm(70.0, 3), record.value, 1e-9)
     }
 
@@ -106,5 +106,51 @@ class RecordsTest {
         val record = holdRecord(readActivities(events), ExerciseLink.ofId(5)).single()
         assertEquals(12.0, record.value, 1e-9)
         assertEquals("2026-08-04", record.opDate)
+    }
+
+    // --- a strength set carries a side too, the same as a hold ----------------------------
+
+    private fun sided(weight: Double?, reps: Int, side: HoldSide?, id: Long = 1, day: String = "2026-08-01") =
+        StrengthSet(
+            exercise = "Pistol squat", reps = reps, weightKg = weight,
+            side = side?.code, exerciseId = id, opDate = day,
+        )
+
+    @Test
+    fun `a strength record is judged within its own side, the same as a hold`() {
+        val prior = listOf(
+            sided(60.0, 5, HoldSide.LEFT),
+            sided(80.0, 5, HoldSide.RIGHT),
+        )
+        // the left leg's own history is beaten...
+        val left = evaluateStrengthRecord(prior, 65.0, 5, side = HoldSide.LEFT)
+        assertNotNull(left)
+        assertEquals(RecordHit.Axis.EST_1RM, left!!.axis)
+        // ...but the same weight is nowhere near the right leg's own best
+        assertNull(evaluateStrengthRecord(prior, 65.0, 5, side = HoldSide.RIGHT))
+    }
+
+    @Test
+    fun `an all-time strength record is one entry per side`() {
+        val events = listOf(
+            JournalEvent(1, "t", 1, 1, TYPE_STRENGTH_SET, sided(60.0, 5, HoldSide.LEFT, day = "2026-08-01").toPayload()),
+            JournalEvent(2, "t", 1, 1, TYPE_STRENGTH_SET, sided(80.0, 3, HoldSide.RIGHT, day = "2026-08-03").toPayload()),
+        )
+        val records = strengthRecord(readActivities(events), ExerciseLink.ofId(1))
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), records.map { it.side })
+        assertEquals(est1rm(60.0, 5), records[0].value, 1e-9)
+        assertEquals(est1rm(80.0, 3), records[1].value, 1e-9)
+    }
+
+    @Test
+    fun `the heaviest-single-set axis is split per side too`() {
+        val events = listOf(
+            JournalEvent(1, "t", 1, 1, TYPE_STRENGTH_SET, sided(60.0, 5, HoldSide.LEFT, day = "2026-08-01").toPayload()),
+            JournalEvent(2, "t", 1, 1, TYPE_STRENGTH_SET, sided(90.0, 1, HoldSide.RIGHT, day = "2026-08-03").toPayload()),
+        )
+        val records = heaviestSet(readActivities(events), ExerciseLink.ofId(1))
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), records.map { it.side })
+        assertEquals(60.0, records[0].value, 1e-9)
+        assertEquals(90.0, records[1].value, 1e-9)
     }
 }

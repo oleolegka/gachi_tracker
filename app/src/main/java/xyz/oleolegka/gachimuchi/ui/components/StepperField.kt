@@ -82,8 +82,9 @@ fun StepperField(
     }
 }
 
+/** Shared with [TimeField], which offers only the "+" half of this. */
 @Composable
-private fun StepButton(label: String, onClick: () -> Unit) {
+internal fun StepButton(label: String, onClick: () -> Unit) {
     FilledTonalButton(
         onClick = onClick,
         modifier = Modifier.size(width = 50.dp, height = 48.dp),

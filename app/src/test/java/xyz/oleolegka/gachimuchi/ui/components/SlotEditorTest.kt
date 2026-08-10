@@ -9,8 +9,10 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performTextReplacement
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -26,6 +28,8 @@ import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.exerciseEntity
+import xyz.oleolegka.gachimuchi.ui.protocolProgram
+import xyz.oleolegka.gachimuchi.ui.protocolProgramIdFor
 import xyz.oleolegka.gachimuchi.ui.slot
 import java.time.LocalDate
 
@@ -53,7 +57,7 @@ import java.time.LocalDate
  * that the dialog fits a phone: this file has nothing to say about the editor's layout at
  * 411 dp, and neither does any other test. That belongs on the list in [ScreenTest].
  */
-@Config(sdk = [34], qualifiers = "w600dp-h960dp-xhdpi")
+@Config(sdk = [34], qualifiers = "w600dp-h2400dp-xhdpi")
 class SlotEditorTest : ScreenTest() {
 
     private val day = LocalDate.parse("2026-08-07")
@@ -89,7 +93,26 @@ class SlotEditorTest : ScreenTest() {
      * field that ignored its input.
      */
     private fun type(label: String, text: String) {
+        /*
+         * Matched by "can be typed into", not by text alone. A filled Material field puts its
+         * label in a node of its OWN, next to the field, and a plain text match lands on that
+         * label - which has no focus to request, so the input fails with a message about
+         * RequestFocus rather than about the field. Asking for a node that has a set-text
+         * action can only ever find the field.
+         */
         compose.onNodeWithText(label).performTextInput(text)
+        settle()
+    }
+
+    /**
+     * Types into a [TimeField], which unlike an ordinary field carries its label in a Text of
+     * its OWN above the box. Matching by that label would land on the Text, which has no focus
+     * to give; the field is addressed by the accessible name it was given for exactly this
+     * reason (see TimeField).
+     */
+    private fun typeTime(label: String, text: String) {
+        compose.onNode(hasSetTextAction() and hasContentDescription(label))
+            .performTextInput(text)
         settle()
     }
 
@@ -100,12 +123,16 @@ class SlotEditorTest : ScreenTest() {
      * A node in the dialog's own scrolling body, brought into view first.
      *
      * The body scrolls (it is a `Column` with `verticalScroll`), so its lower half — the
-     * exercises, the problem line, the delete button — is present in the tree and outside
-     * the window. Tapping something outside the window fails, and asserting it is
-     * "displayed" fails for a reason that has nothing to do with the editor.
+     * exercises, the problem line, the delete button — used to sit outside the window.
+     *
+     * THIS NO LONGER SCROLLS TO IT, and that is not a style choice. `performScrollTo` is an
+     * animation, and this suite freezes the animation clock on purpose (see ScreenTest): a
+     * scroll that can never finish makes the test HANG rather than fail, and it takes the whole
+     * run down with it - which is exactly what it did the first time a text field was typed
+     * into here. The window is tall enough to hold the editor instead, so nothing has to move.
      */
     private fun inBody(text: String, substring: Boolean = false) =
-        compose.onNodeWithText(text, substring = substring).performScrollTo()
+        compose.onNodeWithText(text, substring = substring)
 
     /**
      * The "add an exercise" button, matched loosely because its label is padded with spaces
@@ -115,7 +142,7 @@ class SlotEditorTest : ScreenTest() {
     private fun addExerciseButton() = inBody("Add an exercise", substring = true)
 
     private fun bodyIcon(description: String) =
-        compose.onNodeWithContentDescription(description).performScrollTo()
+        compose.onNodeWithContentDescription(description)
 
     // --- the time, typed without a colon --------------------------------------------------
 
@@ -338,6 +365,69 @@ class SlotEditorTest : ScreenTest() {
         assertEquals(listOf(1L), saved?.exercises?.map { it.exerciseId })
     }
 
+    // --- the rest, typed as mm:ss (§13.9) -------------------------------------------------
+    //
+    // It used to be six chips capped at 4:00 — "not able to choose anything above 4:00" was
+    // the complaint that started this. These are the regression for the field that replaced
+    // them: xyz.oleolegka.gachimuchi.ui.components.TimeField, shared with the rest dialog
+    // inside a live workout.
+
+    @Test
+    fun `a rest already chosen is shown as mm colon ss, not on a chip`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        inBody("2:30").assertExists()
+        inBody("Usual").assertExists()
+    }
+
+    /** THE regression: five minutes is past every preset chip this row used to offer. */
+    @Test
+    fun `a rest past the old four-minute ceiling can be typed and saved`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = null)))
+        )
+
+        typeTime("Rest, mm:ss", "500")
+        inBody("5:00").assertExists()
+
+        compose.onNodeWithText("Save").performClick()
+        settle()
+        assertEquals(listOf(300), saved?.exercises?.map { it.restSec })
+    }
+
+    @Test
+    fun `Usual clears whatever was typed`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        inBody("Usual").performClick()
+        settle()
+
+        inBody("2:30").assertDoesNotExist()
+        compose.onNodeWithText("Save").performClick()
+        settle()
+        assertEquals(listOf<Int?>(null), saved?.exercises?.map { it.restSec })
+    }
+
+    @Test
+    fun `the bump adds to whatever the field already holds`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        compose.onNodeWithText("+30s").performClick()
+        settle()
+
+        inBody("3:00").assertExists()
+    }
+
     // --- the picker, which has to come up ABOVE the dialog -------------------------------------
 
     /**
@@ -406,8 +496,8 @@ class SlotEditorTest : ScreenTest() {
 
     /**
      * Planning picks from what is already trained. Creating an exercise asks the identity
-     * questions (form, edge, protocol) that belong to the moment of the first set, days
-     * after a plan is written, so the button is not there to be pressed.
+     * questions (form, protocol) that belong to the moment of the first set, days after a
+     * plan is written, so the button is not there to be pressed.
      */
     @Test
     fun `the picker opened from the plan offers no way to invent a new exercise`() {
@@ -468,12 +558,12 @@ class SlotEditorTest : ScreenTest() {
      * Two exercises of one name, told apart by the thing that makes them two.
      *
      * This became possible only when creating an exercise stopped deduplicating by name — up
-     * to then a second "Hangs" on another edge was silently handed the first one's row. A list
-     * showing two identical lines would put the same failure back one step later, with the user
-     * picking whichever came first and their sets landing in an arbitrary history.
+     * to then a second "Hangs" on another protocol was silently handed the first one's row. A
+     * list showing two identical lines would put the same failure back one step later, with
+     * the user picking whichever came first and their sets landing in an arbitrary history.
      */
     @Test
-    fun `two exercises of one name are told apart by the edge and the protocol`() {
+    fun `two exercises of one name are told apart by the protocol`() {
         screen {
             SlotEditorDialog(
                 initial = null,
@@ -482,8 +572,12 @@ class SlotEditorTest : ScreenTest() {
                 today = day,
                 state = UiState(
                     exercises = listOf(
-                        exerciseEntity(1, "Hangs", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0),
-                        exerciseEntity(2, "Hangs", ExerciseForm.HOLD, edgeMm = 15.0, workSec = 7.0, restSec = 3.0),
+                        exerciseEntity(1, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0),
+                        exerciseEntity(2, "Hangs", ExerciseForm.HOLD, workSec = 10.0, restSec = 5.0),
+                    ),
+                    programsById = mapOf(
+                        protocolProgramIdFor(1) to protocolProgram(1, "Hangs", 7.0, 3.0),
+                        protocolProgramIdFor(2) to protocolProgram(2, "Hangs", 10.0, 5.0),
                     ),
                     loading = false,
                 ),
@@ -500,8 +594,8 @@ class SlotEditorTest : ScreenTest() {
         settle()
 
         compose.onAllNodesWithText("Hangs").assertCountEquals(2)
-        compose.onNodeWithText("20 mm", substring = true).assertExists()
-        compose.onNodeWithText("15 mm", substring = true).assertExists()
+        compose.onNodeWithText("7:3", substring = true).assertExists()
+        compose.onNodeWithText("10:5", substring = true).assertExists()
     }
 
     // --- editing an existing session -----------------------------------------------------------

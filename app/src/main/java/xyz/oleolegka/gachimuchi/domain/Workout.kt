@@ -78,6 +78,65 @@ data class WorkoutFinished(
 )
 
 /**
+ * "This CARD is done." The same idea as [TYPE_WORKOUT_FINISHED] one level down — a status
+ * on one exercise of a workout (one SIDE of it, for a one-sided exercise — see
+ * [WorkoutExerciseFinished.side]) rather than on the workout as a whole.
+ *
+ * A SERVICE event, like its whole-workout sibling: it records no training, so it is absent
+ * from [ACTIVITY_TYPES] and every reducer that folds sets ignores it.
+ *
+ * ── A status and not a lock, same as [TYPE_WORKOUT_FINISHED] ────────────────────
+ * A finished card can still take a set — nothing here refuses one — and doing so does not
+ * un-finish it. What the button on the card actually buys the user (§14.2's own words: "so
+ * it interferes less and cannot be tapped by mistake") is that the card stops OFFERING to
+ * take one: the entry form is not raised by a tap, and the rest countdown running under it
+ * is dismissed (see [xyz.oleolegka.gachimuchi.ui.MainViewModel.finishWorkoutExercise]) rather
+ * than left ticking under a card nobody is going to look at again this session.
+ *
+ * ── Undone by deleting it, exactly like everything else ─────────────────────────
+ * There is no separate "un-finish" event. [TYPE_ENTRY_DELETED] already means "this should
+ * not be there", and it already applies to itself, which is what makes undoing an undo work
+ * for a set, a workout, an "exercise added" row — and now this. A dedicated reversing event
+ * would be a second way of saying the same thing the rest of the journal already has one
+ * word for.
+ *
+ * ── Why the card also moves when this is written ─────────────────────────────────
+ * See [buildWorkout] for the grouping this event drives (finished cards drawn together,
+ * above every active one) and [xyz.oleolegka.gachimuchi.data.ActivityRepository.finishWorkoutExercise]
+ * for the accompanying order write that makes the group read in the order the cards were
+ * actually finished in, rather than the order they happened to be added in.
+ */
+const val TYPE_WORKOUT_EXERCISE_FINISHED = "workout_exercise_finished"
+
+/**
+ * Payload of [TYPE_WORKOUT_EXERCISE_FINISHED] — the card being closed, said the same way
+ * [OrderedExercise] names one: by identity where there is one, by number where there is not,
+ * and never neither (see its own `init`). The workout is also named twice, in the payload as
+ * well as in the column, for the reason spelled out on [WorkoutExerciseAdded].
+ */
+@Serializable
+data class WorkoutExerciseFinished(
+    @SerialName("workout_id") val workoutId: Long,
+    @SerialName("exercise_id") val exerciseId: Long? = null,
+    @SerialName("exercise_uid") val exerciseUid: String? = null,
+    @SerialName("workout_uid") val workoutUid: String? = null,
+    /** Which card this is — the same idea as [OrderedExercise.side], matched the same way. */
+    @SerialName("side") val side: String? = null,
+) {
+    init {
+        require(exerciseId != null || exerciseUid != null) {
+            "workout_exercise_finished: an entry must name an exercise by uid or by id"
+        }
+    }
+}
+
+/** The pair read as one reference — the same funnel [OrderedExercise.link] is. */
+fun WorkoutExerciseFinished.link(): ExerciseLink = ExerciseLink(exerciseUid, exerciseId)
+
+/** [side] read as the domain compares it — see [OrderedExercise.sideOf]. */
+val WorkoutExerciseFinished.sideOf: HoldSide? get() = HoldSide.fromCode(side)
+
+/**
  * "This is the order I want the exercises of that workout in."
  *
  * A SERVICE event like [TYPE_WORKOUT_FINISHED]: it records no training, it is absent from
@@ -146,6 +205,15 @@ data class WorkoutOrder(
 data class OrderedExercise(
     @SerialName("exercise_id") val exerciseId: Long? = null,
     @SerialName("exercise_uid") val exerciseUid: String? = null,
+    /**
+     * Which card this entry means, for an exercise that has two — see
+     * [WorkoutExerciseAdded.side]. Matched against [WorkoutExercise.side] exactly, the same
+     * "matches or it does not" rule [exerciseId]/[exerciseUid] already follow: null names the
+     * one card an exercise that is not one-sided has, and an order event written before this
+     * field existed carries null for every entry, which is why such an event cannot rearrange a
+     * left/right split it predates — see [reordered].
+     */
+    @SerialName("side") val side: String? = null,
 ) {
     init {
         require(exerciseId != null || exerciseUid != null) {
@@ -156,6 +224,16 @@ data class OrderedExercise(
 
 /** The pair read as one reference, so no reader picks for itself which half wins. */
 fun OrderedExercise.link(): ExerciseLink = ExerciseLink(exerciseUid, exerciseId)
+
+/** [side] read as the domain compares it — see [HoldSet.sideOf], the same idea for a set. */
+val OrderedExercise.sideOf: HoldSide? get() = HoldSide.fromCode(side)
+
+/**
+ * One card named for the order event or the "add to workout" write — an exercise, and which
+ * side of it when it has one. The screen-facing counterpart of [OrderedExercise]: callers hold
+ * an [ExerciseLink] and a [HoldSide], not a payload's raw strings.
+ */
+data class OrderedCard(val exercise: ExerciseLink, val side: HoldSide? = null)
 
 /** One exercise inside a workout, with the rest chosen for it and the sets it collected. */
 data class WorkoutExercise(
@@ -184,7 +262,51 @@ data class WorkoutExercise(
      * it. Removing that one is removing its sets, and there is nothing else to take out.
      */
     val addedEventIds: List<Long> = emptyList(),
+    /**
+     * Which card of the exercise this is, or null for the ordinary exercise that has only one.
+     *
+     * On an exercise trained one limb at a time ([xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided])
+     * this is what tells two blocks of the same [exercise] apart — one [HoldSide.LEFT], one
+     * [HoldSide.RIGHT] — so they draw as two independent cards with two independent rests
+     * rather than colliding into one. See [buildWorkout] for how a block ends up with a side:
+     * the "added" row that put it here, or failing that the first set that named a side.
+     *
+     * A THIRD, SIDELESS block is possible for the same exercise, and it is not a bug: a set
+     * recorded with no side at all (a journal merged from elsewhere, an amendment that cleared
+     * it) belongs to neither hand's history and gets its own block rather than being folded
+     * into either one — the same refusal to guess [holdRecord] makes about such a set.
+     */
+    val side: HoldSide? = null,
+    /**
+     * The id of the live [TYPE_WORKOUT_EXERCISE_FINISHED] event that marked this CARD done, or
+     * null for a card nobody has marked.
+     *
+     * ── The mark and the way to undo it are ONE field on purpose ────────────────────
+     * There used to be a `finished: Boolean` beside this, and the two could only ever say the
+     * same thing: both were read off the same map, in the same expression, one with
+     * `containsKey` and one with `get`. Two fields that must agree are two fields that can be
+     * made to disagree — by a copy() that sets one, by a fold that forgets the other — and the
+     * screen was already asking the same question twice to get both halves. So the id is the
+     * whole of the state and [finished] below is derived from it, which is a fact the type
+     * enforces rather than a rule someone has to keep.
+     *
+     * Carried here rather than looked up again because a screen offering the undo control is
+     * already holding this block — see
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.unfinishWorkoutExercise] for what
+     * deleting it does.
+     */
+    val finishedEventId: Long? = null,
 ) {
+    /**
+     * Whether this CARD has been marked done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. A status
+     * and not a lock, the same rule [Workout.finished] follows one level up: the card can
+     * still be written into, and doing so does not clear this.
+     *
+     * Drives [buildWorkout]'s grouping (every finished card drawn above every active one) and
+     * is what a screen reads to draw the collapsed card and the green check.
+     */
+    val finished: Boolean get() = finishedEventId != null
+
     /**
      * The local catalog row number, for the screens that still navigate by one.
      *
@@ -197,6 +319,18 @@ data class WorkoutExercise(
 
     val isEmpty: Boolean get() = sets.isEmpty()
 }
+
+/**
+ * The identity of a CARD rather than of an exercise: [WorkoutExercise.exercise]'s key plus its
+ * [WorkoutExercise.side]. Two cards of one one-sided exercise share the first half and differ
+ * in the second, which is the whole reason this exists — a screen keying its list by the
+ * exercise alone would draw the left and right card of one exercise as the same row.
+ */
+val WorkoutExercise.cardKey: String get() = workoutCardKey(exercise.key, side)
+
+/** The one place [cardKey] is actually computed, so [buildWorkout] and readers agree on it. */
+private fun workoutCardKey(exerciseKey: String, side: HoldSide?): String =
+    "$exerciseKey#${side?.code ?: "-"}"
 
 /**
  * A whole workout, folded out of the journal.
@@ -238,6 +372,18 @@ data class Workout(
      * last [TYPE_WORKOUT_ORDER_SET] row states once they have — a machine being occupied is not
      * a reason to do the session in the order it was sketched in. Folded by [buildWorkout], so
      * every screen showing a workout shows the same one.
+     *
+     * ── EVERY FINISHED CARD FIRST, in the order they were finished ──────────────────
+     * The two groups (see [WorkoutExercise.finished]) are never interleaved: every card
+     * [buildWorkout] considers finished comes before every one it does not, whatever the flat
+     * order above says about them individually. WITHIN each group the flat order still
+     * decides — added order, or the last drag — and for the finished group that flat order is
+     * kept in completion order by
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.finishWorkoutExercise] writing a fresh
+     * one alongside every [TYPE_WORKOUT_EXERCISE_FINISHED] it appends. The split itself is
+     * enforced HERE regardless, rather than trusted to that write having landed — a merged
+     * journal, or the second of the two writes never reaching the table, must not be able to
+     * put a finished card back among the active ones.
      */
     val exercises: List<WorkoutExercise>,
     /**
@@ -249,13 +395,22 @@ data class Workout(
      */
     val entriesWithoutExercise: List<ActivityEvent>,
     /**
+     * The id of the live [TYPE_WORKOUT_FINISHED] event that closed this workout, or null for
+     * one still going — the same "the mark and the way to undo it are one field" choice
+     * [WorkoutExercise.finishedEventId] makes for a single card, and for the same reason: a
+     * screen offering to undo the finish already needs this id to name the deletion, and a
+     * second `finished: Boolean` beside it would only be a fact that could disagree.
+     */
+    val finishedEventId: Long? = null,
+) {
+    /**
      * Somebody said this workout was over — by the button, or by starting the next one.
      *
      * A STATUS AND NOT A LOCK: a finished workout can still be opened and written into, and
      * doing so does not re-open it. See [TYPE_WORKOUT_FINISHED].
      */
-    val finished: Boolean = false,
-) {
+    val finished: Boolean get() = finishedEventId != null
+
     /**
      * The plan's local row number, for the screens that still navigate the plan by one.
      *
@@ -265,10 +420,20 @@ data class Workout(
      */
     val slotId: Long? get() = slot?.id
 
-    val setCount: Int = exercises.sumOf { it.sets.size } + entriesWithoutExercise.size
+    /**
+     * How many SETS this workout holds — the count "N exercises, M sets" is built from.
+     *
+     * A body-weight entry recorded into a workout lands in [entriesWithoutExercise] (it names
+     * no exercise) but is not a set: stepping on the scales is not a rep of anything, and a
+     * workout that held nothing else must not read "1 set" over it. Every other kind of loose
+     * entry a workout can hold IS a set — that is what "recorded with no exercise" has meant
+     * since before body weight existed as a form — so only [Bodyweight] is filtered out here.
+     */
+    val setCount: Int = exercises.sumOf { it.sets.size } +
+        entriesWithoutExercise.count { it.form !is Bodyweight }
 
     /**
-     * When the training stopped: the write time of the LAST row recorded into it, or the
+     * When the training stopped: when the LAST set recorded into it actually happened, or the
      * workout's own start when it recorded nothing.
      *
      * ── Derived, because a stamped moment would be wrong from the second it was written ──
@@ -279,13 +444,22 @@ data class Workout(
      * is folded out of the sets instead, so adding one moves the end and no correction is
      * needed anywhere.
      *
-     * The largest id and not the latest timestamp, because ids increase with WRITING order
-     * and that is what "the last thing recorded" means. For a workout typed up after the fact
-     * the two are the same question anyway; for one where the phone's clock moved they are
-     * not, and journal order is the reading that cannot be argued with.
+     * ── By [happenedAt], not by id or write time ─────────────────────────────────────
+     * This used to be the write time of whichever set carried the largest id — sound while the
+     * only way a row could join a workout was to be trained into it there and then, so "written
+     * last" and "trained last" were the same fact. A correction breaks that the same way it
+     * breaks [openWorkoutRow]: fixing a typo in a set from three weeks ago writes a new row,
+     * with today's id and today's ts, into a workout that ended three weeks ago — and the old
+     * id-based rule would read the fix itself as the moment training stopped, showing "finished
+     * [today]" on a session nobody has touched since. [happenedAt] is inherited across the
+     * correction, so the identified set's OWN happened-at time is shown rather than the
+     * correction's write time, and an unrelated typo fix can no longer move a workout's end.
+     * The id tie-break keeps the previous behaviour for two ORIGINAL sets in the same second,
+     * where [happenedAt] cannot tell them apart.
      */
     val endTs: String =
-        (exercises.flatMap { it.sets } + entriesWithoutExercise).maxByOrNull { it.id }?.ts ?: ts
+        (exercises.flatMap { it.sets } + entriesWithoutExercise)
+            .maxWithOrNull(compareBy({ it.happenedAt }, { it.id }))?.happenedAt ?: ts
 
     /** Nothing has been added and nothing recorded — the state right after "start". */
     val isEmpty: Boolean get() = exercises.isEmpty() && entriesWithoutExercise.isEmpty()
@@ -299,6 +473,36 @@ data class Workout(
      */
     fun isBackdated(today: String): Boolean = opDate < today
 }
+
+/**
+ * One exercise staged into a workout that has not been started yet — see §13.1, "the start
+ * event is created lazily", and [xyz.oleolegka.gachimuchi.ui.MainViewModel]'s draft state.
+ *
+ * The same two facts [WorkoutExercise] carries for a card already in a real workout — which
+ * exercise, and the rest chosen for it — because that is all a card can say before it exists:
+ * no sets, no "added" row, nothing a card in a real workout also has to have written for it.
+ */
+data class DraftCard(val exerciseId: Long, val restSec: Int, val side: HoldSide? = null)
+
+/**
+ * [cards] shaped as a [Workout], so the screen that draws one can draw the other without
+ * knowing the difference — see [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen].
+ *
+ * [id]/[uid] are sentinels: nothing about a draft is a row yet, and nothing downstream reads
+ * them off a [Workout] built here — the actions a screen is handed close over the real id once
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.promoteDraft] has written one, never this one.
+ */
+fun draftWorkout(opDate: String, name: String?, cards: List<DraftCard>, linkOf: (Long) -> ExerciseLink): Workout =
+    Workout(
+        id = 0L,
+        uid = "",
+        ts = "",
+        opDate = opDate,
+        slot = null,
+        name = name,
+        exercises = cards.map { WorkoutExercise(linkOf(it.exerciseId), it.restSec, emptyList(), side = it.side) },
+        entriesWithoutExercise = emptyList(),
+    )
 
 /**
  * What a journal row says about the workout it was recorded during, or null for a row
@@ -320,8 +524,9 @@ fun JournalEvent.workoutRef(): WorkoutRef? {
     val added = workoutExerciseAddedOrNull()
     val done = workoutFinishedOrNull()
     val ordered = workoutOrderOrNull()
-    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid ?: ordered?.workoutUid
-    val id = workoutId ?: added?.workoutId ?: done?.workoutId ?: ordered?.workoutId
+    val cardDone = workoutExerciseFinishedOrNull()
+    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid ?: ordered?.workoutUid ?: cardDone?.workoutUid
+    val id = workoutId ?: added?.workoutId ?: done?.workoutId ?: ordered?.workoutId ?: cardDone?.workoutId
     return if (uid == null && id == null) null else WorkoutRef(uid, id)
 }
 
@@ -331,6 +536,14 @@ fun JournalEvent.workoutExerciseAddedOrNull(): WorkoutExerciseAdded? =
         null
     } else {
         runCatching { payloadJson.decodeFromString<WorkoutExerciseAdded>(payload) }.getOrNull()
+    }
+
+/** Payload of a "card finished" row, or null for any other row and for an unreadable one. */
+fun JournalEvent.workoutExerciseFinishedOrNull(): WorkoutExerciseFinished? =
+    if (type != TYPE_WORKOUT_EXERCISE_FINISHED) {
+        null
+    } else {
+        runCatching { payloadJson.decodeFromString<WorkoutExerciseFinished>(payload) }.getOrNull()
     }
 
 /** Payload of a "workout finished" row, or null for any other row and for an unreadable one. */
@@ -399,6 +612,20 @@ private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
  * workout would file today's sets into last week's session — a worse answer than "nothing is
  * open", which at least leaves the set unattached and visible on its day.
  *
+ * ── "Last" is by [happenedAt], not by row id ─────────────────────────────────────
+ * It did not used to need saying: the only way a [TYPE_WORKOUT_STARTED] row was ever written
+ * was by pressing "start", so the newest ROW and the workout started most recently were the
+ * same fact. That stopped being true the moment a workout could be corrected (renaming one, or
+ * fixing its date, writes a brand new start row — domain/Amendments.kt's header): the newest
+ * ROW can now be a typo fixed today in a workout from last month, appended after every start
+ * this app has genuinely written since. Reading such a correction as "the last workout
+ * started" would either hijack today's still-open session (its sets misfiled into last
+ * month's) or, if the corrected workout was already finished, make openWorkoutRow answer null
+ * while a real one sits open earlier in the journal — the exact failure this function exists
+ * to avoid, now caused by the very rule meant to avoid it. [happenedAt] is inherited across a
+ * correction, so the corrected row stays exactly where it always was in training time, and an
+ * unrelated correction can no longer change which workout this answers with.
+ *
  * ── The two consequences, stated rather than hidden ─────────────────────────────
  *  - A workout NOBODY FINISHED stays open indefinitely. Sets logged days later with no
  *    workout started land in it, and its end time ([Workout.endTs]) follows them. Midnight
@@ -423,7 +650,11 @@ fun openWorkoutRow(events: List<JournalEvent>): JournalEvent? {
     // other, so deleting one re-opens the workout it closed — which is the only way back from
     // a button pressed by mistake, and there is no separate "re-open" event for it.
     val journal = liveEvents(events)
-    return workoutStarts(journal).lastOrNull()?.first?.takeIf { !isFinished(journal, it) }
+    // happenedAt first, then id (journal order) for a same-second tie — see this function's
+    // own KDoc for why the raw journal order this used to pick .lastOrNull() by is no longer
+    // safe once a correction can rewrite a workout's own start row
+    val last = workoutStarts(journal).maxWithOrNull(compareBy({ it.first.happenedAt }, { it.first.id }))?.first
+    return last?.takeIf { !isFinished(journal, it) }
 }
 
 /**
@@ -471,21 +702,34 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      * the sets went through readActivities and were dropped, the "exercise added" rows did not
      * go through anything at all. liveEvents is idempotent, so handing it on costs nothing.
      */
-    val journal = liveEvents(events)
-    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }
+    val view = journalView(events)
+    val journal = events.mapNotNull { view.revised(it) }
+    /*
+     * [workoutId] may name a `workout_started` row that has since been CORRECTED — its own date
+     * or name amended, which writes a new row under a new id (see domain/Amendments.kt's header
+     * on rows other rows point at by uid). A caller holding the id from before that correction
+     * — every screen that opened this workout and kept its id around — must still find it, so
+     * the id is resolved forward the same way a child's `workout_id` column already is.
+     */
+    val resolvedId = view.canonicalId(workoutId)
+    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == resolvedId }
         ?: return null
 
     // parsed once: readActivities is what drops deleted sets and unreadable payloads, and
     // rebuilding it per row would fold the whole journal for every event in it
     val live = readActivities(journal).associateBy { it.id }
 
-    // keyed by ExerciseLink.key so that an entry naming its exercise by identity and one
-    // naming it by number land in the same block; the link itself is merged as they arrive,
-    // so the block ends up knowing both
+    // keyed by [workoutCardKey] — the exercise AND its side together — so that an entry naming
+    // its exercise by identity and one naming it by number land in the same block, and so that
+    // the left and right card of a one-sided exercise land in TWO. The link itself is merged as
+    // its mentions arrive, so a block ends up knowing both the identity and the number.
     val sets = LinkedHashMap<String, MutableList<ActivityEvent>>()
     val links = LinkedHashMap<String, ExerciseLink>()
+    val sides = HashMap<String, HoldSide?>()
     val rests = HashMap<String, Int>()
     val addedRows = HashMap<String, MutableList<Long>>()
+    /** The live "card finished" event of each card, keyed the same way — see [WorkoutExercise.finished]. */
+    val cardFinished = HashMap<String, Long>()
     val unkeyed = ArrayList<ActivityEvent>()
     /*
      * The FIRST row that put each exercise in this workout, which is what decides whether an
@@ -494,15 +738,22 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      * bottom of a list the user has just arranged.
      */
     val firstRow = HashMap<String, Long>()
-    var finished = false
+    /**
+     * The live "workout finished" event, by id — overwritten on every one seen rather than
+     * just flagged, the same "last one wins" rule [cardFinished] follows for a single card:
+     * a workout finished, reopened and finished again carries the LAST such event, which is
+     * the one [unfinishWorkoutExercise]'s whole-workout twin has to name to undo it.
+     */
+    var finishedRowId: Long? = null
     var order: WorkoutOrder? = null
     var orderRowId = 0L
 
-    fun remember(link: ExerciseLink, rowId: Long): String {
-        val key = link.key
+    fun remember(link: ExerciseLink, rowId: Long, side: HoldSide?): String {
+        val key = workoutCardKey(link.key, side)
         links[key] = links[key]?.mergedWith(link) ?: link
         sets.getOrPut(key) { mutableListOf() }
         firstRow.putIfAbsent(key, rowId)
+        sides.putIfAbsent(key, side)
         return key
     }
 
@@ -511,7 +762,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         if (row.type == TYPE_WORKOUT_FINISHED) {
             // sets recorded AFTER this one are still folded in below: finishing is a status,
             // not a lock, and the forgotten set typed up afterwards belongs here
-            finished = true
+            finishedRowId = row.id
             continue
         }
         val stated = row.workoutOrderOrNull()
@@ -523,19 +774,51 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         }
         val added = row.workoutExerciseAddedOrNull()
         if (added != null) {
-            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id)
+            val side = HoldSide.fromCode(added.side)
+            val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id, side)
             rests[key] = added.restSec
             addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
+        val cardDone = row.workoutExerciseFinishedOrNull()
+        if (cardDone != null) {
+            // liveEvents already dropped every finish event this card's own un-finish
+            // (a deletion) undid, so whatever is left standing here is the one live mark —
+            // see the header comment on [TYPE_WORKOUT_EXERCISE_FINISHED]
+            val key = remember(cardDone.link(), row.id, cardDone.sideOf)
+            cardFinished[key] = row.id
+            continue
+        }
         val activity = live[row.id] ?: continue
         val link = activity.form.exerciseLink()
-        if (link == null) unkeyed += activity else sets.getValue(remember(link, row.id)) += activity
+        if (link == null) {
+            unkeyed += activity
+        } else {
+            // only a LoadedSet ever carries a side (see LoadedSet.sideOf); every other form
+            // joins the sideless block, which is the only block such an exercise can have
+            val side = (activity.form as? LoadedSet)?.sideOf
+            sets.getValue(remember(link, row.id, side)) += activity
+        }
     }
 
+    /*
+     * Sorted by [happenedAt] rather than left in the journal order the loop above walked: the
+     * loop's order decides STRUCTURE (which card, which side, which rest, whether an order
+     * event could have meant this card — all of that stays exactly as it was, unaffected), but
+     * the sets DRAWN ON a card are a tape of the exercise as it was actually done, the same
+     * argument [buildSession] makes for the day's feed. A set corrected after later ones were
+     * logged must not visibly jump past them.
+     */
     val blocks = sets.map { (key, ofExercise) ->
-        WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty())
+        WorkoutExercise(
+            links.getValue(key), rests[key],
+            // happenedAt first, then id (journal order) for a same-second tie, the same rule
+            // buildSession settles its own tie by
+            ofExercise.sortedWith(compareBy({ it.happenedAt }, { it.id })),
+            addedRows[key].orEmpty(), sides[key], finishedEventId = cardFinished[key],
+        )
     }
+    val ordered = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks
 
     return Workout(
         id = startRow.id,
@@ -546,10 +829,43 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         // a name of nothing but spaces is nobody having named it, decided here rather than
         // in each screen that would otherwise draw a blank heading
         name = started?.name?.takeIf { it.isNotBlank() },
-        exercises = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks,
+        exercises = ordered.groupedByCardStatus(),
         entriesWithoutExercise = unkeyed,
-        finished = finished,
+        finishedEventId = finishedRowId,
     )
+}
+
+/**
+ * [this] with every FINISHED card ([WorkoutExercise.finished]) moved ahead of every ACTIVE
+ * one, each group otherwise keeping the relative order it already has — see the note on
+ * [Workout.exercises] for why the split is enforced here rather than left to the flat order
+ * to have gotten right on its own.
+ *
+ * A stable partition rather than a sort: [List.partition] preserves the order items already
+ * had within each half it hands back, which is the only thing that lets the finished half
+ * read as "the order they were finished in" — see
+ * [xyz.oleolegka.gachimuchi.data.ActivityRepository.finishWorkoutExercise] for where that
+ * order is actually written.
+ */
+private fun List<WorkoutExercise>.groupedByCardStatus(): List<WorkoutExercise> {
+    val (finishedCards, active) = partition { it.finished }
+    /*
+     * The finished half is sorted by the event that finished it, and the active half is left
+     * exactly as it came.
+     *
+     * Partition alone preserves the order each card already had, which is the order it was
+     * ADDED in (or dragged into) — not the order it was finished in. Those are different
+     * orders whenever the cards are not finished in the order they were added, which is most
+     * sessions, and the difference is the whole point of not putting finished cards at the
+     * very top: who finished first has to stay readable.
+     *
+     * By event id rather than by timestamp: ids are handed out in write order by the same
+     * append that writes the row, so they order the finishes without asking the clock, which
+     * a phone's owner can move. A card finished, un-finished and finished again carries the
+     * LAST such event, so it takes its place at the end of the group, which is where the
+     * person who just finished it again expects to find it.
+     */
+    return finishedCards.sortedBy { it.finishedEventId ?: Long.MAX_VALUE } + active
 }
 
 /**
@@ -576,6 +892,15 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
  * A duplicate entry (the same exercise twice) claims a block once — [taken] — so the second
  * mention finds nothing and is skipped. Nothing this app writes contains one; a merged journal
  * might, and duplicating the card would be the one answer that invents training.
+ *
+ * ── Two cards of one exercise are matched by side as well as by identity ────────
+ * [taken] and [firstRow] are keyed by [WorkoutExercise.cardKey] rather than by
+ * [ExerciseLink.key] alone, and an entry is matched only against a block whose
+ * [WorkoutExercise.side] equals the entry's own — see [OrderedExercise.sideOf]. Without that a
+ * one-sided exercise's left and right block would look like the same block twice to [taken]: the
+ * first entry naming the exercise would claim whichever of the two [firstOrNull] happened to
+ * reach first, and the second would find it already taken and fall through to "not named",
+ * landing at the end instead of where it was actually dragged to.
  */
 private fun reordered(
     blocks: List<WorkoutExercise>,
@@ -583,18 +908,19 @@ private fun reordered(
     orderRowId: Long,
     firstRow: Map<String, Long>,
 ): List<WorkoutExercise> {
-    val movable = blocks.filter { (firstRow[it.exercise.key] ?: Long.MAX_VALUE) < orderRowId }
+    val movable = blocks.filter { (firstRow[it.cardKey] ?: Long.MAX_VALUE) < orderRowId }
     if (movable.isEmpty()) return blocks
     val taken = HashSet<String>()
     val head = ArrayList<WorkoutExercise>(blocks.size)
     for (entry in wanted) {
         val link = entry.link()
-        val block = movable.firstOrNull { it.exercise.key !in taken && it.exercise.matches(link) }
-            ?: continue
-        taken += block.exercise.key
+        val block = movable.firstOrNull {
+            it.cardKey !in taken && it.exercise.matches(link) && it.side == entry.sideOf
+        } ?: continue
+        taken += block.cardKey
         head += block
     }
-    return head + blocks.filterNot { it.exercise.key in taken }
+    return head + blocks.filterNot { it.cardKey in taken }
 }
 
 /**
@@ -617,19 +943,154 @@ private fun reordered(
  * export.
  */
 fun workoutEventIds(events: List<JournalEvent>, workoutId: Long): List<Long> {
-    val journal = liveEvents(events)
-    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }?.first
+    val view = journalView(events)
+    val journal = events.mapNotNull { view.revised(it) }
+    // see buildWorkout for why the incoming id has to be resolved forward first
+    val resolvedId = view.canonicalId(workoutId)
+    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == resolvedId }?.first
         ?: return emptyList()
     return listOf(startRow.id) +
         journal.filter { it.id != startRow.id && it.workoutRef()?.matches(startRow) == true }
             .map { it.id }
 }
 
-/** Every workout of one training day, in the order they were started. */
+/**
+ * Every workout of one training day, in the order they were started — by [happenedAt], not by
+ * the position of the (possibly corrected) start row in the journal. A workout renamed or
+ * moved onto this day after a LATER workout was already logged must still show up before it,
+ * the same argument [buildSession] makes for a corrected set within a day's feed.
+ */
 fun workoutsOn(events: List<JournalEvent>, opDate: String): List<Workout> =
     workoutStarts(events)
         .filter { (row, started) -> (started?.opDate ?: row.writeDay()) == opDate }
+        // happenedAt first, then id (journal order) for a same-second tie
+        .sortedWith(compareBy({ (row, _) -> row.happenedAt }, { (row, _) -> row.id }))
         .mapNotNull { (row, _) -> buildWorkout(events, row.id) }
+
+// --- starting a workout like a past one (§13.9) -----------------------------------------
+//
+// A plan is not the only reasonable answer to "what shall this session consist of". A workout
+// nobody bothered to plan ahead of time, but named the same thing three times because it always
+// is the same thing ("Push day"), is asking to be offered the same cards without a slot ever
+// having existed for it. NAMES ARE NOT UNIQUE — the owner's own words are "we do not forbid it"
+// — so the question this answers is always "the LAST workout under this name", never "the one
+// named this".
+
+/**
+ * Every name a past workout has ever been started under, once each — the list a "start like
+ * last time" dropdown offers, not a workout instance (there is no id here to hand back: picking
+ * a NAME is what [lastWorkoutNamed] resolves into one, at the moment a workout is started, so
+ * that training done in between never goes stale in a list held on screen).
+ *
+ * Ordered by the most recent use of each name, so the routine trained most recently — the one
+ * likeliest to be wanted again — sits at the top.
+ *
+ * A nameless workout (§13's ordinary case) contributes nothing: there is nothing to offer a
+ * dropdown for "no name", and starting one off-plan with no name already has its own path that
+ * does not go near this list.
+ */
+fun pastWorkoutNames(events: List<JournalEvent>): List<String> =
+    workoutStarts(events)
+        .mapNotNull { (row, started) -> started?.name?.trim()?.takeIf { it.isNotEmpty() }?.let { it to row.happenedAt } }
+        // last occurrence of each name decides where it sits in the list; the name itself
+        // does not repeat in the result no matter how many workouts carried it
+        .groupBy({ (name, _) -> name }, { (_, ts) -> ts })
+        .mapValues { (_, timestamps) -> timestamps.max() }
+        .entries
+        .sortedByDescending { (_, lastUsed) -> lastUsed }
+        .map { (name, _) -> name }
+
+/**
+ * The workout to copy from when a new one is started under [name] — the LATEST live workout
+ * that carried exactly this name, or null when none did (a name never used before, or typed by
+ * hand rather than picked off [pastWorkoutNames]).
+ *
+ * "Latest" by [happenedAt] then id, the same tie-break [openWorkoutRow] uses — three sessions
+ * can share one name (§13.9's whole premise), and only the most recent of them is what "like
+ * last time" is asking for. Matched by an EXACT, trimmed name: the same string [pastWorkoutNames]
+ * hands back, and the same normalisation [xyz.oleolegka.gachimuchi.data.ActivityRepository.startWorkout]
+ * already applies before a name is written, so a stray space on the way in cannot make a real
+ * match miss.
+ */
+fun lastWorkoutNamed(events: List<JournalEvent>, name: String): Workout? {
+    val target = name.trim().takeIf { it.isNotEmpty() } ?: return null
+    val match = workoutStarts(events)
+        .filter { (_, started) -> started?.name?.trim() == target }
+        .maxWithOrNull(compareBy({ (row, _) -> row.happenedAt }, { (row, _) -> row.id }))
+        ?.first
+        ?: return null
+    return buildWorkout(events, match.id)
+}
+
+/**
+ * [workout]'s composition read back as [PlannedExercise] entries — the shape [resolvedCards]
+ * wants, so "start like last time" goes through the exact same funnel a plan does rather than a
+ * second way of turning a source into cards.
+ *
+ * A COPY of what the workout consisted of, the same rule §13.7 already gives a plan: this reads
+ * [Workout.exercises] as [buildWorkout] folds it NOW, which already leaves out a card that was
+ * later removed — nothing here re-derives "what used to be there" from a stale snapshot, there
+ * is no snapshot to go stale.
+ *
+ * Each entry's [PlannedExercise.side] is filled in from the card's own [WorkoutExercise.side]
+ * rather than left null, which is what tells [resolvedCards] this pair is ALREADY split and
+ * must not be fanned out a second time.
+ *
+ * A card whose exercise this journal never gave a local row number (merged in from elsewhere)
+ * is dropped: there is nothing on this phone [xyz.oleolegka.gachimuchi.data.ActivityRepository.addExerciseToWorkout]
+ * could add it as.
+ */
+fun asPlanned(workout: Workout): List<PlannedExercise> =
+    workout.exercises.mapNotNull { card ->
+        card.exercise.id?.let { id -> PlannedExercise(id, card.restSec, card.side) }
+    }
+
+/**
+ * [planned] resolved into the CARDS a workout actually gets: the rest each one is offered at,
+ * and — for a one-sided exercise a plan named but did not split — the fan into its two.
+ *
+ * THE ONE FUNNEL both sources of a workout's starting composition go through:
+ * [xyz.oleolegka.gachimuchi.data.ActivityRepository.copyPlannedExercises] (a plan, via
+ * [PlannedExercise] with no side) and [asPlanned] (a past workout, via one that already names a
+ * side). Computing this twice — once in the repository's write path, once wherever a draft
+ * needed the same list before anything is written — is exactly the shape of duplication that
+ * has cost this app defects fixed in one of the two places and not the other; this exists so
+ * there is only the one place left to fix.
+ *
+ * [refOf] and [restFallback] are handed in rather than looked up here because resolving them
+ * needs a database or a loaded [xyz.oleolegka.gachimuchi.ui.UiState] — Android things this pure
+ * function is deliberately kept away from, the same rule the rest of `domain/` follows.
+ *
+ * ── Which rest wins ──────────────────────────────────────────────────────────────
+ * [PlannedExercise.restSec] when it names one — a plan's own rest for THAT session, or a past
+ * workout's own rest for THAT card — because a rest sitting next to an exercise on the SOURCE is
+ * a statement about that source. Failing that, [restFallback], which is `restHintSec`'s usual
+ * order (chosen, then measured, then the default) at every call site this has today.
+ *
+ * ── Fanning a one-sided exercise into two cards ─────────────────────────────────
+ * Only when [PlannedExercise.side] is null AND the catalog currently flags the exercise
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided] — a plan says nothing about a side,
+ * so this is the one place that decides it, off the catalog's CURRENT answer (the plan predates
+ * the flag being changed just as easily as it postdates it, and there is no better fact to ask).
+ * An entry that already NAMES a side (see [PlannedExercise.side]) is never fanned: it already IS
+ * one card of an already-split pair, and fanning it again would double it.
+ */
+fun resolvedCards(
+    planned: List<PlannedExercise>,
+    refOf: (Long) -> ExerciseRef?,
+    restFallback: (ExerciseRef?) -> Int,
+): List<DraftCard> = planned.flatMap { entry ->
+    val ref = refOf(entry.exerciseId)
+    val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC } ?: restFallback(ref)
+    when {
+        entry.side != null -> listOf(DraftCard(entry.exerciseId, rest, entry.side))
+        ref?.oneSided == true -> listOf(
+            DraftCard(entry.exerciseId, rest, HoldSide.LEFT),
+            DraftCard(entry.exerciseId, rest, HoldSide.RIGHT),
+        )
+        else -> listOf(DraftCard(entry.exerciseId, rest))
+    }
+}
 
 /**
  * The day a set being logged right now belongs to.

@@ -21,8 +21,11 @@ import org.robolectric.shadows.ShadowSystemClock
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.buildSession
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
@@ -104,9 +107,9 @@ class RunLoggingChainTest {
     private fun newController(): TimerController =
         TimerController(context).also { controllers += it }
 
-    private suspend fun hangs() = repo.exercise(
-        repo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
-    )!!.toRef()
+    private suspend fun hangs() = repo.toRef(
+        repo.exercise(repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0))!!
+    )
 
     /** Lets the whole program elapse and delivers the alarm that notices it has. */
     private fun elapse(timer: TimerController, seconds: Int) {
@@ -170,7 +173,7 @@ class RunLoggingChainTest {
         val written = session.groups.single().sets.map { it.form as HoldSet }
         assertEquals(listOf(2, 2), written.map { it.reps })
         assertTrue(written.all { it.exerciseId == exercise.id })
-        assertEquals(20.0, written.first().edgeMm!!, 1e-9)
+        assertEquals(7.0, written.first().workSec!!, 1e-9)
     }
 
     @Test
@@ -281,7 +284,7 @@ class RunLoggingChainTest {
         val viewModel = MainViewModel(repo, programs, timer)
 
         // 1. the one-tap program from a catalog exercise
-        viewModel.startProgramForExercise(exercise)
+        viewModel.startProgramForExercise(ProgramStart(exercise, side = null, addedKg = null))
         settle()
         assertNotNull("the one-tap program never started", timer.run.value)
         assertEquals(RunOrigin.EXERCISE, timer.run.value!!.origin)
@@ -314,6 +317,108 @@ class RunLoggingChainTest {
          */
     }
 
+    // --- the two ways a one-tap program can be started must agree on the side ----------------
+    //
+    // MainViewModel.startProgramForExercise takes a single ProgramStart rather than the
+    // exercise, the side and the plate as three loose parameters (two of them used to default
+    // to null) precisely so that the standalone screen below cannot start a run with no side
+    // for an exercise that needs one. These two tests sit next to each other on purpose: one
+    // path answers the question through a dialog because it has no card, the other reads it
+    // off the card it was tapped from, and both must end up writing the same thing.
+
+    /**
+     * The path that USED to lose the side: a one-tap program started from the standalone entry
+     * screen ([xyz.oleolegka.gachimuchi.ui.screens.LogScreen]), which has no workout card and
+     * therefore asks in a dialog (`SideDialog`) before building the [ProgramStart] this test
+     * hands the ViewModel directly. Before the fix this screen called
+     * `startProgramForExercise(exercise)` and the two defaulted parameters made the side vanish
+     * silently — the run started, finished and wrote sets that named no hand at all.
+     */
+    @Test
+    fun `a program started outside a workout writes sets that carry the side it was asked for`() = runTest {
+        val exercise = hangs()
+        repo.setOneSided(exercise.id, true)
+        // re-read: `exercise` was resolved to a ref before the flag above was set on its row
+        val oneSided = repo.toRef(repo.exercise(exercise.id)!!)
+
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        // exactly what LogScreen builds once its SideDialog is answered
+        viewModel.startProgramForExercise(ProgramStart(oneSided, side = HoldSide.RIGHT, addedKg = null))
+        settle()
+
+        assertEquals(
+            "the running program itself must carry the side it was started for",
+            HoldSide.RIGHT.code,
+            timer.run.value?.side,
+        )
+
+        val totalSec = timer.run.value!!.steps.sumOf { it.durationSec }
+        elapse(timer, totalSec + 1)
+
+        val outcome = viewModel.runOutcome.value!!
+        viewModel.logRunSets(oneSided, outcome.sets)
+        settle()
+
+        val written = buildSession(repo.allEvents(), outcome.opDate).groups.single().sets
+            .map { it.form as HoldSet }
+        assertTrue("a run started for the right hand must write sets for it, not for neither", written.isNotEmpty())
+        assertTrue(
+            "every set of this run must say which hand, and say the right one",
+            written.all { it.sideOf == HoldSide.RIGHT },
+        )
+    }
+
+    /**
+     * The path that already worked, kept here so the two are checked side by side: a program
+     * started from a workout's own card ([xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogActions.startProtocolSet]),
+     * which already knows the side because it IS which of the exercise's two cards was tapped
+     * (see [buildWorkout] and [xyz.oleolegka.gachimuchi.domain.WorkoutExercise.side]). This
+     * still has to keep working once [startProgramForExercise] stopped accepting the side as an
+     * independent, defaultable parameter.
+     */
+    @Test
+    fun `a program started from a workout card carries that card's side`() = runTest {
+        val exercise = hangs()
+        repo.setOneSided(exercise.id, true)
+        val oneSided = repo.toRef(repo.exercise(exercise.id)!!)
+
+        // the one-sided exercise picked into a workout gets both its cards at once, the same
+        // way ExercisePickerSheet's answer to RestDialog does it (see WorkoutLogScreen.kt)
+        val workoutId = repo.startWorkout()
+        repo.addExerciseToWorkout(workoutId, oneSided.id, restSec = 60, side = HoldSide.LEFT)
+        repo.addExerciseToWorkout(workoutId, oneSided.id, restSec = 60, side = HoldSide.RIGHT)
+
+        val leftCard = buildWorkout(repo.allEvents(), workoutId)!!.exercises.single { it.side == HoldSide.LEFT }
+
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        // exactly what GachiApp.kt's `startProtocolSet` does with the tapped card's own side
+        viewModel.startProgramForExercise(ProgramStart(oneSided, side = leftCard.side, addedKg = null))
+        settle()
+
+        assertEquals(HoldSide.LEFT.code, timer.run.value?.side)
+
+        val totalSec = timer.run.value!!.steps.sumOf { it.durationSec }
+        elapse(timer, totalSec + 1)
+
+        val outcome = viewModel.runOutcome.value!!
+        viewModel.logRunSets(oneSided, outcome.sets)
+        settle()
+
+        val written = buildSession(repo.allEvents(), outcome.opDate).groups
+            .flatMap { it.sets }.map { it.form as HoldSet }
+        assertTrue(written.isNotEmpty())
+        assertTrue(
+            "the card that was tapped is a LEFT card, and every set of its run must say so",
+            written.all { it.sideOf == HoldSide.LEFT },
+        )
+    }
+
     /**
      * Recording a set starts a REST FLOOR for that exercise, and recording another one
      * restarts it.
@@ -338,7 +443,7 @@ class RunLoggingChainTest {
 
         val first = timer.floors.floors.value.single()
         assertEquals(exercise.id, first.exerciseId)
-        assertEquals("Hangs 20 mm", first.exerciseName)
+        assertEquals("Hangs", first.exerciseName)
         // the default, since the journal has only one entry and so no gap to measure
         assertEquals(timer.settings.value.defaultRestSec * 1000L, first.orderedMs)
 
@@ -404,7 +509,7 @@ class RunLoggingChainTest {
         // 4. and the user is told, by name and by count, rather than left to go and look
         val receipt = viewModel.logReceipt.value
         assertNotNull(receipt)
-        assertEquals("Hangs 20 mm", receipt!!.exerciseName)
+        assertEquals("Hangs", receipt!!.exerciseName)
         assertEquals(2, receipt.setCount)
         assertEquals(2, receipt.eventIds.size)
 

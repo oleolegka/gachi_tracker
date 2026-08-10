@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -17,15 +18,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
+import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
+import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
+import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.workoutsOn
 import java.time.LocalDate
 
@@ -82,42 +86,97 @@ class AmendmentFlowTest {
         val bench = ref("Bench press")
         val eventId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), attachToWorkout = false)
 
-        assertNotNull(repo.amendEntry(eventId, fields("reps" to 8, "weight_kg" to 62.5)))
+        val newId = repo.amendEntry(eventId, fields("reps" to 8, "weight_kg" to 62.5))
+        assertNotNull(newId)
+        assertNotEquals("the correction is a NEW row, not the old one rewritten", eventId, newId)
 
         val set = strengthSetsOfExercise(repo.allEvents(), bench.link).single()
         assertEquals(8, set.reps)
         assertEquals(62.5, set.weightKg!!, 1e-9)
-        // and the correction is an APPEND: the set and the amendment are two rows
-        assertEquals(2, repo.eventCount())
+        // the original, the new full version and the marker superseding the original: three rows
+        assertEquals(3, repo.eventCount())
+    }
+
+    /**
+     * THE regression this occurred_ts field exists to close. Without it, correcting the first
+     * set would append its new version at the END of the journal — after the second and third
+     * sets, which were written later — and the session screen (drawing sets in journal order)
+     * would show it last. [ActivityRepository.amendEntry] carries the ORIGINAL set's
+     * occurred_ts onto the new version instead of stamping the correction's own moment, and
+     * [buildSession] sorts by it, so the display order is unmoved by an edit however long
+     * after the fact it happens.
+     *
+     * The three sets are inserted with explicit, minutes-apart `ts` (rather than through
+     * [repo.record], which stamps the real clock) so the test is not at the mercy of three
+     * calls happening to land in the same wall-clock second, which would make `happenedAt` tie
+     * between them and prove nothing about the ordering this test exists to check.
+     */
+    @Test
+    fun `correcting the first of three sets does not move it in the session's display order`() = runTest {
+        val bench = ref("Bench press")
+        val firstId = db.events().insert(
+            EventEntity(
+                ts = "${day}T10:00:00", type = TYPE_STRENGTH_SET,
+                payload = strengthSetOf(bench, day, reps = 5, weightKg = 60.0).toPayload(),
+            )
+        )
+        db.events().insert(
+            EventEntity(
+                ts = "${day}T10:05:00", type = TYPE_STRENGTH_SET,
+                payload = strengthSetOf(bench, day, reps = 5, weightKg = 62.5).toPayload(),
+            )
+        )
+        db.events().insert(
+            EventEntity(
+                ts = "${day}T10:10:00", type = TYPE_STRENGTH_SET,
+                payload = strengthSetOf(bench, day, reps = 5, weightKg = 65.0).toPayload(),
+            )
+        )
+
+        // a typo fixed well after the fact - the third set is already in the journal by now
+        repo.amendEntry(firstId, fields("reps" to 8))
+
+        val weights = buildSession(repo.allEvents(), day).groups.single().sets.map { (it.form as StrengthSet).weightKg }
+        assertEquals(listOf(60.0, 62.5, 65.0), weights)
+        // and the correction itself did land - this is not a test of the edit failing silently
+        val corrected = buildSession(repo.allEvents(), day).groups.single().sets.first()
+        assertEquals(8, (corrected.form as StrengthSet).reps)
     }
 
     @Test
-    fun `a whole form can be handed in and the exercise it names is ignored`() = runTest {
+    fun `a whole form can be handed in, exercise and all - moving a set is a deletion and a new entry now`() = runTest {
         val bench = ref("Bench press")
         val squat = ref("Squat")
         val eventId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), attachToWorkout = false)
 
-        // the editor holds a filled-in form, not a diff, and it necessarily names an exercise.
-        // Handing in the WRONG exercise on purpose: it must be dropped rather than obeyed.
+        // the editor never builds a candidate naming a different exercise (EntryEditorDialog),
+        // but the repository itself no longer refuses one: a full rewrite protects nothing an
+        // old patch onto the SAME row's identity needed protecting, and this is now exactly the
+        // "delete it, log it again correctly" act TYPE_ENTRY_AMENDED's own KDoc always asked for
         repo.amendEntry(eventId, strengthSetOf(squat, day, reps = 3, weightKg = 90.0))
 
         val events = repo.allEvents()
-        assertTrue("the set must not have moved to the other exercise", strengthSetsOfExercise(events, squat.link).isEmpty())
-        val set = strengthSetsOfExercise(events, bench.link).single()
+        assertTrue("the original stays under its own exercise, superseded rather than rewritten", strengthSetsOfExercise(events, bench.link).isEmpty())
+        val set = strengthSetsOfExercise(events, squat.link).single()
         assertEquals(3, set.reps)
         assertEquals(90.0, set.weightKg!!, 1e-9)
-        assertEquals("Bench press", set.exercise)
+        assertEquals("Squat", set.exercise)
+        // the original is still there, unread but not gone - includeDeleted still finds it
+        assertEquals(2, readActivities(events, includeDeleted = true).size)
     }
 
     @Test
-    fun `an amendment that would move a set to another exercise is refused`() = runTest {
+    fun `patching just the exercise id through the JsonObject overload is no longer refused either`() = runTest {
         val bench = ref("Bench press")
         val eventId = repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), attachToWorkout = false)
 
-        assertThrows(IllegalArgumentException::class.java) {
-            kotlinx.coroutines.runBlocking { repo.amendEntry(eventId, fields("exercise_id" to 99)) }
-        }
-        assertEquals("nothing may have been written", 1, repo.eventCount())
+        // nothing this app ships does this (recordActualRest and renameWorkout never touch an
+        // exercise or workout key) - it is exercised here only to document that the check is
+        // gone, on purpose, per the model change: see amendEntry's own KDoc for the risk this
+        // narrow overload still carries, unlike the whole-form one above
+        val newId = repo.amendEntry(eventId, fields("exercise_id" to 99))
+        assertNotNull(newId)
+        assertEquals(3, repo.eventCount())
     }
 
     @Test

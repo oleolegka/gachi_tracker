@@ -325,8 +325,7 @@ private fun formsOf(
  */
 private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.filter { ev ->
     when (val form = ev.form) {
-        is StrengthSet -> !form.warmup
-        is HoldSet -> !form.warmup
+        is LoadedSet -> !form.warmup
         else -> true
     }
 }
@@ -336,9 +335,9 @@ private fun working(events: List<ActivityEvent>): List<ActivityEvent> = events.f
  * for "nothing was ever set".
  *
  * A stored value outside (0, 1] is treated as absent rather than used, on exactly the grounds
- * [ExerciseRef.edge] gives for a zero edge: a catalog row can carry rubbish (a row that
- * arrives from another journal, a value typed before the field was validated), and a chart
- * quietly drawn from a share of 4.0 is worse than a chart that says nothing.
+ * [ExerciseRef.protocol] gives for a zero work or rest: a catalog row can carry rubbish (a row
+ * that arrives from another journal, a value typed before the field was validated), and a
+ * chart quietly drawn from a share of 4.0 is worse than a chart that says nothing.
  */
 internal fun usableShare(share: Double?): Double? = share?.takeIf { it > 0.0 && it <= 1.0 }
 
@@ -639,85 +638,12 @@ fun recordsOf(
      */
     oneSided: Boolean = false,
 ): List<ExerciseRecord> = when (form) {
-    ExerciseForm.STRENGTH -> listOfNotNull(
-        strengthRecord(activities, exercise),
-        heaviestSet(activities, exercise),
-    )
+    ExerciseForm.STRENGTH -> strengthRecord(activities, exercise, oneSided) +
+        heaviestSet(activities, exercise, oneSided)
 
     ExerciseForm.HOLD -> holdRecord(activities, exercise, oneSided)
 
     else -> emptyList()
-}
-
-/**
- * The heaviest single set of a strength exercise, with its date. A second axis next to
- * the estimated 1RM: the 1RM record can be taken by a light-and-many set, and "the most I
- * have ever picked up" is a different question that lifters actually ask.
- */
-fun heaviestSet(activities: List<ActivityEvent>, exercise: ExerciseLink): ExerciseRecord? {
-    val weighted = activities.mapNotNull { ev ->
-        (ev.form as? StrengthSet)
-            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null && !it.warmup }
-            ?.let { it to ev.opDate }
-    }
-    if (weighted.isEmpty()) return null
-    val (best, day) = weighted.maxBy { it.first.weightKg!! }
-    return ExerciseRecord(
-        exercise, RecordHit.Axis.WEIGHT_AT_REPS, best.weightKg!!, day,
-        "heaviest set ${fmtNum(best.weightKg)} kg x ${best.reps}",
-    )
-}
-
-// --- hangboard siblings (§12-A) --------------------------------------------------------
-
-/** Tokens that carry a hangboard's measurements rather than its name. */
-private val MEASUREMENT_WORDS = setOf("mm", "cm", "s", "sec", "kg", "min")
-
-/**
- * The base name shared by the §12-A siblings of a hangboard exercise.
- *
- * "Hangs 20 mm - 7:3" and "Hangs 15 mm - 7:3" are two different catalog rows on purpose
- * (edge and protocol are part of the identity), but on the detail screen they have to be
- * reachable from one another, otherwise comparing this week's 20 mm against last week's
- * 15 mm means walking back to the overview.
- *
- * The grouping is derived from the NAME, with the numbers and the unit words dropped, and
- * that is a heuristic: an exercise named without its edge in the title lands in its own
- * group of one, and the switcher simply does not appear. The edge and protocol shown in
- * the header do NOT come from this parsing — they come from the structured columns on the
- * catalog row, so a wrong guess here can never misreport a measurement.
- */
-fun holdBaseKey(name: String): String {
-    val norm = normPhrase(name) ?: return ""
-    val kept = norm.split(' ').filter { token ->
-        token.isNotBlank() &&
-            token.none { it.isDigit() } &&
-            token !in MEASUREMENT_WORDS
-    }
-    return kept.joinToString(" ").ifBlank { norm }
-}
-
-/** A hangboard exercise as the sibling switcher needs it: identity plus its measurements. */
-data class HoldSibling(
-    val exerciseId: Long,
-    val name: String,
-    val edgeMm: Double?,
-    val workSec: Double?,
-    val restSec: Double?,
-)
-
-/**
- * The §12-A siblings of a hold exercise, INCLUDING the one asked about, ordered by edge
- * (thinnest last — a thinner edge is the harder exercise) and then by name.
- *
- * Returns a single-element list when the exercise has no siblings; the screen then hides
- * the switcher rather than showing a chip row with one chip in it.
- */
-fun holdSiblings(catalog: List<HoldSibling>, exerciseId: Long): List<HoldSibling> {
-    val self = catalog.firstOrNull { it.exerciseId == exerciseId } ?: return emptyList()
-    val base = holdBaseKey(self.name)
-    return catalog.filter { holdBaseKey(it.name) == base }
-        .sortedWith(compareByDescending<HoldSibling> { it.edgeMm ?: Double.MAX_VALUE }.thenBy { it.name })
 }
 
 /**
@@ -762,6 +688,45 @@ fun activitiesByDay(
         if (!seen.add(ev.opDate to key)) continue
         out.getOrPut(ev.opDate) { mutableListOf() }
             .add(ActivityRef(key, exercise?.id, ev.form.activityName()))
+    }
+    return out
+}
+
+/**
+ * How many DISTINCT JOURNAL INSTANCES land on each day of the range: a whole WORKOUT counts
+ * once however many exercises it holds, and entries of one exercise logged with no workout
+ * around them count as one instance too. These are the same units domain/DayCards.kt turns
+ * into RUNNING/DONE/SINGLE cards — the calendar's dots (domain/Schedule.kt's `calendarDots`)
+ * are one per instance, which [activitiesByDay] above is NOT: that one counts EXERCISES for
+ * the heatmap, and a single gym session touching three of them is three activities there and
+ * one instance here. Neither is more correct than the other; they answer different questions
+ * and are kept as two functions rather than one with a flag, for the reason every reducer in
+ * this file gives for not sharing a fold across two meanings.
+ *
+ * Built a day at a time through [workoutsOn] and [setsOutsideWorkouts] rather than by
+ * re-deriving their dangling-reference and grouping rules here: a workout ref pointing at a
+ * start event this journal no longer has is exactly the case [setsOutsideWorkouts] already
+ * has to get right, and a second implementation of that call is a second answer waiting to
+ * disagree with the first.
+ *
+ * Days with nothing recorded are absent from the map rather than mapped to zero, the same
+ * convention [activitiesByDay] uses.
+ */
+fun journalInstanceCounts(
+    events: List<JournalEvent>,
+    dateFrom: String,
+    dateTo: String,
+): Map<String, Int> {
+    val out = LinkedHashMap<String, Int>()
+    var day = LocalDate.parse(dateFrom)
+    val to = LocalDate.parse(dateTo)
+    while (!day.isAfter(to)) {
+        val iso = day.toString()
+        val looseInstances = setsOutsideWorkouts(events, iso)
+            .mapTo(HashSet()) { it.form.exerciseLink()?.key ?: "name:${it.key ?: it.type}" }
+        val count = workoutsOn(events, iso).size + looseInstances.size
+        if (count > 0) out[iso] = count
+        day = day.plusDays(1)
     }
     return out
 }
@@ -839,8 +804,9 @@ fun activityHeatmap(
  * The two forms that are made of SETS. A run, a stretch and a weigh-in are training and are
  * not sets, so they have nothing to contribute to a count of sets.
  *
- * The same pair [startsRest] names, and for the same underlying reason — a set is the unit
- * that is performed, rested after, and counted.
+ * NOT the same pair [startsRest] names any more (§13.9 added a stretch's own form, DURATION,
+ * to that one): a duration entry now gets a rest between reps of it, and still is not itself
+ * counted as a "set" here — the two questions were always free to part ways, and now they do.
  */
 private val SET_TYPES: List<String> = listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET)
 
@@ -852,8 +818,7 @@ private val SET_TYPES: List<String> = listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET)
  * it would let a cautious session outscore a hard one.
  */
 fun isWorkingSet(form: ActivityForm): Boolean = when (form) {
-    is StrengthSet -> !form.warmup
-    is HoldSet -> !form.warmup
+    is LoadedSet -> !form.warmup
     else -> false
 }
 

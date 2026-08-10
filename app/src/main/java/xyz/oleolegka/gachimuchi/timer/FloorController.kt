@@ -199,28 +199,31 @@ class FloorController internal constructor(
     // --- what the app calls ---------------------------------------------------------------
 
     /**
-     * Starts a rest for [exerciseId], replacing whatever was running for it.
+     * Starts a rest for [exerciseId] (and, for a one-sided exercise's card, [side]), replacing
+     * whatever was running for that same card.
      *
      * Replacing without asking is right for the same reason it is right in
-     * [TimerController.start]: a second set of the same exercise means the previous rest was
+     * [TimerController.start]: a second set of the same card means the previous rest was
      * superseded by an event that has already happened. `withFloor` is what keeps at most one
-     * floor per exercise.
+     * floor per card — see [RestFloor.side] for why a card is (exerciseId, side) and not
+     * exerciseId alone: without it, marking the right hand's set would stop the left hand's
+     * still-counting rest, because both would be "the" floor of the same exerciseId.
      */
     @Synchronized
-    fun start(exerciseId: Long, exerciseName: String, orderedMs: Long) {
+    fun start(exerciseId: Long, exerciseName: String, orderedMs: Long, side: String? = null) {
         val now = SystemClock.elapsedRealtime()
         publish(
             _floors.value.withFloor(
-                startFloor(exerciseId, exerciseName, orderedMs, now, System.currentTimeMillis())
+                startFloor(exerciseId, exerciseName, orderedMs, now, System.currentTimeMillis(), side)
             )
         )
         advance()
     }
 
-    /** Takes one floor off the list, by hand. */
+    /** Takes one floor off the list, by hand — the same (exerciseId, side) card [start] took. */
     @Synchronized
-    fun dismiss(exerciseId: Long) {
-        publish(_floors.value.filterNot { it.exerciseId == exerciseId })
+    fun dismiss(exerciseId: Long, side: String? = null) {
+        publish(_floors.value.filterNot { it.exerciseId == exerciseId && it.side == side })
         advance()
     }
 

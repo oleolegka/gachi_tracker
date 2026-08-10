@@ -29,6 +29,32 @@ fun parseNumber(text: String): Double? {
 fun parseCount(text: String): Int? = parseNumber(text)?.let { if (it < 0) null else it.roundToInt() }
 
 /**
+ * One side of a protocol — the work seconds or the rest seconds — out of a text field, as a
+ * WHOLE second. Null for anything that is not a positive number.
+ *
+ * ── Why the rounding lives here and not at the keyboard ─────────────────────────
+ * A protocol is stored as a program, and a program's steps are whole seconds. A field that
+ * accepts "7.6" and a store that keeps whole seconds meet somewhere, and wherever that is,
+ * the fraction goes. Left to the store it goes by truncation — 7.6 becomes 7, most of a
+ * second lost to a conversion nobody chose and nobody sees. Rounding it here, at the edge
+ * where the typed text becomes a number, makes the stored protocol the nearest whole second
+ * to what was actually typed, and puts the rule in one testable place instead of in each
+ * screen that offers the pair.
+ *
+ * Returned as a [Double] because that is what the protocol pair is carried as everywhere
+ * above the program; the point is that it is now always a whole one.
+ *
+ * ── The rounding happens BEFORE the positive check, and that order matters ───────
+ * "0.4" is a positive number that is not a positive whole second. Checking first and
+ * rounding after would let it through as a protocol of ZERO seconds, which the set validator
+ * rejects by throwing — surfacing on the logging screen as a crash on the Add button rather
+ * than as an unset field. Rounding first makes it null, which is a state the whole app
+ * already handles.
+ */
+fun parseProtocolSeconds(text: String): Double? =
+    parseNumber(text)?.roundToInt()?.takeIf { it > 0 }?.toDouble()
+
+/**
  * A number for a text field: rounded to two decimals with the trailing zeros trimmed, so
  * that a `+2.5` step does not turn "60" into "62.50000000000001".
  */

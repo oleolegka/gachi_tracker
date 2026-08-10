@@ -1,23 +1,31 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
+import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -25,18 +33,25 @@ import kotlin.math.round
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
 import xyz.oleolegka.gachimuchi.data.ExerciseEdit
+import xyz.oleolegka.gachimuchi.data.ExercisePictureOutcome
+import xyz.oleolegka.gachimuchi.data.ExercisePictureStore
+import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.parseNumber
+import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 
 /**
- * Correcting a catalog exercise, and taking one out of the pickers.
+ * Correcting a catalog exercise, taking one out of the pickers, removing one for good, or
+ * adding one that is not about any workout at all.
  *
  * ── Why this exists at all ──────────────────────────────────────────────────────
  * A name typed into the entry card became a catalog row and then could never be touched
- * again: `ExerciseDao.update` existed and was called from nowhere, so a typo, a wrong edge or
- * a protocol entered as 7:30 instead of 7:3 was permanent. On the one screen where the
+ * again: `ExerciseDao.update` existed and was called from nowhere, so a typo, or a protocol
+ * entered as 7:30 instead of 7:3, was permanent. On the one screen where the
  * identity is displayed as facts about the exercise, there was no way to correct those facts.
  *
  * ── Why it writes through a repository of its own ──────────────────────────────
@@ -49,12 +64,35 @@ import xyz.oleolegka.gachimuchi.domain.parseNumber
  * That is a deviation and is written down as one: when `GachiApp` is next open for editing,
  * these two should become callbacks like everything else. The precedent it follows is the
  * settings tab, which reaches for its stores the same way.
+ *
+ * ── Why [create] does not go through `MainViewModel.createExercise` ─────────────
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.createExercise] always points the entry card at
+ * the row it just made — right for every existing caller, which is either logging or planning
+ * and has somewhere for the new row to go. A row added on its own has nowhere to go: the next
+ * "Add" on Today would find that exercise sitting in `MainViewModel.activeExerciseId` and open
+ * the entry card on it, which is exactly the workout-shaped side effect a plain catalog entry
+ * must not have. [create] calls `ensureExercise` directly, the same way [edit], [toggleHidden]
+ * and [delete] already reach past the ViewModel for their own writes.
  */
 class ExerciseEditor internal constructor(
     /** Opens the correction dialog for this exercise. */
     val edit: (ExerciseEntity) -> Unit,
     /** Hides it from the pickers, or brings it back. */
     val toggleHidden: (ExerciseEntity) -> Unit,
+    /**
+     * Removes it from everywhere — the catalog and its own history — see
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.deleteExercise]. The caller is the one
+     * that knows how many entries are about to go and confirms with the person before this is
+     * reached; there is no confirmation in here to keep in step with a second one.
+     */
+    val delete: (ExerciseEntity) -> Unit,
+    /**
+     * Adds a catalog row and stops there — no active exercise, no navigation, nothing logged.
+     * Goes through [xyz.oleolegka.gachimuchi.data.ActivityRepository.ensureExercise], the same
+     * find-or-create used by every other caller, so a name that already exists is quietly
+     * reused rather than duplicated.
+     */
+    val create: (name: String, form: ExerciseForm, workSec: Double?, restSec: Double?) -> Unit,
 )
 
 @Composable
@@ -62,18 +100,26 @@ fun rememberExerciseEditor(): ExerciseEditor {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repo = remember(context) { ActivityRepository(AppDatabase.get(context)) }
+    // resolves the protocol to prefill Work/Rest with — the dialog still asks for two plain
+    // numbers (see its own KDoc), and this is where those numbers come from now that the
+    // catalog row itself no longer carries them
+    val programRepo = remember(context) { ProgramRepository(AppDatabase.get(context)) }
+    val programs by programRepo.programs.collectAsState(initial = emptyList())
+    val pictureStore = remember(context) { ExercisePictureStore.get(context) }
 
     var editing by remember { mutableStateOf<ExerciseEntity?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
 
     editing?.let { exercise ->
+        val program = exercise.protocolProgramId?.let { id -> programs.firstOrNull { it.id == id } }
         EditExerciseDialog(
             exercise = exercise,
+            program = program,
+            pictureStore = pictureStore,
             onDismiss = { editing = null },
-            onSave = { name, edge, work, rest, oneSided, share ->
-                editing = null
+            onSave = { name, oneSided, share ->
                 scope.launch {
-                    val result = repo.editExercise(exercise.id, name, edge, work, rest)
+                    val result = repo.editExercise(exercise.id, name)
                     /*
                      * The two flags are their own columns and their own writes: correcting a
                      * name, declaring the exercise one-handed and saying what share of you it
@@ -82,22 +128,60 @@ fun rememberExerciseEditor(): ExerciseEditor {
                      * They go AFTER the identity edit and only when it took. A refused edit
                      * tells the user the exercise "was left as it was", and that sentence has
                      * to be true of the whole dialog and not only of the name.
+                     *
+                     * The dialog itself closes here too, and only here - not the instant Save
+                     * is tapped. Closing on tap used to say "saved" before the write was even
+                     * attempted, so a name refused as taken looked identical to one that went
+                     * through: the dialog was already gone, the flags had silently not been
+                     * written, and the "Not saved" alert that followed talked about the name
+                     * alone. Staying open on every other outcome keeps the toggles exactly as
+                     * typed - on screen, not yet true - until they are.
                      */
                     if (result is ExerciseEdit.Saved) {
                         if (oneSided != exercise.oneSided) repo.setOneSided(exercise.id, oneSided)
                         if (share != exercise.bodyweightShare) {
                             repo.setBodyweightShare(exercise.id, share)
                         }
+                        editing = null
                     }
                     message = when (result) {
                         is ExerciseEdit.Saved -> null
                         is ExerciseEdit.Blank -> "An exercise needs a name."
                         is ExerciseEdit.Gone -> "That exercise is no longer in the catalog."
                         is ExerciseEdit.Taken ->
-                            "\"${result.name}\" already has that name, edge and protocol, and " +
-                                "an exercise is those three together. Two rows claiming to be " +
-                                "the same exercise would split its history in half, so this " +
-                                "one was left as it was."
+                            "\"${result.name}\" already has that name and protocol, and an " +
+                                "exercise is those together. Two rows claiming to be the same " +
+                                "exercise would split its history in half, so this one was " +
+                                "left as it was."
+                    }
+                }
+            },
+            /*
+             * Immediate, unlike the name/side/share above: there is no "Save" to gate this on,
+             * the same way adding a picture to the celebration gallery is immediate rather than
+             * part of a form. `editing` is updated to the new value on success so the dialog's
+             * own preview reflects the change right away, without waiting for it to be reopened.
+             */
+            onPickPicture = { uri ->
+                scope.launch {
+                    when (val outcome = pictureStore.add(uri)) {
+                        is ExercisePictureOutcome.Added -> {
+                            val previous = exercise.pictureId
+                            repo.setPicture(exercise.id, outcome.pictureId)
+                            previous?.let { pictureStore.remove(it) }
+                            editing = exercise.copy(pictureId = outcome.pictureId)
+                        }
+                        ExercisePictureOutcome.TooBig -> message = "Too large (over 16 MB). Not attached."
+                        ExercisePictureOutcome.Unreadable -> message = "That picture could not be read."
+                    }
+                }
+            },
+            onRemovePicture = {
+                exercise.pictureId?.let { previous ->
+                    scope.launch {
+                        repo.setPicture(exercise.id, null)
+                        pictureStore.remove(previous)
+                        editing = exercise.copy(pictureId = null)
                     }
                 }
             },
@@ -119,15 +203,21 @@ fun rememberExerciseEditor(): ExerciseEditor {
             toggleHidden = { exercise ->
                 scope.launch { repo.setHidden(exercise.id, !exercise.hidden) }
             },
+            delete = { exercise ->
+                scope.launch { repo.deleteExercise(exercise) }
+            },
+            create = { name, form, workSec, restSec ->
+                scope.launch { repo.ensureExercise(name, form, workSec, restSec) }
+            },
         )
     }
 }
 
 /**
- * The correction itself: the name, and for a hold the edge and the work:rest protocol.
+ * The correction itself: the name — the protocol is shown, never asked for.
  *
  * ── And two things that are not corrections ────────────────────────────────────
- * "One hand at a time" and "how much of you it lifts" are statements about the exercise that
+ * "One side at a time" and "how much of you it lifts" are statements about the exercise that
  * nothing else in the app could make. Both columns were being read — by the records block and
  * by the volume chart — while no control anywhere wrote them, so both features were dead on
  * arrival. They sit in the correction dialog because this is the one screen that shows an
@@ -140,22 +230,37 @@ fun rememberExerciseEditor(): ExerciseEditor {
  * screen as a statement of fact, with the sentence that says why — a control that is simply
  * absent invites the same question every time.
  *
- * The numbers follow exactly the rule the creation form uses: positive or not filled in, and
- * the protocol is a pair or nothing. See `CreateExerciseForm` in ui/screens/ExercisePicker.kt
- * for why a zero is treated as an empty field rather than as a zero.
+ * ── The protocol is shown and cannot be changed either ─────────────────────────
+ * The owner's rule: "such a thing cannot happen: it breaks the statistics. If yesterday it was
+ * one protocol and today another, that is a NEW exercise." Work/Rest used to be an editable
+ * pair here, resolved through the same lookup [ActivityRepository.ensureExercise] uses for a
+ * NEW exercise and repointed onto this row as a "correction" — which is exactly the hole this
+ * screen now closes: the row's `identity_key` includes the protocol, so silently repointing it
+ * moved a running exercise onto a different protocol under the SAME identity, with every set
+ * already logged staying put underneath. The fields below are a fact, not an input, on the
+ * same footing the form already was. An exercise with no protocol stays with none: "no
+ * protocol" is itself part of what this row is, and cannot be added after the fact any more
+ * than a protocol can be corrected.
  */
 @Composable
 private fun EditExerciseDialog(
     exercise: ExerciseEntity,
+    /** The resolved protocol program [exercise.protocolProgramId] names, or null for none. */
+    program: WorkoutProgram?,
+    pictureStore: ExercisePictureStore,
     onDismiss: () -> Unit,
-    onSave: (String, Double?, Double?, Double?, Boolean, Double?) -> Unit,
+    onSave: (String, Boolean, Double?) -> Unit,
+    /** Picked from the camera or the gallery — see [rememberExerciseEditor] for what this does
+     *  with it (an immediate write, not part of [onSave]). */
+    onPickPicture: (Uri) -> Unit,
+    /** Takes the picture away. A no-op if the exercise has none — the button offering it is
+     *  simply absent in that case, see below. */
+    onRemovePicture: () -> Unit,
 ) {
     val hold = exercise.form == ExerciseForm.HOLD.code
     val lifted = hold || exercise.form == ExerciseForm.STRENGTH.code
+    val protocolBlock = program?.firstBlock()
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
-    var edge by remember(exercise.id) { mutableStateOf(exercise.edgeMm.asField()) }
-    var work by remember(exercise.id) { mutableStateOf(exercise.protocolWorkSec.asField()) }
-    var rest by remember(exercise.id) { mutableStateOf(exercise.protocolRestSec.asField()) }
     var oneSided by remember(exercise.id) { mutableStateOf(exercise.oneSided) }
     var percent by remember(exercise.id) { mutableStateOf(exercise.bodyweightShare.asPercentField()) }
 
@@ -163,6 +268,9 @@ private fun EditExerciseDialog(
     // typed something that is not a share of one body: refused rather than dropped on the
     // floor, since a number that vanishes on save is how this column stayed empty for months
     val percentBad = percent.isNotBlank() && share == null
+
+    val takePhoto = rememberCameraCapture(onPickPicture)
+    val pickFromGallery = rememberSinglePicturePicker(onPickPicture)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -176,42 +284,77 @@ private fun EditExerciseDialog(
                     singleLine = true,
                     label = { Text("Name") },
                 )
-                if (hold) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = edge, onValueChange = { edge = it }, modifier = Modifier.weight(1f),
-                            singleLine = true, label = { Text("Edge, mm") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        )
-                        OutlinedTextField(
-                            value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
-                            singleLine = true, label = { Text("Work, s") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        )
-                        OutlinedTextField(
-                            value = rest, onValueChange = { rest = it }, modifier = Modifier.weight(1f),
-                            singleLine = true, label = { Text("Rest, s") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        )
+                /*
+                 * The owner's own reason for the whole feature: "on different machines the same
+                 * weight feels very different" — a picture is here so that a glance at it, next
+                 * time, says which rack or which pulldown this row means. Above the form fields
+                 * because it is the one thing on this dialog that is recognised rather than
+                 * read.
+                 */
+                Text("Picture", style = MaterialTheme.typography.labelSmall)
+                val picture = rememberPicture(
+                    exercise.pictureId?.let { pictureStore.fileOf(it) },
+                    EDIT_DIALOG_PICTURE_MAX_PX,
+                )
+                picture?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = null, // decoration: the Name field above already names this exercise
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(96.dp).clip(RoundedCornerShape(12.dp)),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = takePhoto) { Text("Camera") }
+                    OutlinedButton(onClick = pickFromGallery) { Text("Gallery") }
+                    if (exercise.pictureId != null) {
+                        TextButton(onClick = onRemovePicture) { Text("Remove") }
                     }
                 }
                 if (hold) {
+                    Text(
+                        "Protocol (work : rest, seconds)",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Text(
+                        if (protocolBlock != null) {
+                            "${protocolBlock.workSec} : ${protocolBlock.restSec}"
+                        } else {
+                            "None"
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Fixed. The protocol is part of what makes this exercise the exercise " +
+                            "it is; changing it would put today's sets under yesterday's " +
+                            "history. Trained on a different protocol now? Create it as a new " +
+                            "exercise - it starts a history of its own.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                if (lifted) {
                     /*
                      * The one switch here that is not a correction of a typo.
                      *
-                     * It is what splits the record per hand, and until it existed anywhere in
+                     * It is what splits the record per side, and until it existed anywhere in
                      * the UI the whole per-side feature was unreachable: the entry form asks
-                     * for a hand only when the exercise claims to need one, and nothing could
+                     * for a side only when the exercise claims to need one, and nothing could
                      * make it claim that. Found from the phone, 2026-08-08.
+                     *
+                     * GATED ON [lifted], not on [hold]: a hangboard hang was never the only
+                     * thing trained one limb at a time — a pistol squat and a one-arm row are
+                     * the same asymmetry on a [StrengthSet] — and the mechanism underneath
+                     * (two workout cards, a rest floor per card, a record per side) never cared
+                     * which form the exercise was. Only this switch did, and that was the gap.
                      */
                     FilterChip(
                         selected = oneSided,
                         onClick = { oneSided = !oneSided },
-                        label = { Text("One hand at a time") },
+                        label = { Text("One side at a time") },
                     )
                     Text(
-                        "Each hand keeps its own record, and every set of this exercise is " +
-                            "asked which hand it was.",
+                        "Each side keeps its own record, and every set of this exercise is " +
+                            "asked which side it was.",
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -260,14 +403,6 @@ private fun EditExerciseDialog(
                     )
                 }
                 Text(
-                    "This corrects what the catalog SAYS. The sets already logged stay with " +
-                        "this exercise, and the ones recorded before the correction still carry " +
-                        "the edge and protocol they were written with. An exercise you have " +
-                        "genuinely moved to another edge is a different exercise - create it " +
-                        "instead, and it starts its own history from today.",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                Text(
                     "The form stays ${ExerciseForm.fromCodeOrTick(exercise.form).title.lowercase()}: " +
                         "it decides the shape every set of this exercise was written in, and " +
                         "changing it would leave that history unreadable.",
@@ -279,14 +414,8 @@ private fun EditExerciseDialog(
             TextButton(
                 enabled = name.isNotBlank() && !percentBad,
                 onClick = {
-                    val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else exercise.protocolWorkSec
-                    val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else exercise.protocolRestSec
-                    val pair = if (w != null && r != null) w to r else null
                     onSave(
                         name.trim(),
-                        if (hold) parseNumber(edge)?.takeIf { it > 0 } else exercise.edgeMm,
-                        pair?.first,
-                        pair?.second,
                         oneSided,
                         if (lifted) share else exercise.bodyweightShare,
                     )
@@ -341,3 +470,7 @@ internal fun Double?.asPercentField(): String =
 /** The form of a row, degrading to a check-in rather than throwing — see `ExerciseEntity.toRef`. */
 private fun ExerciseForm.Companion.fromCodeOrTick(code: Int): ExerciseForm =
     runCatching { fromCode(code) }.getOrDefault(ExerciseForm.TICK)
+
+/** How large a decode this dialog's own preview asks for — bigger than the picker's row
+ *  thumbnail (it is the only thing on screen here), still nowhere near the full file. */
+private const val EDIT_DIALOG_PICTURE_MAX_PX = 240

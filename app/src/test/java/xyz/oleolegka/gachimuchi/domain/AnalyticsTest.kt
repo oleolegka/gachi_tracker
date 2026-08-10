@@ -5,6 +5,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import xyz.oleolegka.gachimuchi.ui.Journal
+import xyz.oleolegka.gachimuchi.ui.exerciseRef
 import java.time.LocalDate
 
 /**
@@ -52,7 +54,7 @@ class AnalyticsTest {
         assertEquals(est1rm(60.0, 5), series.points[0].value, 1e-9)
         assertEquals("2026-08-03", series.points[1].opDate)
         // the trend uses the same formula as the record, so the two cannot disagree
-        assertEquals(strengthRecord(acts(events), ExerciseLink.ofId(1))!!.value, series.best!!.value, 1e-9)
+        assertEquals(strengthRecord(acts(events), ExerciseLink.ofId(1)).single().value, series.best!!.value, 1e-9)
     }
 
     @Test
@@ -174,8 +176,8 @@ class AnalyticsTest {
         val strengthRecs = recordsOf(a, ExerciseLink.ofId(1), ExerciseForm.STRENGTH)
         assertEquals(2, strengthRecs.size)
         assertEquals("2026-08-01", strengthRecs[0].opDate)
-        assertEquals(100.0, heaviestSet(a, ExerciseLink.ofId(1))!!.value, 1e-9)
-        assertTrue(heaviestSet(a, ExerciseLink.ofId(1))!!.text.contains("heaviest set"))
+        assertEquals(100.0, heaviestSet(a, ExerciseLink.ofId(1)).single().value, 1e-9)
+        assertTrue(heaviestSet(a, ExerciseLink.ofId(1)).single().text.contains("heaviest set"))
 
         assertEquals(1, recordsOf(a, ExerciseLink.ofId(2), ExerciseForm.HOLD).size)
         assertEquals(RecordHit.Axis.HOLD_WEIGHT, recordsOf(a, ExerciseLink.ofId(2), ExerciseForm.HOLD)[0].axis)
@@ -183,19 +185,6 @@ class AnalyticsTest {
         assertTrue(recordsOf(a, ExerciseLink.ofId(3), ExerciseForm.CARDIO).isEmpty())
         assertTrue(recordsOf(a, ExerciseLink.ofId(6), ExerciseForm.DURATION).isEmpty())
         assertTrue(recordsOf(a, ExerciseLink.ofId(5), ExerciseForm.TICK).isEmpty())
-    }
-
-    // --- hangboard siblings --------------------------------------------------------------
-
-    @Test
-    fun `hangboard siblings share a base key once the measurements are stripped`() {
-        assertEquals("hangs", holdBaseKey("Hangs 20 mm - 7:3"))
-        assertEquals("hangs", holdBaseKey("Hangs 15 mm - 7:3"))
-        assertEquals("hangs", holdBaseKey("Hangs 20 mm - 10:50"))
-        // a different exercise does not get merged in
-        assertTrue(holdBaseKey("Pull-ups") != holdBaseKey("Hangs 20 mm - 7:3"))
-        // a name with no measurements at all survives whole, so it forms a group of one
-        assertEquals("front lever", holdBaseKey("Front lever"))
     }
 
     // --- heatmap --------------------------------------------------------------------------
@@ -226,6 +215,83 @@ class AnalyticsTest {
         // first-appearance order, and a weigh-in is not an activity
         assertEquals(listOf("Bench press", "Hangs 20 mm"), perDay.getValue("2026-08-05").map { it.name })
         assertEquals(listOf(1L, 2L), perDay.getValue("2026-08-05").map { it.exerciseId })
+    }
+
+    // --- journal instance counts (the calendar's dots, §12-B rework 2026-08-10) ------------
+
+    private val bench = exerciseRef(1, "Bench press")
+    private val squat = exerciseRef(2, "Squat")
+
+    @Test
+    fun `a whole workout is one instance, however many exercises it holds`() {
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05")
+        journal.addExercise(workout, "2026-08-05", bench, restSec = 150)
+        journal.strengthSet(bench, "2026-08-05", at = "09:05", workoutId = workout)
+        journal.strengthSet(bench, "2026-08-05", at = "09:07", workoutId = workout)
+        journal.strengthSet(squat, "2026-08-05", at = "09:15", workoutId = workout)
+
+        val counts = journalInstanceCounts(journal.events, "2026-08-01", "2026-08-31")
+
+        assertEquals(1, counts.getValue("2026-08-05"))
+    }
+
+    @Test
+    fun `entries logged outside a workout are one instance per exercise`() {
+        val journal = Journal()
+        journal.strengthSet(bench, "2026-08-05", at = "09:05")
+        journal.strengthSet(bench, "2026-08-05", at = "09:07") // same exercise, still one
+        journal.strengthSet(squat, "2026-08-05", at = "09:15") // a different one
+
+        val counts = journalInstanceCounts(journal.events, "2026-08-01", "2026-08-31")
+
+        assertEquals(2, counts.getValue("2026-08-05"))
+    }
+
+    @Test
+    fun `a workout and a loose entry on the same day are two instances`() {
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05")
+        journal.strengthSet(bench, "2026-08-05", at = "09:05", workoutId = workout)
+        journal.strengthSet(squat, "2026-08-05", at = "18:00") // outside any workout
+
+        val counts = journalInstanceCounts(journal.events, "2026-08-01", "2026-08-31")
+
+        assertEquals(2, counts.getValue("2026-08-05"))
+    }
+
+    @Test
+    fun `a loose weigh-in is an instance too, the same as domain-DayCards' SINGLE card`() {
+        // journalInstanceCounts exists to match the units the day's own card list is built
+        // from (domain/DayCards.kt); a weigh-in gets a card there, so it gets a dot here
+        val journal = Journal()
+        journal.weighIn("2026-08-05")
+
+        val counts = journalInstanceCounts(journal.events, "2026-08-01", "2026-08-31")
+
+        assertEquals(1, counts.getValue("2026-08-05"))
+    }
+
+    @Test
+    fun `a day with nothing recorded is absent from the map, not mapped to zero`() {
+        val journal = Journal()
+        journal.strengthSet(bench, "2026-08-05")
+
+        val counts = journalInstanceCounts(journal.events, "2026-08-01", "2026-08-31")
+
+        assertNull(counts["2026-08-06"])
+        assertEquals(setOf("2026-08-05"), counts.keys)
+    }
+
+    @Test
+    fun `a cancelled set leaves no instance behind`() {
+        val journal = Journal()
+        val setId = journal.strengthSet(bench, "2026-08-05")
+        journal.deleteEntry(setId)
+
+        val counts = journalInstanceCounts(journal.events, "2026-08-01", "2026-08-31")
+
+        assertNull(counts["2026-08-05"])
     }
 
     @Test
@@ -416,25 +482,6 @@ class AnalyticsTest {
             listOf(DayPoint("2026-08-01", 100.0)),
         )
         assertNull(single.delta())
-    }
-
-    // --- hangboard siblings ------------------------------------------------------------------------
-
-    @Test
-    fun `siblings are grouped by base name and ordered from the widest edge down`() {
-        val catalog = listOf(
-            HoldSibling(1, "Hangs 15 mm - 7:3", 15.0, 7.0, 3.0),
-            HoldSibling(2, "Hangs 20 mm - 7:3", 20.0, 7.0, 3.0),
-            HoldSibling(3, "Hangs 20 mm - 10:50", 20.0, 10.0, 50.0),
-            HoldSibling(4, "Front lever", null, null, null),
-        )
-        val siblings = holdSiblings(catalog, 2)
-        // the exercise asked about is included, and the thinner edge sorts last (harder)
-        assertEquals(listOf(3L, 2L, 1L), siblings.map { it.exerciseId })
-
-        // an exercise with no siblings is a group of one, and the screen hides the switcher
-        assertEquals(listOf(4L), holdSiblings(catalog, 4).map { it.exerciseId })
-        assertTrue(holdSiblings(catalog, 999).isEmpty())
     }
 
     // --- the check-in presence window ------------------------------------------------------------------

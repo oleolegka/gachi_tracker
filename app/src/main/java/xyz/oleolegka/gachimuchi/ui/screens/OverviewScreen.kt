@@ -6,16 +6,23 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
-import xyz.oleolegka.gachimuchi.domain.CatalogExercise
+import xyz.oleolegka.gachimuchi.data.toCatalog
 import xyz.oleolegka.gachimuchi.domain.DoorTile
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.activityHeatmap
 import xyz.oleolegka.gachimuchi.domain.doorTiles
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.heroStats
 import xyz.oleolegka.gachimuchi.domain.presenceWindow
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -27,6 +34,7 @@ import xyz.oleolegka.gachimuchi.ui.components.MiniBars
 import xyz.oleolegka.gachimuchi.ui.components.MiniDots
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.Sparkline
+import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.fmtDelta
 import xyz.oleolegka.gachimuchi.ui.fmtRecordDate
 import xyz.oleolegka.gachimuchi.ui.fmtRelativeDay
@@ -60,6 +68,14 @@ fun OverviewScreen(
     }
     val tiles = remember(state.events, catalog) { doorTiles(state.events, catalog) }
     val byId = remember(state.exercises) { state.exercises.associateBy { it.id } }
+    /*
+     * Working on the catalog as its own thing — adding a row, or reaching one to rename or
+     * delete it — is not the same errand as looking at a door tile above, but it is the same
+     * exercises, so it lives on this tab rather than a screen built to hold one button. See
+     * [rememberExerciseEditor] for why creating this way never touches the entry card.
+     */
+    val editor = rememberExerciseEditor()
+    var browsingCatalog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -82,6 +98,12 @@ fun OverviewScreen(
         item {
             Column(Modifier.fillMaxWidth()) {
                 SectionHeader("Forms - tap for details", "sparkline - record")
+                // not "the empty state's way out": this is here whether or not there is a
+                // door tile below it, because the catalog is worked on independently of
+                // whether anything has been logged against it yet
+                OutlinedButton(onClick = { browsingCatalog = true }) {
+                    Text("Manage the exercise catalog")
+                }
                 if (tiles.isEmpty()) {
                     EmptyState(
                         title = "No workouts of any kind yet",
@@ -94,8 +116,34 @@ fun OverviewScreen(
         }
 
         items(tiles, key = { it.exerciseId }) { tile ->
-            FormDoorTile(tile, byId[tile.exerciseId], today, onOpenForm)
+            val entity = byId[tile.exerciseId]
+            val program = entity?.protocolProgramId?.let { state.programsById[it] }
+            FormDoorTile(tile, entity, program, today, onOpenForm)
         }
+    }
+
+    if (browsingCatalog) {
+        /*
+         * The same sheet logging and planning use to pick an exercise, reused rather than
+         * built again — see its own KDoc for why a caller says what happens after a pick. Here
+         * that is "open its page" (rename, hide, delete all live on [FormDetailScreen], which
+         * is otherwise reached only from a tile above, so an exercise with no history yet —
+         * including one just created — would be unreachable without this), and creating adds a
+         * row and stops, through [editor] rather than the workout-shaped path the other callers
+         * use.
+         */
+        ExercisePickerSheet(
+            state = state,
+            today = today,
+            heading = "Exercise catalog",
+            createLabel = "Add to the catalog",
+            onPick = {
+                browsingCatalog = false
+                onOpenForm(it)
+            },
+            onCreate = editor.create,
+            onDismiss = { browsingCatalog = false },
+        )
     }
 }
 
@@ -119,6 +167,7 @@ private fun heroMeta(entries: Int, previous: Int, current: Int): String {
 private fun FormDoorTile(
     tile: DoorTile,
     entity: ExerciseEntity?,
+    program: WorkoutProgram?,
     today: LocalDate,
     onOpenForm: (Long) -> Unit,
 ) {
@@ -130,7 +179,7 @@ private fun FormDoorTile(
 
     DoorTile(
         name = tile.name,
-        caption = tileCaption(tile, entity, today),
+        caption = tileCaption(tile, entity, program, today),
         value = number,
         unit = unit,
         delta = delta?.takeIf { it.improved }?.let { fmtDelta(it.change, tile.series.spec.format) },
@@ -160,50 +209,19 @@ private fun FormDoorTile(
 /**
  * The caption under a tile name: what form it is and how long ago it happened.
  *
- * For a hangboard the edge and protocol go in too — §12-A makes them part of the
- * exercise's identity, so "Hangs" alone does not say which exercise this tile is about.
+ * For a hangboard the protocol goes in too — §12-A makes it part of the exercise's
+ * identity, so "Hangs" alone does not say which exercise this tile is about.
  */
-private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, today: LocalDate): String {
+private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, program: WorkoutProgram?, today: LocalDate): String {
     val parts = mutableListOf<String>()
     if (tile.form == ExerciseForm.HOLD && entity != null) {
-        entity.edgeMm?.let { parts += "${it.toInt()} mm edge" }
-        if (entity.protocolWorkSec != null && entity.protocolRestSec != null) {
-            parts += "${entity.protocolWorkSec.toInt()}:${entity.protocolRestSec.toInt()}"
-        }
+        program?.firstBlock()?.let { parts += "${it.workSec}:${it.restSec}" }
     }
     if (parts.isEmpty()) parts += tile.form.title.lowercase()
     parts += fmtRelativeDay(LocalDate.parse(tile.lastDate), today)
     return parts.joinToString(" - ")
 }
 
-/**
- * Catalog row -> what the dashboard needs; an unreadable form code drops out of the feed.
- *
- * ── Every column the analytics can use, or they silently do nothing ─────────────
- * This mapping used to carry the id, the name and the form, and drop the rest. The three it
- * dropped are not decoration:
- *
- *  - [ExerciseEntity.uid] is how an entry names its exercise off this phone. Without it the
- *    link fell back to the local row number for everything, which is the fallback meant for
- *    entries too old to carry an identity — see [ExerciseLink.matches].
- *  - [ExerciseEntity.oneSided] is what splits a record per hand. Dropped, `recordsOf` took its
- *    default and reported one record for both hands: the better one, hiding the gap the
- *    training exists to close.
- *  - [ExerciseEntity.bodyweightShare] is what gives a pull-up any tonnage at all. Dropped,
- *    `volumeSeries` took its default and a week of pull-ups drew as a week of doing nothing.
- *
- * All three arrived with columns of their own and defaults that preserve the old behaviour,
- * which is exactly why leaving them out compiled, ran, and quietly answered the old question.
- */
-fun ExerciseEntity.toCatalog(): CatalogExercise? =
-    runCatching { ExerciseForm.fromCode(form) }.getOrNull()
-        ?.let {
-            CatalogExercise(
-                id = id,
-                name = name,
-                form = it,
-                uid = uid,
-                oneSided = oneSided,
-                bodyweightShare = bodyweightShare,
-            )
-        }
+// ExerciseEntity.toCatalog() has moved to data/CatalogMapping.kt: a screen is not the place
+// to describe how the table is read (see the KDoc there, and domain/Catalog.kt's CatalogRow,
+// for the bug two independent mappers like this one used to cause).

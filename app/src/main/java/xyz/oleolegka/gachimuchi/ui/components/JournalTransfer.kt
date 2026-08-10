@@ -49,7 +49,7 @@ class JournalTransfer internal constructor(
 )
 
 /**
- * Nothing larger than this is read back. A journal of years is a few megabytes indented;
+ * Nothing larger than this is read back. A journal of years is a few megabytes of CSV;
  * thirty-two is room for a lifetime of training and still small enough that a video picked
  * by mistake through "all files" is refused instead of taking the app down with it.
  */
@@ -130,15 +130,16 @@ fun rememberJournalTransfer(): JournalTransfer {
             text = {
                 Text(
                     "Everything the app holds - the journal, the exercises, the plan, the " +
-                        "programs and the settings - as one JSON file. Saving writes it wherever " +
-                        "you choose; sharing hands the same file to another app to send. The " +
-                        "celebration pictures are not in it."
+                        "programs and the settings - as one CSV file, readable as a table and " +
+                        "restorable from the same file. Saving writes it wherever you choose; " +
+                        "sharing hands the same file to another app to send. The celebration " +
+                        "pictures are not in it."
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     choosing = false
-                    save.launch("gachimuchi-journal-$today.json")
+                    save.launch("gachimuchi-journal-$today.csv")
                 }) { Text("Save to a file") }
             },
             dismissButton = {
@@ -148,8 +149,9 @@ fun rememberJournalTransfer(): JournalTransfer {
                         val failure = ProgramFiles.share(
                             context = context,
                             text = backup.export(today, deviceId),
-                            fileName = "gachimuchi-journal-$today.json",
+                            fileName = "gachimuchi-journal-$today.csv",
                             title = "Send the journal",
+                            mime = JOURNAL_FILE_MIME,
                         )
                         if (failure != null) say("Not sent", listOf(failure))
                     }
@@ -174,8 +176,8 @@ fun rememberJournalTransfer(): JournalTransfer {
             confirmButton = {
                 TextButton(onClick = {
                     confirming = false
-                    // any type, rather than a filter on application/json: a .json file arrives
-                    // from half the file managers labelled octet-stream or text/plain, and a
+                    // any type, rather than a filter on text/csv: a .csv file arrives from
+                    // half the file managers labelled octet-stream or text/plain, and a
                     // filtered picker shows the user's own backup greyed out. Nothing about the
                     // contents is trusted either way - readJournalFile validates what comes back
                     open.launch(arrayOf(ANY_MIME))

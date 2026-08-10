@@ -134,6 +134,12 @@ fun DayCardList(
     date: LocalDate,
     actions: DayActions,
     modifier: Modifier = Modifier,
+    /**
+     * Names offered by "Start a workout" as a shortcut to composing like a past session (§13.9)
+     * — see [xyz.oleolegka.gachimuchi.domain.pastWorkoutNames]. Empty is a perfectly ordinary
+     * state (nothing has ever been named yet) and simply draws the dialog with no dropdown.
+     */
+    pastWorkoutNames: List<String> = emptyList(),
 ) {
     /** Whether the question "what shall this one be called" is on screen. */
     var naming by remember(day.date) { mutableStateOf(false) }
@@ -184,6 +190,7 @@ fun DayCardList(
                 actions.startWorkout(date, name)
             },
             onDismiss = { naming = false },
+            suggestions = pastWorkoutNames,
         )
     }
 }

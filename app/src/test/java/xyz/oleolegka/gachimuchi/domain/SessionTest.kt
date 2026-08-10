@@ -20,8 +20,23 @@ class SessionTest {
     private fun ev(form: ActivityForm, ts: String = "2026-08-06T10:00:00") =
         JournalEvent(nextId++, ts, 1, 1, form.type, form.toPayload())
 
+    /**
+     * A full-version correction of [target], written the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry]
+     * writes one today: a whole new row of [form] inheriting [target]'s [happenedAt], plus the
+     * marker that supersedes [target] — see domain/Amendments.kt's header, "A correction is now
+     * a whole new row". Returns the new version and the marker, both still to be appended.
+     */
+    private fun correct(target: JournalEvent, form: ActivityForm, ts: String): Pair<JournalEvent, JournalEvent> {
+        val newVersion = JournalEvent(nextId++, ts, 1, 1, form.type, form.toPayload(), occurredTs = target.happenedAt)
+        val marker = JournalEvent(
+            nextId++, ts, 1, 1, TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+        )
+        return newVersion to marker
+    }
+
     private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
-    private val hangs = ExerciseRef(2, "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+    private val hangs = ExerciseRef(2, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
     private val run = ExerciseRef(3, "Running", ExerciseForm.CARDIO)
     private val emil = ExerciseRef(4, "Emil hangs", ExerciseForm.DURATION)
     private val stretch = ExerciseRef(5, "Stretching", ExerciseForm.TICK)
@@ -51,9 +66,8 @@ class SessionTest {
     }
 
     @Test
-    fun `a hold set inherits edge and protocol from the exercise and never asks for them`() {
+    fun `a hold set inherits the protocol from the exercise and never asks for it`() {
         val set = holdSetOf(hangs, day, addedKg = 8.0, reps = 5)
-        assertEquals(20.0, set.edgeMm!!, 1e-9)
         assertEquals(7.0, set.workSec!!, 1e-9)
         assertEquals(3.0, set.restSec!!, 1e-9)
         assertEquals(hangs.id, set.exerciseId)
@@ -141,7 +155,7 @@ class SessionTest {
         val session = buildSession(events, day)
         assertEquals(2, session.groups.size)
         assertEquals("Bench press", session.groups[0].name)  // it appeared first
-        assertEquals("Hangs 20 mm", session.groups[1].name)
+        assertEquals("Hangs", session.groups[1].name)
         assertEquals(3, session.groups[0].sets.size)
         assertEquals(4, session.setCount)
         assertEquals(
@@ -180,6 +194,52 @@ class SessionTest {
         assertNotNull(sets[1].record)
         assertEquals(RecordHit.Axis.EST_1RM, sets[1].record!!.axis)
         assertTrue(sets[1].record!!.text.contains("1RM"))
+    }
+
+    /**
+     * THE regression this pins. A correction is a whole new row appended at the END of the
+     * journal (domain/Amendments.kt), and the row it replaces may have happened FIRST —
+     * [recordAt] used to compare a set against whatever sat before it BY ROW, which after a
+     * correction is everything else, whether that training happened earlier or later. Fixing a
+     * typo in the first of three ascending sets could then hand it a record it never broke, by
+     * judging it against the second and third sets — which the correction now sits after in the
+     * journal but which were actually performed after it.
+     *
+     * The reps correction (5 -> 20) is chosen, not realistic: it is exactly large enough to make
+     * the corrected first set's estimated 1RM the highest of the three, which is what exposes the
+     * bug — a smaller correction would have looked "fixed" on the old code too, by accident.
+     */
+    @Test
+    fun `correcting the first of three ascending sets does not steal or invent a record`() {
+        val s1 = ev(strengthSetOf(bench, day, reps = 5, weightKg = 60.0), ts = "${day}T10:00:00")
+        val s2 = ev(strengthSetOf(bench, day, reps = 5, weightKg = 70.0), ts = "${day}T10:05:00")
+        val s3 = ev(strengthSetOf(bench, day, reps = 5, weightKg = 80.0), ts = "${day}T10:10:00")
+        val events = listOf(s1, s2, s3)
+
+        // sanity: before any correction, the third (heaviest) set is the record and the first
+        // (a baseline, nothing came before it) is not
+        val before = buildSession(events, day).groups.single().sets
+        assertNull(before[0].record)
+        assertNotNull("the third set is the record", before[2].record)
+
+        val (fixedFirst, marker) = correct(
+            s1, strengthSetOf(bench, day, reps = 20, weightKg = 60.0), ts = "${day}T23:00:00",
+        )
+        val corrected = events + listOf(fixedFirst, marker)
+
+        val after = buildSession(corrected, day).groups.single().sets
+        // still in the order they were actually performed, not the order they were written
+        assertEquals(listOf(60.0, 70.0, 80.0), after.map { (it.form as StrengthSet).weightKg })
+        assertNull(
+            "the corrected first set happened before everything else and is a baseline — " +
+                "no prior set to break, however big the correction turns out to be",
+            after[0].record,
+        )
+        assertNotNull("the third set is still the record", after[2].record)
+        // it moves to a different axis, honestly: the corrected first set is now the highest
+        // estimated 1RM of the three (chronologically first), so the third set's own note is
+        // no longer "best 1RM" but "heaviest weight at 5 reps" — it is still a real record
+        assertEquals(RecordHit.Axis.WEIGHT_AT_REPS, after[2].record!!.axis)
     }
 
     @Test
@@ -288,20 +348,18 @@ class SessionTest {
     // --- a catalog row that carries a zero ---------------------------------------------
 
     @Test
-    fun `a hold exercise with a zero edge and protocol can still be logged`() {
+    fun `a hold exercise with a zero protocol can still be logged`() {
         /*
          * The regression this pins: the create form used to store whatever `parseNumber`
-         * returned, so "0" in the edge or protocol field became a 0.0 on the catalog row.
-         * `holdSetOf` then handed that straight to the HoldSet validator, which rejects a
-         * non-positive edge by throwing — inside the Add button's click handler, i.e. as a
-         * crash of the app on its primary action rather than as a message.
+         * returned, so "0" in a protocol field became a 0.0 on the catalog row. `holdSetOf`
+         * then handed that straight to the HoldSet validator, which rejects a non-positive
+         * protocol by throwing — inside the Add button's click handler, i.e. as a crash of
+         * the app on its primary action rather than as a message.
          */
-        val broken = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, edgeMm = 0.0, workSec = 0.0, restSec = 0.0)
-        assertNull(broken.edge)
+        val broken = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = 0.0, restSec = 0.0)
         assertNull(broken.protocol)
 
         val set = holdSetOf(broken, day, addedKg = 5.0, reps = 4)
-        assertNull(set.edgeMm)
         assertNull(set.workSec)
         assertNull(set.restSec)
         assertEquals(5.0, set.addedKg!!, 0.0)
@@ -318,11 +376,9 @@ class SessionTest {
     }
 
     @Test
-    fun `a negative edge is treated as never filled in rather than written`() {
-        val negative = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, edgeMm = -5.0, workSec = 7.0, restSec = 3.0)
-        assertNull(negative.edge)
-        // the protocol beside it is untouched: only the broken value is dropped
-        assertNotNull(negative.protocol)
-        assertNull(holdSetOf(negative, day, reps = 3).edgeMm)
+    fun `a negative protocol is treated as never filled in rather than written`() {
+        val negative = ExerciseRef(9, "Hangs", ExerciseForm.HOLD, workSec = -7.0, restSec = 3.0)
+        assertNull(negative.protocol)
+        assertNull(holdSetOf(negative, day, reps = 3).workSec)
     }
 }

@@ -81,13 +81,26 @@ fun pickPicture(
 }
 
 /**
- * A set worth a picture: the forms that mean work was done in sets. A weigh-in, a tick or
- * a cardio entry is not one.
+ * Whether finishing this entry is worth a picture.
  *
- * This deliberately does not reuse [startsRest], which today covers the same two forms:
- * that one answers "does a rest begin now", and the two questions are free to part ways.
+ * A [StrengthSet], a [HoldSet] and a [Tick] all qualify: each is a card being marked done —
+ * a rep count, a hang, or a plain check mark for something with no metric — and from the
+ * gym floor the three look the same, a thing the user just finished. [Bodyweight] is the
+ * one form that does not: it is a step on the scales, not a card finished, and it is
+ * already the one entry the app is careful to keep out of rest, records and volume alike
+ * (see domain/Records.kt, domain/Analytics.kt) — a picture on top of it would be the odd
+ * one out, not a fix.
+ *
+ * [Cardio] and [Duration] are left out too, unchanged from before this was written down: a
+ * run or a stretch is filed as its own total rather than a set, and nobody has asked for a
+ * picture on those yet. That is a narrower question than this one and is not decided here.
+ *
+ * This deliberately does not reuse [startsRest] (which also covers [Duration], §13.9): that
+ * one answers "does a rest begin now" — a check-in has nothing to rest between — and the two
+ * questions are free to part ways.
  */
-fun celebratedByPicture(form: ActivityForm): Boolean = form is StrengthSet || form is HoldSet
+fun celebratedByPicture(form: ActivityForm): Boolean =
+    form is StrengthSet || form is HoldSet || form is Tick
 
 /**
  * The request to show something, as the ViewModel hands it to the screen.

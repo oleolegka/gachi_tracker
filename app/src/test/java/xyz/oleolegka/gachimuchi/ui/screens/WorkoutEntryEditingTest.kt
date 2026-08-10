@@ -1,6 +1,7 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -51,6 +52,7 @@ class WorkoutEntryEditingTest : ScreenTest() {
 
     private val amended = mutableListOf<Pair<Long, ActivityForm>>()
     private val deleted = mutableListOf<Long>()
+    private val renamed = mutableListOf<Pair<Long, String?>>()
 
     private fun show(journal: Journal, workoutId: Long) {
         val state = UiState(events = journal.events, exercises = catalog, loading = false)
@@ -62,6 +64,7 @@ class WorkoutEntryEditingTest : ScreenTest() {
                 onClose = {},
                 onAmendEntry = { id, form -> amended += id to form },
                 onDeleteEntry = { id -> deleted += id },
+                onRenameWorkout = { id, name -> renamed += id to name },
             )
         }
     }
@@ -251,5 +254,25 @@ class WorkoutEntryEditingTest : ScreenTest() {
         compose.onNodeWithText("60 kg × 5 reps").assertDoesNotExist()
         compose.onNodeWithText("62.5 kg × 5 reps").assertExists()
         compose.onNodeWithText("Fri 7 Aug - 1 exercise, 1 set").assertExists()
+    }
+
+    // --- renaming from the workout's own screen (§14.3) -------------------------------------
+
+    @Test
+    fun `renaming is reached from this screen, not only from the day card's long press`() {
+        val journal = Journal()
+        val id = journal.startWorkout(iso, at = "18:05", name = "Gym")
+        journal.addExercise(id, iso, bench, restSec = 150)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = id)
+        show(journal, id)
+
+        compose.onNodeWithText("Rename").performClick()
+        settle()
+        settle()
+        // the field opens on the CURRENT name, so confirming it unedited resends that name
+        compose.onNodeWithText("Name (optional)").assertTextContains("Gym")
+        compose.onNodeWithText("Save").performClick()
+
+        assertEquals(listOf(id to "Gym"), renamed)
     }
 }

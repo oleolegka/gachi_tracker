@@ -7,14 +7,19 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.OrderedExercise
+import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_ORDER_SET
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_FINISHED
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
@@ -75,14 +80,47 @@ class Journal {
         workoutId,
     )
 
-    /** Puts an exercise into a workout before any set of it exists. */
-    fun addExercise(workoutId: Long, day: String, exercise: ExerciseRef, restSec: Int, at: String = "09:01") =
-        add(
-            TYPE_WORKOUT_EXERCISE_ADDED,
-            payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec)),
-            "${day}T$at:00",
-            workoutId,
-        )
+    /**
+     * Puts an exercise into a workout before any set of it exists — or, for one CARD of an
+     * exercise trained one limb at a time, [side] says which; a test wanting both writes this
+     * twice, the same way the app itself does (see [xyz.oleolegka.gachimuchi.data.ActivityRepository.copyPlannedExercises]).
+     */
+    fun addExercise(
+        workoutId: Long,
+        day: String,
+        exercise: ExerciseRef,
+        restSec: Int,
+        at: String = "09:01",
+        side: HoldSide? = null,
+    ) = add(
+        TYPE_WORKOUT_EXERCISE_ADDED,
+        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec, side = side?.code)),
+        "${day}T$at:00",
+        workoutId,
+    )
+
+    /**
+     * Marks ONE CARD of a workout done — the exercise, or, for work trained one limb at a
+     * time, the one hand [side] names. The card the other hand carries is untouched.
+     *
+     * The time matters here in a way it does not for most fixture rows: finished cards are
+     * drawn in the order they were finished in, and that order is the order these rows were
+     * written. A test asserting on it must space its [at] values apart on purpose.
+     */
+    fun finishCard(
+        workoutId: Long,
+        day: String,
+        exercise: ExerciseRef,
+        at: String = "09:30",
+        side: HoldSide? = null,
+    ) = add(
+        TYPE_WORKOUT_EXERCISE_FINISHED,
+        payloadJson.encodeToString(
+            WorkoutExerciseFinished(workoutId, exercise.id, side = side?.code)
+        ),
+        "${day}T$at:00",
+        workoutId,
+    )
 
     /**
      * States the order the exercises of a workout are to be done in, WHOLE — the row a drag
@@ -115,8 +153,10 @@ class Journal {
          * this is what a test of that rule has to be able to vary.
          */
         writtenOn: String = day,
+        /** Did not carry the reps through — see [xyz.oleolegka.gachimuchi.domain.StrengthSet.incomplete]. */
+        incomplete: Boolean = false,
     ): Long {
-        val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg)
+        val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg, incomplete = incomplete)
         return add(form.type, form.toPayload(), "${writtenOn}T$at:00", workoutId)
     }
 
@@ -124,9 +164,10 @@ class Journal {
      * A hang. [addedKg] null is the plate-free case, which is the one the weight question on
      * the way into a protocol-led set is required NOT to appear for (§13.5).
      *
-     * [side] is what a one-sided exercise records instead of nothing, and [warmup] keeps a
-     * ramp-up out of the volume and the records. Both go through `holdSetOf` rather than into
-     * a hand-made payload, so a fixture cannot say something the app itself could not.
+     * [side] is what a one-sided exercise records instead of nothing, [warmup] keeps a
+     * ramp-up out of the volume and the records, and [incomplete] marks a hang that was not
+     * held for the full protocol. All three go through `holdSetOf` rather than into a
+     * hand-made payload, so a fixture cannot say something the app itself could not.
      */
     fun holdSet(
         exercise: ExerciseRef,
@@ -137,10 +178,11 @@ class Journal {
         workoutId: Long? = null,
         side: HoldSide? = null,
         warmup: Boolean = false,
+        incomplete: Boolean = false,
     ): Long {
         val form = holdSetOf(
             exercise = exercise, opDate = day, addedKg = addedKg, reps = reps,
-            warmup = warmup, side = side,
+            warmup = warmup, incomplete = incomplete, side = side,
         )
         return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
     }
@@ -159,6 +201,62 @@ class Journal {
         )
     }
 
+    /**
+     * Corrects a strength set the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry]
+     * writes one today: a whole new row of the corrected values, WRITTEN at [at] on
+     * [writtenOn] (which defaults to right after the target, same day, as an ordinary same-session
+     * fix would be) but inheriting the target's own happened-at time — see domain/Amendments.kt's
+     * header, "A correction is now a whole new row". Returns the new version's id.
+     */
+    fun correctStrengthSet(
+        eventId: Long,
+        exercise: ExerciseRef,
+        day: String,
+        reps: Int = 5,
+        weightKg: Double = 60.0,
+        writtenOn: String,
+        at: String,
+    ): Long {
+        val target = rows.first { it.id == eventId }
+        val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg)
+        val newVersion = JournalEvent(
+            nextId++, "${writtenOn}T$at:00", 1, 1, form.type, form.toPayload(),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        rows += newVersion
+        add(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            newVersion.ts,
+        )
+        return newVersion.id
+    }
+
+    /**
+     * Renames a workout the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.renameWorkout]
+     * writes it: a whole new `workout_started` row carrying the target's own day and slot —
+     * [name] is the only thing that changes — plus the deletion that supersedes the old one.
+     * Returns the new version's id; every set recorded before the rename still resolves to it
+     * through [xyz.oleolegka.gachimuchi.domain.JournalView.canonicalUid], the SAME id or the old
+     * one both being valid ways for a screen to ask for this workout afterwards.
+     */
+    fun renameWorkout(workoutId: Long, name: String?, at: String = "09:05"): Long {
+        val target = rows.first { it.id == workoutId }
+        val started = payloadJson.decodeFromString<WorkoutStarted>(target.payload)
+        val newVersion = JournalEvent(
+            nextId++, "${started.opDate}T$at:00", 1, 1, TYPE_WORKOUT_STARTED,
+            payloadJson.encodeToString(started.copy(name = name)),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        rows += newVersion
+        add(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            newVersion.ts,
+        )
+        return newVersion.id
+    }
+
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */
     fun weighIn(day: String, kg: Double = 74.2, at: String = "07:30", workoutId: Long? = null): Long {
         val form = bodyweightOf(day, kg)
@@ -171,6 +269,13 @@ class Journal {
 fun exerciseRef(id: Long, name: String, form: ExerciseForm = ExerciseForm.STRENGTH) =
     ExerciseRef(id, name, form)
 
+/**
+ * [workSec]/[restSec] no longer sit on the entity itself (schema version 19: the protocol is a
+ * reference to a library program, not two columns) — when given, this fixture points the row
+ * at the deterministic program id [protocolProgramIdFor] would produce, and [protocolProgram]
+ * builds the matching [WorkoutProgram] a test wires into `UiState.programsById` (or a plain map)
+ * so a screen resolving the protocol sees the same thing a real database would hand it.
+ */
 fun exerciseEntity(
     id: Long,
     name: String,
@@ -178,13 +283,29 @@ fun exerciseEntity(
     /** Kept out of the pickers — see [ExerciseEntity.hidden]. */
     hidden: Boolean = false,
     /** Part of the identity of a hold, and what tells two rows of one name apart (§12-A). */
-    edgeMm: Double? = null,
     workSec: Double? = null,
     restSec: Double? = null,
 ) = ExerciseEntity(
     id = id, name = name, form = form.code, createdAt = "2026-01-01T00:00:00", hidden = hidden,
-    edgeMm = edgeMm, protocolWorkSec = workSec, protocolRestSec = restSec,
+    protocolProgramId = if (workSec != null && restSec != null) protocolProgramIdFor(id) else null,
 )
+
+/** The local program id [exerciseEntity]'s `workSec`/`restSec` params imply for exercise [id]. */
+fun protocolProgramIdFor(id: Long): Long = id + 900_000L
+
+/** The minimal one-block program [exerciseEntity]'s `workSec`/`restSec` params reduce to. */
+fun protocolProgram(exerciseId: Long, name: String, workSec: Double, restSec: Double): WorkoutProgram =
+    WorkoutProgram(
+        id = protocolProgramIdFor(exerciseId),
+        name = "$name protocol",
+        category = "Protocols",
+        groups = listOf(
+            ProgramGroup(
+                name = name,
+                blocks = listOf(ProgramBlock(name = name, workSec = workSec.toInt(), restSec = restSec.toInt())),
+            )
+        ),
+    )
 
 fun slot(id: Long, name: String, atTime: String?, day: String) =
     Slot(id = id, name = name, atTime = atTime, repeatRule = REPEAT_NONE, anchorDate = day)

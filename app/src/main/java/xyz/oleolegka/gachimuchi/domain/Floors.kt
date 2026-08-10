@@ -112,6 +112,17 @@ data class RestFloor(
      * left to say.
      */
     @SerialName("signalled") val signalled: Boolean = false,
+    /**
+     * Which card this rest belongs to, for an exercise trained one limb at a time — one of
+     * [HoldSide]'s codes, or null for every exercise that is not.
+     *
+     * A floor is "at most one per exercise" — see [withFloor] — and that used to mean a superset
+     * of the left and right hand cannot both be resting: marking the right hand's set replaced
+     * the left hand's still-running countdown, because both wrote to the same exerciseId. This
+     * is what makes the two independent: the identity a floor is kept and replaced by is
+     * (exerciseId, side) together, not exerciseId alone.
+     */
+    @SerialName("side") val side: String? = null,
 )
 
 /** A floor of [orderedMs] started now, stamped with both clocks. */
@@ -121,6 +132,7 @@ fun startFloor(
     orderedMs: Long,
     nowElapsed: Long,
     nowWall: Long,
+    side: String? = null,
 ): RestFloor = RestFloor(
     exerciseId = exerciseId,
     exerciseName = exerciseName,
@@ -128,11 +140,50 @@ fun startFloor(
     bootRef = bootReference(nowWall, nowElapsed),
     orderedMs = orderedMs,
     startedAtWallMs = nowWall,
+    side = side,
 )
 
-/** [floor] added, replacing any floor already running for the same exercise. */
+/**
+ * [floor] added, replacing any floor already running for the same CARD — the same exercise
+ * AND the same side. Two cards of one one-sided exercise therefore keep two floors, each
+ * replaced only by a fresh rest of its own side; see [RestFloor.side].
+ */
 fun List<RestFloor>.withFloor(floor: RestFloor): List<RestFloor> =
-    filterNot { it.exerciseId == floor.exerciseId } + floor
+    filterNot { it.exerciseId == floor.exerciseId && it.side == floor.side } + floor
+
+// --- the rest a floor actually measured -------------------------------------------------
+
+/**
+ * The rest to record as ACTUALLY MEASURED, or null when there is nothing honest to write.
+ *
+ * A floor's [startedAtWallMs] is the wall-clock moment the PREVIOUS set of this exercise was
+ * recorded — the only reading in the app of when a rest genuinely began, as opposed to
+ * [xyz.oleolegka.gachimuchi.domain.secondsBetween]'s guess from the gap between two write
+ * times. `nowWallMs - startedAtWallMs` is therefore the true pause, known exactly, the moment
+ * the NEXT set of the same exercise is recorded — see [xyz.oleolegka.gachimuchi.data.ActivityRepository.recordActualRest],
+ * the caller, for how it lands on the set that earned it.
+ *
+ * ── Rest or break? The same line the DERIVED gap already draws ──────────────────
+ * A floor left running for an hour is still arithmetically exact — the wall clock does not
+ * lie — but an hour is not a rest between sets of one exercise, it is the workout being put
+ * down and picked back up. [MAX_REST_SEC] already answers this question for the gap
+ * [secondsBetween] derives, on exactly this reasoning (domain/Session.kt), and a MEASURED
+ * gap past it is the same break wearing a more precise number. Past the cutoff this returns
+ * null, and the set stays with whatever [secondsBetween] would already say about it — which,
+ * past twenty minutes, is also null. One rule for what counts as a rest, not two that could
+ * one day disagree about the same twenty-minute line.
+ *
+ * ── A negative reading is a clock, not a measurement ─────────────────────────────
+ * [startedAtWallMs] is a wall-clock reading (see the note at the top of this file: it is the
+ * one clock a user or an NTP sync can move), and [nowWallMs] is read moments later on a
+ * device that could have had its clock moved backwards in between. A negative gap is not a
+ * rest that ran in reverse; it is that clock having moved, and null is the honest answer for
+ * a number this function cannot vouch for.
+ */
+fun RestFloor.actualRestSec(nowWallMs: Long): Double? {
+    val elapsedSec = (nowWallMs - startedAtWallMs) / 1000.0
+    return elapsedSec.takeIf { it in 0.0..MAX_REST_SEC }
+}
 
 // --- what a floor looks like right now -------------------------------------------------
 

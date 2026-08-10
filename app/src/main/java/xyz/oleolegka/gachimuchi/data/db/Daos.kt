@@ -63,8 +63,8 @@ interface ExerciseDao {
     suspend fun byIdentityKey(key: String, spaceId: Long = LOCAL_SPACE_ID): ExerciseEntity?
 
     /**
-     * Corrects what an exercise IS: its name, its edge and its work:rest protocol, and with
-     * them the key those three and the form are folded into.
+     * Corrects what an exercise IS: its name and its work:rest protocol, and with them the key
+     * those two and the form are folded into.
      *
      * ── Why this is one statement and Room's `@Update` is gone ─────────────────
      * The whole-entity update used to exist here and was called from nowhere, which is how an
@@ -72,24 +72,22 @@ interface ExerciseDao {
      * have been worse than leaving it unused: a caller holding a stale entity would write back
      * `default_rest_sec`, `one_sided`, `hidden` and the rest from whatever it happened to be
      * holding, and — since `identity_key` is a constructor default — would silently recompute
-     * the key from the values in ITS copy. So the edit is a column list: the four things the
-     * editor owns, plus the key, in one write that cannot leave them disagreeing.
+     * the key from the values in ITS copy. So the edit is a column list: the things the editor
+     * owns, plus the key, in one write that cannot leave them disagreeing.
      *
      * Returns the number of rows touched, so a caller can tell "saved" from "that exercise is
      * gone". A key that is already taken raises a constraint failure rather than merging two
      * exercises; the repository turns that into a sentence.
      */
     @Query(
-        "UPDATE exercises SET name = :name, edge_mm = :edgeMm, protocol_work_sec = :workSec, " +
-            "protocol_rest_sec = :restSec, identity_key = :identityKey " +
+        "UPDATE exercises SET name = :name, protocol_program_id = :programId, " +
+            "identity_key = :identityKey " +
             "WHERE space_id = :spaceId AND id = :id"
     )
     suspend fun editIdentity(
         id: Long,
         name: String,
-        edgeMm: Double?,
-        workSec: Double?,
-        restSec: Double?,
+        programId: Long?,
         identityKey: String,
         spaceId: Long = LOCAL_SPACE_ID,
     ): Int
@@ -99,11 +97,27 @@ interface ExerciseDao {
     suspend fun setHidden(id: Long, hidden: Boolean, spaceId: Long = LOCAL_SPACE_ID)
 
     /**
+     * Points an exercise at its protocol program WITHOUT touching its identity key.
+     *
+     * Used only by [xyz.oleolegka.gachimuchi.data.JournalBackup.restore], for the one case
+     * where a row's protocol program cannot be known at insert time: a backup names it by uid,
+     * and the program it names may itself still be waiting to be inserted from the same file.
+     * The exercise is written first with `protocol_program_id = null` and a correct
+     * `identity_key` computed straight from the file's uid string (no lookup needed for that —
+     * see [xyz.oleolegka.gachimuchi.domain.PortableExercise]'s KDoc), and once the programs
+     * section has been restored this backfills the column alone. Every OTHER writer of this
+     * column resolves the program first and writes it in the same statement as the identity
+     * key (see [editIdentity]), because there it can.
+     */
+    @Query("UPDATE exercises SET protocol_program_id = :programId WHERE id = :id")
+    suspend fun setProtocolProgramId(id: Long, programId: Long?)
+
+    /**
      * Remembers the rest last chosen for an exercise.
      *
      * A one-column update rather than Room's @Update of a whole entity, for the same reason
      * [SlotDao.updateFields] is one: the caller here is "the user picked 2:30 while adding
-     * this to a workout" and it has no business rewriting the name, the edge or the protocol.
+     * this to a workout" and it has no business rewriting the name or the protocol.
      * Writing the entity back would overwrite those with whatever the caller happened to be
      * holding, which for a hangboard exercise means overwriting its IDENTITY (§12-A).
      */
@@ -119,8 +133,9 @@ interface ExerciseDao {
      *
      * Turning it ON re-reads the whole history of the exercise: sets logged before it named
      * no side, and they become a defect the records report rather than hide (see
-     * [xyz.oleolegka.gachimuchi.domain.holdRecord]). Nothing is rewritten to make that go
-     * away — the old sets genuinely do not say which hand did them.
+     * [xyz.oleolegka.gachimuchi.domain.holdRecord] and
+     * [xyz.oleolegka.gachimuchi.domain.strengthRecord]). Nothing is rewritten to make that go
+     * away — the old sets genuinely do not say which side did them.
      */
     @Query("UPDATE exercises SET one_sided = :oneSided WHERE space_id = :spaceId AND id = :id")
     suspend fun setOneSided(id: Long, oneSided: Boolean, spaceId: Long = LOCAL_SPACE_ID)
@@ -131,6 +146,29 @@ interface ExerciseDao {
      */
     @Query("UPDATE exercises SET bodyweight_share = :share WHERE space_id = :spaceId AND id = :id")
     suspend fun setBodyweightShare(id: Long, share: Double?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Attaches, replaces or removes the picture of the machine this exercise is trained on
+     * (null) — see [ExerciseEntity.pictureId]. The file itself is not this DAO's concern; the
+     * caller ([xyz.oleolegka.gachimuchi.data.ActivityRepository.setPicture]) is what also moves
+     * the file in [xyz.oleolegka.gachimuchi.data.ExercisePictureStore].
+     */
+    @Query("UPDATE exercises SET picture_id = :pictureId WHERE space_id = :spaceId AND id = :id")
+    suspend fun setPictureId(id: Long, pictureId: String?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
+     * Whether any exercise's protocol IS this program — the live fact
+     * [xyz.oleolegka.gachimuchi.data.ProgramRepository.save] freezes a program's content on.
+     *
+     * Scoped through `exercises` rather than carrying a `space_id` of its own: the question is
+     * "does a catalog row point here", and the row that would point here already carries the
+     * profile. A program shared by several exercises (identical numbers, or a hand-authored
+     * program deliberately pointed at by more than one — see `ExerciseEntity.protocolProgramId`)
+     * answers true from the first match; which exercise it was does not matter to a caller
+     * asking only "may this be rewritten".
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM exercises WHERE protocol_program_id = :programId)")
+    suspend fun existsWithProtocolProgram(programId: Long): Boolean
 }
 
 /**
@@ -206,6 +244,10 @@ interface ProgramDao {
 
     @Query("DELETE FROM programs WHERE space_id = :spaceId AND id = :id")
     suspend fun deleteProgram(id: Long, spaceId: Long = LOCAL_SPACE_ID)
+
+    /** Keeps a program out of the library list, or brings it back — see [ProgramEntity.hidden]. */
+    @Query("UPDATE programs SET hidden = :hidden WHERE space_id = :spaceId AND id = :id")
+    suspend fun setHidden(id: Long, hidden: Boolean, spaceId: Long = LOCAL_SPACE_ID)
 }
 
 /**

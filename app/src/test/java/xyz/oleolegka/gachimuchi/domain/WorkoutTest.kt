@@ -33,13 +33,33 @@ class WorkoutTest {
         ts,
     )
 
-    private fun added(workoutId: Long, exerciseId: Long, restSec: Int, ts: String = "2026-08-07T09:01:00") =
-        row(
-            TYPE_WORKOUT_EXERCISE_ADDED,
-            payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exerciseId, restSec)),
-            ts,
-            workoutId,
-        )
+    private fun added(
+        workoutId: Long,
+        exerciseId: Long,
+        restSec: Int,
+        ts: String = "2026-08-07T09:01:00",
+        side: HoldSide? = null,
+    ) = row(
+        TYPE_WORKOUT_EXERCISE_ADDED,
+        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exerciseId, restSec, side = side?.code)),
+        ts,
+        workoutId,
+    )
+
+    /** "That CARD is done" — one exercise, or one hand of it, and never the workout. */
+    private fun cardFinished(
+        workoutId: Long,
+        exerciseId: Long,
+        ts: String = "2026-08-07T09:30:00",
+        side: HoldSide? = null,
+    ) = row(
+        TYPE_WORKOUT_EXERCISE_FINISHED,
+        payloadJson.encodeToString(
+            WorkoutExerciseFinished(workoutId, exerciseId, side = side?.code)
+        ),
+        ts,
+        workoutId,
+    )
 
     /** "That workout is over" — written by the button and by the start of the next one. */
     private fun finished(workoutId: Long, ts: String = "2026-08-07T20:00:00") =
@@ -60,9 +80,34 @@ class WorkoutTest {
     ) = strengthSetOf(exercise, opDate, reps = reps, weightKg = weightKg)
         .let { row(it.type, it.toPayload(), ts, workoutId) }
 
+    /**
+     * A full-version correction of a workout's own start row (a rename or a date fix), written
+     * the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry] writes one today: a
+     * whole new start row inheriting [target]'s happened-at time, plus the marker that
+     * supersedes it — see domain/Amendments.kt's header.
+     */
+    private fun correctedStart(
+        target: JournalEvent,
+        opDate: String,
+        name: String?,
+        writtenTs: String,
+    ): Pair<JournalEvent, JournalEvent> {
+        val newVersion = JournalEvent(
+            nextId++, writtenTs, 1, 1, TYPE_WORKOUT_STARTED,
+            payloadJson.encodeToString(WorkoutStarted(opDate, name = name)),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        val marker = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            writtenTs,
+        )
+        return newVersion to marker
+    }
+
     private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
     private val squat = ExerciseRef(2, "Squat", ExerciseForm.STRENGTH)
-    private val hangs = ExerciseRef(3, "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+    private val hangs = ExerciseRef(3, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
 
     private val today = "2026-08-07"
 
@@ -101,12 +146,70 @@ class WorkoutTest {
     @Test
     fun `finishing closes it, and nothing else is open afterwards`() {
         val start = started(today)
-        val events = listOf(start, finished(start.id))
+        val done = finished(start.id)
+        val events = listOf(start, done)
 
         assertNull(openWorkoutRow(events)?.id)
         // it is not gone, it is over: still findable, still complete
         assertEquals(1, workoutsOn(events, today).size)
-        assertTrue(buildWorkout(events, start.id)!!.finished)
+        val workout = buildWorkout(events, start.id)!!
+        assertTrue(workout.finished)
+        // the id of the event that closed it, the same "the mark IS the way to undo it" model
+        // WorkoutExercise.finishedEventId already carries for a single card
+        assertEquals(done.id, workout.finishedEventId)
+    }
+
+    /*
+     * NOT covered here: undo. Un-finishing deletes the finish event, and this file's
+     * hand-built rows are not run through the amendment funnel's own regression suite — see
+     * ActivityRepository.unfinishWorkout and the screen tests that exercise the button. Stating
+     * the gap beats a test that quietly checks something easier.
+     */
+
+    /**
+     * THE regression this pins: correcting a workout writes a whole new start row (a rename or
+     * a date fix), appended at the END of the journal whenever the correction happens to be
+     * made — which can be long after that workout was finished, and long after a genuinely
+     * later workout was started. Reading "the last start ROW" as "the workout started last"
+     * would then either hide the workout actually open right now (if the corrected one had
+     * been finished) or hijack it (if it had not) — see [openWorkoutRow]'s own KDoc.
+     */
+    @Test
+    fun `correcting an old, already-finished workout does not hide the one genuinely open now`() {
+        val old = started("2026-07-01", ts = "2026-07-01T09:00:00")
+        val oldDone = finished(old.id, ts = "2026-07-01T10:00:00")
+        // nobody pressed finish on this one - it is genuinely still open
+        val current = started(today, ts = "${today}T09:00:00")
+
+        // days later: a typo in the OLD, long-finished workout's name is fixed
+        val (fixedOld, marker) = correctedStart(
+            old, opDate = "2026-07-01", name = "Fingerboard", writtenTs = "${today}T15:00:00",
+        )
+        val events = listOf(old, oldDone, current, fixedOld, marker)
+
+        assertEquals(
+            "the workout genuinely open right now must not vanish because an unrelated, " +
+                "already-finished workout was corrected after it was started",
+            current.id,
+            openWorkoutRow(events)?.id,
+        )
+    }
+
+    /**
+     * The mirror case: correcting an old, STILL-OPEN workout (one nobody ever finished) must
+     * not make it read as "started last" ahead of a genuinely later one either.
+     */
+    @Test
+    fun `correcting an old, still-open workout does not make it look like the current one`() {
+        val old = started("2026-07-01", ts = "2026-07-01T09:00:00") // never finished
+        val current = started(today, ts = "${today}T09:00:00")      // started later, also open
+
+        val (fixedOld, marker) = correctedStart(
+            old, opDate = "2026-07-01", name = "Fingerboard", writtenTs = "${today}T15:00:00",
+        )
+        val events = listOf(old, current, fixedOld, marker)
+
+        assertEquals(current.id, openWorkoutRow(events)?.id)
     }
 
     /**
@@ -161,6 +264,38 @@ class WorkoutTest {
     fun `an empty workout ends when it started`() {
         val start = started(today, ts = "${today}T18:00:00")
         assertEquals("${today}T18:00:00", buildWorkout(listOf(start), start.id)!!.endTs)
+    }
+
+    /**
+     * THE regression this pins: correcting the EARLIER of two sets writes a new row with
+     * TODAY's id and TODAY's ts, which used to win the "largest id" contest [endTs] picked its
+     * answer by — reading a typo fixed a week later as the moment a long-finished workout
+     * actually ended.
+     */
+    @Test
+    fun `correcting the earlier of two sets does not move the workout's end time`() {
+        val start = started(today, ts = "${today}T18:00:00")
+        val early = set(bench, today, workoutId = start.id, ts = "${today}T18:20:00")
+        val late = set(squat, today, workoutId = start.id, ts = "${today}T19:10:00")
+
+        // a typo in the earlier set, fixed a week later
+        val fixed = JournalEvent(
+            nextId++, "2026-08-14T12:00:00", 1, 1, TYPE_STRENGTH_SET,
+            strengthSetOf(bench, today, reps = 8, weightKg = 60.0).toPayload(),
+            workoutId = start.id, occurredTs = early.happenedAt,
+        )
+        val marker = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = early.uid, successorUid = fixed.uid)),
+            fixed.ts,
+        )
+
+        val workout = buildWorkout(listOf(start, early, late, fixed, marker), start.id)!!
+        assertEquals(
+            "the last set actually done was at 19:10 - fixing a typo a week later must not move it",
+            "${today}T19:10:00",
+            workout.endTs,
+        )
     }
 
     @Test
@@ -371,6 +506,157 @@ class WorkoutTest {
         assertEquals(240, workout.exercises.first().restSec)
     }
 
+    // --- two cards of an exercise trained one limb at a time --------------------------
+
+    private fun holdSet(
+        exercise: ExerciseRef,
+        opDate: String,
+        workoutId: Long? = null,
+        ts: String = "${opDate}T09:10:00",
+        side: HoldSide? = null,
+    ) = holdSetOf(exercise, opDate, reps = 5, side = side)
+        .let { row(it.type, it.toPayload(), ts, workoutId) }
+
+    private fun strengthSet(
+        exercise: ExerciseRef,
+        opDate: String,
+        workoutId: Long? = null,
+        ts: String = "${opDate}T09:10:00",
+        side: HoldSide? = null,
+    ) = strengthSetOf(exercise, opDate, reps = 5, weightKg = 60.0, side = side)
+        .let { row(it.type, it.toPayload(), ts, workoutId) }
+
+    /**
+     * The owner's decision (workspace/tasks): one exercise in the catalog, added to a workout as
+     * TWO "exercise added" rows — one per [HoldSide] — is TWO cards, not one that folds into a
+     * single block the way every other repeated "add" does.
+     */
+    @Test
+    fun `an exercise added once per side becomes two cards, not one`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.LEFT),
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(2, workout.exercises.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), workout.exercises.map { it.side })
+        assertTrue("both cards name the same catalog exercise", workout.exercises.all { it.exerciseId == hangs.id })
+        assertTrue(workout.exercises.all { it.isEmpty })
+    }
+
+    /** A set carrying a side lands under the card of that side, and only that one. */
+    @Test
+    fun `a set is filed under the card of its own side`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.LEFT),
+            added(start.id, hangs.id, restSec = 180, side = HoldSide.RIGHT),
+            holdSet(hangs, today, workoutId = start.id, ts = "${today}T09:10:00", side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        val left = workout.exercises.single { it.side == HoldSide.LEFT }
+        val right = workout.exercises.single { it.side == HoldSide.RIGHT }
+        assertTrue("the untouched hand stays empty", left.isEmpty)
+        assertEquals(1, right.sets.size)
+        assertEquals(1, workout.setCount)
+    }
+
+    /**
+     * The same bucketing, for a [StrengthSet] instead of a [HoldSet] — a pistol squat rather
+     * than a hang. Before [LoadedSet] carried [LoadedSet.side], a strength set's side was
+     * always read as null regardless of which card it was logged from, so it fell into
+     * neither the left nor the right bucket and landed on a THIRD, sideless one instead.
+     */
+    @Test
+    fun `a strength set is filed under the card of its own side too`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 180, side = HoldSide.LEFT),
+            added(start.id, bench.id, restSec = 180, side = HoldSide.RIGHT),
+            strengthSet(bench, today, workoutId = start.id, ts = "${today}T09:10:00", side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals("no third, sideless card was created", 2, workout.exercises.size)
+        val left = workout.exercises.single { it.side == HoldSide.LEFT }
+        val right = workout.exercises.single { it.side == HoldSide.RIGHT }
+        assertTrue("the untouched leg stays empty", left.isEmpty)
+        assertEquals(1, right.sets.size)
+        assertEquals(1, workout.setCount)
+    }
+
+    /**
+     * Removing one card is removing its OWN "added" rows and its OWN sets — the other card, and
+     * the sets belonging to it, are a different block entirely and are left standing. This is
+     * what `WorkoutExercise.addedEventIds` + `.sets` already gives a caller for free, once the
+     * two cards fold into two separate blocks.
+     */
+    @Test
+    fun `removing one card leaves the other card of the same exercise untouched`() {
+        val start = started(today)
+        val leftAdded = added(start.id, hangs.id, restSec = 180, side = HoldSide.LEFT)
+        val rightAdded = added(start.id, hangs.id, restSec = 180, side = HoldSide.RIGHT, ts = "${today}T09:02:00")
+        val rightSet = holdSet(hangs, today, workoutId = start.id, ts = "${today}T09:10:00", side = HoldSide.RIGHT)
+        val events = listOf(start, leftAdded, rightAdded, rightSet)
+
+        val right = buildWorkout(events, start.id)!!.exercises.single { it.side == HoldSide.RIGHT }
+        assertEquals(listOf(rightAdded.id), right.addedEventIds)
+        assertEquals(listOf(rightSet.id), right.sets.map { it.id })
+
+        val deletion = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = rightAdded.uid)),
+            rightAdded.ts,
+        )
+        val deleteRightSet = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = rightSet.uid)),
+            rightSet.ts,
+        )
+        val afterRemoval = buildWorkout(events + deletion + deleteRightSet, start.id)!!
+
+        assertEquals(listOf(HoldSide.LEFT), afterRemoval.exercises.map { it.side })
+        assertEquals(0, afterRemoval.setCount)
+    }
+
+    /**
+     * The append-only journal remembers nothing about a removed card: the same exercise added
+     * to another workout arrives with both cards again, whichever one was ever removed from an
+     * earlier session. There is no per-exercise "do not offer the right hand" flag anywhere.
+     */
+    @Test
+    fun `a card removed from one workout comes back whole the next time the exercise is added`() {
+        val first = started(today, ts = "${today}T08:00:00")
+        val firstLeft = added(first.id, hangs.id, restSec = 180, side = HoldSide.LEFT, ts = "${today}T08:01:00")
+        val firstRight = added(first.id, hangs.id, restSec = 180, side = HoldSide.RIGHT, ts = "${today}T08:02:00")
+        val removeRight = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = firstRight.uid)),
+            firstRight.ts,
+        )
+        val second = started(today, ts = "${today}T19:00:00")
+        val secondLeft = added(second.id, hangs.id, restSec = 180, side = HoldSide.LEFT, ts = "${today}T19:01:00")
+        val secondRight = added(second.id, hangs.id, restSec = 180, side = HoldSide.RIGHT, ts = "${today}T19:02:00")
+        val events = listOf(first, firstLeft, firstRight, removeRight, second, secondLeft, secondRight)
+
+        assertEquals(
+            "the earlier workout kept the removal",
+            listOf(HoldSide.LEFT),
+            buildWorkout(events, first.id)!!.exercises.map { it.side },
+        )
+        assertEquals(
+            "the later one was never told about it",
+            listOf(HoldSide.LEFT, HoldSide.RIGHT),
+            buildWorkout(events, second.id)!!.exercises.map { it.side },
+        )
+    }
+
     @Test
     fun `sets are collected in the order recorded, and a cancelled one is gone`() {
         val start = started(today)
@@ -390,7 +676,7 @@ class WorkoutTest {
     }
 
     @Test
-    fun `a weigh-in recorded during a workout is kept rather than dropped for having no exercise`() {
+    fun `a weigh-in recorded during a workout is kept but does not count as a set`() {
         val start = started(today)
         val weigh = bodyweightOf(today, weightKg = 74.2)
             .let { row(it.type, it.toPayload(), "${today}T09:05:00", start.id) }
@@ -398,8 +684,24 @@ class WorkoutTest {
 
         val workout = buildWorkout(events, start.id)!!
         assertEquals(1, workout.exercises.size)
+        // kept rather than dropped, so a card is still drawn for it
         assertEquals(1, workout.entriesWithoutExercise.size)
-        assertEquals(2, workout.setCount)
+        // but not counted: stepping on the scales is not a rep, and the one real set here
+        // must not be reported as two
+        assertEquals(1, workout.setCount)
+    }
+
+    @Test
+    fun `a workout holding only a weigh-in has no sets at all`() {
+        val start = started(today)
+        val weigh = bodyweightOf(today, weightKg = 74.2)
+            .let { row(it.type, it.toPayload(), "${today}T09:05:00", start.id) }
+        val events = listOf(start, weigh)
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(0, workout.exercises.size)
+        assertEquals(1, workout.entriesWithoutExercise.size)
+        assertEquals(0, workout.setCount)
     }
 
     @Test
@@ -790,4 +1092,267 @@ class WorkoutTest {
     fun `a workout the journal does not hold names no rows`() {
         assertEquals(emptyList<Long>(), workoutEventIds(listOf(started(today)), 999L))
     }
+
+    // --- finishing one card ------------------------------------------------------------
+
+    @Test
+    fun `a finished card floats above every active one, whatever order they were added in`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 150),
+            added(start.id, squat.id, 180),
+            added(start.id, hangs.id, 120),
+            // the middle one is the one that gets done
+            cardFinished(start.id, squat.id),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(
+            "the finished card comes first, the active ones keep their own order behind it",
+            listOf(squat.id, bench.id, hangs.id),
+            workout.exercises.map { it.exerciseId },
+        )
+        assertTrue(workout.exercises.first().finished)
+        assertTrue(workout.exercises.drop(1).none { it.finished })
+    }
+
+    /**
+     * Not "at the top" but "above the active ones", and the owner asked for the difference:
+     * who finished first has to stay readable, so the finished group keeps the order the
+     * finishing happened in rather than the order the cards were added in.
+     */
+    @Test
+    fun `finished cards are ordered by when they were finished`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 150),
+            added(start.id, squat.id, 180),
+            // squat is done first, though bench was added first
+            cardFinished(start.id, squat.id, ts = "${today}T09:30:00"),
+            cardFinished(start.id, bench.id, ts = "${today}T09:45:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(
+            listOf(squat.id, bench.id),
+            workout.exercises.map { it.exerciseId },
+        )
+    }
+
+    /**
+     * One hand at a time: the card is the pair of exercise and side, so finishing the right
+     * hand has to leave the left one alone and still active.
+     */
+    @Test
+    fun `finishing one hand leaves the other hand active`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, 120, side = HoldSide.LEFT),
+            added(start.id, hangs.id, 120, side = HoldSide.RIGHT),
+            cardFinished(start.id, hangs.id, side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(2, workout.exercises.size)
+        val done = workout.exercises.filter { it.finished }
+        assertEquals("only the right hand is done", 1, done.size)
+        assertEquals(HoldSide.RIGHT, done.single().side)
+    }
+
+    /*
+     * NOT covered here: undo. Un-finishing deletes the finish event, and deletions are
+     * addressed by an event's IDENTITY rather than by its row number, which this file's
+     * hand-built rows do not carry. It is covered where the plumbing actually lives - see
+     * ActivityRepository.unfinishWorkoutExercise - and stating the gap beats a test that
+     * quietly checks something easier.
+     */
+
+    // --- a deleted exercise's card disappears from the workout, not just its sets --------
+
+    private fun exerciseDeleted(targetId: Long, ts: String = "2026-08-07T21:00:00") =
+        row(TYPE_EXERCISE_DELETED, payloadJson.encodeToString(ExerciseDeleted(targetId = targetId)), ts)
+
+    /**
+     * The gap a per-row filter would leave: hiding only [bench]'s SETS still leaves the
+     * "added" row standing, and `buildWorkout` would then draw an EMPTY card for an exercise
+     * that is supposed to be gone entirely. The whole point of the cascade in
+     * domain/Amendments.kt is that the "added" row folds dead along with the sets, in the same
+     * pass, so no such ghost card is possible.
+     */
+    @Test
+    fun `deleting an exercise removes its whole card from an open workout, not just its sets`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 90),
+            set(bench, today, workoutId = start.id),
+            added(start.id, squat.id, 120),
+            set(squat, today, workoutId = start.id),
+            exerciseDeleted(bench.id),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(listOf(squat.id), workout.exercises.map { it.exerciseId })
+    }
+
+    /** A finished card of a deleted exercise does not survive as an empty finished ghost. */
+    @Test
+    fun `deleting an exercise removes its finished card too`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 90),
+            set(bench, today, workoutId = start.id),
+            cardFinished(start.id, bench.id),
+            exerciseDeleted(bench.id),
+        )
+
+        assertTrue(buildWorkout(events, start.id)!!.exercises.isEmpty())
+    }
+
+    /** Undoing the exercise deletion brings its card back, same as any other undo in this app. */
+    @Test
+    fun `undoing the exercise deletion brings the card back`() {
+        val start = started(today)
+        val gone = exerciseDeleted(bench.id, ts = "2026-08-07T21:00:00")
+        val undo = row(
+            TYPE_ENTRY_DELETED, payloadJson.encodeToString(EntryDeleted(gone.uid)), "2026-08-07T22:00:00",
+        )
+        val events = listOf(start, added(start.id, bench.id, 90), set(bench, today, workoutId = start.id), gone, undo)
+
+        assertEquals(listOf(bench.id), buildWorkout(events, start.id)!!.exercises.map { it.exerciseId })
+    }
+
+    // --- starting a workout like a past one (§13.9) -----------------------------------
+
+    private val pistol = ExerciseRef(4, "Pistol squat", ExerciseForm.STRENGTH, oneSided = true)
+
+    @Test
+    fun `three workouts sharing a name appear once in the past-names list`() {
+        val c = started("2026-08-03", ts = "2026-08-03T08:00:00", name = "Push day")
+        val b = started("2026-08-05", ts = "2026-08-05T08:00:00", name = "Push day")
+        val a = started(today, ts = "${today}T08:00:00", name = "Push day")
+        // journal order is not name order, and this must not depend on it
+        val events = listOf(b, a, c)
+
+        assertEquals(listOf("Push day"), pastWorkoutNames(events))
+    }
+
+    @Test
+    fun `a nameless workout contributes nothing to the past-names list`() {
+        val named = started(today, ts = "${today}T08:00:00", name = "Push day")
+        val nameless = started("2026-08-05", ts = "2026-08-05T08:00:00")
+
+        assertEquals(listOf("Push day"), pastWorkoutNames(listOf(named, nameless)))
+    }
+
+    @Test
+    fun `the most recently used name sits at the top of the list`() {
+        val pull = started("2026-08-01", ts = "2026-08-01T08:00:00", name = "Pull day")
+        val push = started("2026-08-05", ts = "2026-08-05T08:00:00", name = "Push day")
+
+        assertEquals(listOf("Push day", "Pull day"), pastWorkoutNames(listOf(pull, push)))
+    }
+
+    @Test
+    fun `lastWorkoutNamed resolves to the most recently started workout under that name`() {
+        val old = started("2026-08-01", ts = "2026-08-01T08:00:00", name = "Push day")
+        val mid = started("2026-08-03", ts = "2026-08-03T08:00:00", name = "Push day")
+        val recent = started("2026-08-05", ts = "2026-08-05T08:00:00", name = "Push day")
+        val events = listOf(
+            old, added(old.id, bench.id, restSec = 90, ts = "2026-08-01T08:01:00"),
+            mid, added(mid.id, squat.id, restSec = 120, ts = "2026-08-03T08:01:00"),
+            recent, added(recent.id, hangs.id, restSec = 45, ts = "2026-08-05T08:01:00"),
+        )
+
+        val found = lastWorkoutNamed(events, "Push day")
+        assertEquals(recent.id, found!!.id)
+        assertEquals(listOf(hangs.id), found.exercises.map { it.exerciseId })
+    }
+
+    @Test
+    fun `a name never used before resolves to no template`() {
+        val events = listOf(started(today, name = "Push day"))
+        assertNull(lastWorkoutNamed(events, "Leg day"))
+    }
+
+    /**
+     * "Removed" here means a card taken OFF this workout — its own "added" row deleted, the
+     * same way [xyz.oleolegka.gachimuchi.data.ActivityRepository.deleteEntry] does it for a
+     * workout still being edited — and not the catalog exercise itself being deleted.
+     */
+    @Test
+    fun `an exercise removed from the source workout is not among what is copied`() {
+        val start = started(today, name = "Push day")
+        val benchAdded = added(start.id, bench.id, restSec = 90)
+        val squatAdded = added(start.id, squat.id, restSec = 120, ts = "${today}T08:02:00")
+        val removeBench = row(
+            TYPE_ENTRY_DELETED, payloadJson.encodeToString(EntryDeleted(benchAdded.uid)), "${today}T08:05:00",
+        )
+        val events = listOf(start, benchAdded, squatAdded, removeBench)
+
+        val workout = lastWorkoutNamed(events, "Push day")!!
+        assertEquals(listOf(squat.id), asPlanned(workout).map { it.exerciseId })
+    }
+
+    @Test
+    fun `the rest recorded on the source card travels with it through resolvedCards`() {
+        val start = started(today, name = "Push day")
+        val workout = buildWorkout(listOf(start, added(start.id, bench.id, restSec = 137)), start.id)!!
+
+        val cards = resolvedCards(asPlanned(workout), refOf = { bench }, restFallback = { 0 })
+
+        assertEquals(listOf(137), cards.map { it.restSec })
+    }
+
+    /**
+     * A one-sided exercise's two cards ALREADY exist as two separate entries in a real
+     * workout — see [WorkoutExercise.side]. Reading them back through [asPlanned] and
+     * [resolvedCards] must hand back exactly two cards, not four: [resolvedCards] must not
+     * fan an entry that already names a side, however the catalog's current
+     * [ExerciseRef.oneSided] flag reads.
+     */
+    @Test
+    fun `a one-sided exercise's two cards travel as two, not four`() {
+        val start = started(today, name = "Hangboard")
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, restSec = 60, side = HoldSide.LEFT),
+            added(start.id, hangs.id, restSec = 60, side = HoldSide.RIGHT, ts = "${today}T09:02:00"),
+        )
+        val workout = lastWorkoutNamed(events, "Hangboard")!!
+        val planned = asPlanned(workout)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), planned.map { it.side })
+
+        val oneSided = hangs.copy(oneSided = true)
+        val cards = resolvedCards(planned, refOf = { oneSided }, restFallback = { 0 })
+
+        assertEquals(2, cards.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), cards.map { it.side })
+    }
+
+    /** The plan side of the same funnel: an entry naming no side IS fanned, off the catalog flag. */
+    @Test
+    fun `resolvedCards fans a one-sided plan entry - no side of its own - into two cards`() {
+        val planned = listOf(PlannedExercise(pistol.id, restSec = 60))
+
+        val cards = resolvedCards(planned, refOf = { pistol }, restFallback = { 0 })
+
+        assertEquals(2, cards.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), cards.map { it.side })
+        assertTrue(cards.all { it.exerciseId == pistol.id })
+    }
+
+    @Test
+    fun `resolvedCards falls back when the source names no rest of its own`() {
+        val planned = listOf(PlannedExercise(bench.id, restSec = null))
+
+        val cards = resolvedCards(planned, refOf = { bench }, restFallback = { 99 })
+
+        assertEquals(listOf(99), cards.map { it.restSec })
+    }
+
 }

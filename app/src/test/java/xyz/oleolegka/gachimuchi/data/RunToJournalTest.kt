@@ -61,9 +61,9 @@ class RunToJournalTest {
     @After
     fun tearDown() = db.close()
 
-    private suspend fun hangs() = repo.exercise(
-        repo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
-    )!!.toRef()
+    private suspend fun hangs() = repo.toRef(
+        repo.exercise(repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0))!!
+    )
 
     // --- a run becoming a journal entry ----------------------------------------------------
 
@@ -84,7 +84,7 @@ class RunToJournalTest {
         val written = session.groups.single().sets.map { it.form as HoldSet }
         assertEquals(listOf(6, 6, 2), written.map { it.reps })
         assertTrue(written.all { it.exerciseId == exercise.id })
-        assertEquals(20.0, written.first().edgeMm!!, 1e-9)
+        assertEquals(7.0, written.first().workSec!!, 1e-9)
 
         // the pause the program counted is believed over any gap derived from write times —
         // the two events were written milliseconds apart, and 183 s is the truth

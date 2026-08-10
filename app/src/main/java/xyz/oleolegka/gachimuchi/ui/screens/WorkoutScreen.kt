@@ -3,8 +3,10 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -33,10 +35,13 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutExercise
 import xyz.oleolegka.gachimuchi.domain.activityName
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.cardKey
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.EntryBlock
 import xyz.oleolegka.gachimuchi.ui.components.EntryEditorDialog
+import xyz.oleolegka.gachimuchi.ui.components.NameDialog
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
@@ -69,6 +74,12 @@ import java.time.LocalDate
  * When this is the open workout, the screen carries "Continue", which leads to the entry
  * card. That is the same action the day card offers; having it in both places means opening
  * a workout to check what is in it is never a dead end you have to back out of.
+ *
+ * ── Naming and reopening a workout, from the workout itself ─────────────────────
+ * The top bar also carries "Rename" (the same dialog the day card's long press already opened,
+ * now reachable without leaving this screen) and, once the workout is finished, "Reopen" — the
+ * whole-workout twin of a card's own "Back to active". Neither is a lock in reverse: reopening
+ * undoes only the mark, not anything recorded while it stood.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,6 +93,14 @@ fun WorkoutScreen(
     onAmendEntry: (eventId: Long, updated: ActivityForm) -> Unit = { _, _ -> },
     /** Remove an entry — any of them, not only the newest. */
     onDeleteEntry: (eventId: Long) -> Unit = {},
+    /** Name this workout, or clear its name with null — the same write the day card offers. */
+    onRenameWorkout: (workoutId: Long, name: String?) -> Unit = { _, _ -> },
+    /**
+     * Undo the workout's own "finished" mark, putting it back in progress. Null hides the
+     * control entirely rather than disabling it: a caller with nothing to wire it to (a
+     * read-only export view, say) should not offer a button that can never do anything.
+     */
+    onUnfinishWorkout: ((eventId: Long) -> Unit)? = null,
 ) {
     val colors = LocalGachiColors.current
     val workout = remember(state.events, workoutId) { buildWorkout(state.events, workoutId) }
@@ -91,6 +110,9 @@ fun WorkoutScreen(
      * journal is re-folded after every write, so a held copy would be the pre-correction one.
      */
     var editing by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    /** Whether the rename dialog is on screen — see [NameDialog] below. */
+    var renaming by rememberSaveable { mutableStateOf(false) }
 
     if (workout == null) {
         // the journal no longer has it (a wipe, a reseed): say so rather than draw nothing
@@ -133,19 +155,46 @@ fun WorkoutScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to the day")
                     }
                 },
+                actions = {
+                    // reachable from the workout's OWN screen now, not only from a long press
+                    // on its card on Today — see the class KDoc
+                    TextButton(onClick = { renaming = true }) {
+                        Text(if (workout.name == null) "Name it" else "Rename")
+                    }
+                    // a status, not a lock (§13): the button undoes the mark, not anything it
+                    // recorded, and only appears once there is a mark to undo
+                    if (workout.finished) {
+                        TextButton(
+                            onClick = { workout.finishedEventId?.let { onUnfinishWorkout?.invoke(it) } },
+                            enabled = onUnfinishWorkout != null,
+                        ) { Text("Reopen") }
+                    }
+                },
             )
         },
         bottomBar = {
+            /*
+             * Scaffold gives the bottom bar slot no window insets of its own: it only turns
+             * whatever this composes to into the content's bottom padding (see Material3's
+             * Scaffold source — `bottom = bottomBarHeight ?: insets`, and that fallback to
+             * insets only fires when NOTHING is composed here at all). So the navigation bar is
+             * read here, once, whichever branch runs — including the one below with no button,
+             * where skipping it would leave the list's own fixed bottom padding as the only
+             * thing between the last row and the system bar on three-button navigation.
+             */
             if (onContinue != null) {
                 Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                     Button(
                         onClick = onContinue,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .navigationBarsPadding()
                             .padding(horizontal = 15.dp, vertical = 10.dp)
                             .heightIn(min = 52.dp),
                     ) { Text("Continue this workout", style = MaterialTheme.typography.titleMedium) }
                 }
+            } else {
+                Spacer(Modifier.navigationBarsPadding())
             }
         },
     ) { padding ->
@@ -168,7 +217,7 @@ fun WorkoutScreen(
                 }
             }
 
-            items(workout.exercises.size, key = { workout.exercises[it].exercise.key }) { index ->
+            items(workout.exercises.size, key = { workout.exercises[it].cardKey }) { index ->
                 val exercise = workout.exercises[index]
                 EntryBlock(
                     name = exerciseName(state, exercise),
@@ -224,6 +273,21 @@ fun WorkoutScreen(
             onDismiss = { editing = null },
         )
     }
+
+    if (renaming) {
+        NameDialog(
+            title = if (workout.name == null) "Name this workout" else "Rename this workout",
+            label = "Name (optional)",
+            initial = workout.name.orEmpty(),
+            confirmLabel = "Save",
+            note = "Leave it empty and the card goes back to showing the time of day.",
+            onConfirm = { name ->
+                renaming = false
+                onRenameWorkout(workoutId, name)
+            },
+            onDismiss = { renaming = false },
+        )
+    }
 }
 
 /** "3 exercises, 11 sets", or what an empty workout has instead. */
@@ -236,13 +300,17 @@ private fun summaryOf(workout: Workout): String {
 }
 
 /**
- * The exercise's name.
+ * The exercise's name — with the hand appended, for the exercise trained one limb at a time
+ * that this block is one half of; see [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen]'s
+ * copy of this same helper for why two blocks of one exercise need telling apart at all.
  *
  * The catalog first, because that is the name the user maintains. The set's own payload is
  * the fallback and it matters: the journal outlives the catalog (an exercise can be deleted
  * while its history stays), and a block headed "exercise 14" is a workout you cannot read.
  */
-private fun exerciseName(state: UiState, exercise: WorkoutExercise): String =
-    state.exerciseById(exercise.exerciseId)?.name
+private fun exerciseName(state: UiState, exercise: WorkoutExercise): String {
+    val name = state.exerciseById(exercise.exerciseId)?.name
         ?: exercise.sets.firstOrNull()?.form?.activityName()
         ?: "Exercise ${exercise.exerciseId}"
+    return exercise.side?.let { "$name - ${it.label()}" } ?: name
+}

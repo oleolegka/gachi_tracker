@@ -203,11 +203,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
              */
             Text(
                 "The journal, the exercises, the plan, the programs and these settings, as one " +
-                    "JSON file. Nothing else keeps a copy of them - not the phone, not a cloud - " +
-                    "so this file is the only thing standing between a lost phone and a lost " +
-                    "history. Keep it somewhere that is not this phone. The celebration pictures " +
-                    "are not in it. Restoring merges a file into what is here and can be done " +
-                    "twice without doubling anything.",
+                    "CSV file: a table a spreadsheet can open and read, and the same file a " +
+                    "restore reads back. Nothing else keeps a copy of them - not the phone, not " +
+                    "a cloud - so this file is the only thing standing between a lost phone and " +
+                    "a lost history. Keep it somewhere that is not this phone. The celebration " +
+                    "pictures, and any picture attached to an exercise, are not in it. Restoring " +
+                    "merges a file into what is here and can be done twice without doubling " +
+                    "anything.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
             )

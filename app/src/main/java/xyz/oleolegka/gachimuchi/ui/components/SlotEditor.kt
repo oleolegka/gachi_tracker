@@ -55,11 +55,17 @@ import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.SlotProblem
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatTime
 import xyz.oleolegka.gachimuchi.domain.formatTimeDigits
+import xyz.oleolegka.gachimuchi.domain.isBackdated
 import xyz.oleolegka.gachimuchi.domain.newSlotDraft
 import xyz.oleolegka.gachimuchi.domain.nextOccurrence
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseMinuteOfDay
 import xyz.oleolegka.gachimuchi.domain.parseSlotTime
 import xyz.oleolegka.gachimuchi.domain.problem
@@ -72,7 +78,6 @@ import xyz.oleolegka.gachimuchi.domain.withExerciseMoved
 import xyz.oleolegka.gachimuchi.domain.withExerciseRemoved
 import xyz.oleolegka.gachimuchi.domain.withExerciseRest
 import xyz.oleolegka.gachimuchi.ui.UiState
-import xyz.oleolegka.gachimuchi.ui.fmtRest
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
@@ -128,6 +133,16 @@ import java.time.LocalDate
  *
  * It opens by itself when a slot already has exercises, because then there is something to
  * see and hiding it would mean a tap to find out whether anything is in there at all.
+ *
+ * ── Plans start from today, never before ────────────────────────────────────────
+ * The date field can be stepped to any day, but Save shuts the moment it lands before
+ * [today] — the same gate the time field already uses for a half-typed value, now guarding
+ * against two reported bugs at once: a plan added straight onto a day already gone (which
+ * can overwrite a MISSED verdict `planVsFact` had already settled on it) and a repeating
+ * slot anchored in the past making every past occurrence of it read as planned (§12-B's
+ * `occursOn` has always started from the anchor — it was the anchor that had no floor). See
+ * [xyz.oleolegka.gachimuchi.domain.isBackdated] for why the check lives here and not in
+ * [xyz.oleolegka.gachimuchi.domain.toSlot] itself.
  */
 @Composable
 fun SlotEditorDialog(
@@ -144,7 +159,6 @@ fun SlotEditorDialog(
     onCreateExercise: ((
         name: String,
         form: ExerciseForm,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         then: (Long) -> Unit,
@@ -162,7 +176,10 @@ fun SlotEditorDialog(
     var picking by remember { mutableStateOf(false) }
     // open on what is already there, shut on what is not — see the header
     var exercisesOpen by remember(initial) { mutableStateOf(initial?.exercises?.isNotEmpty() == true) }
-    val problem = draft.problem()
+    // the field checks first (name, time, rule, a readable date), and only once those are
+    // clean does "is this day already gone" get asked — see isBackdated's own KDoc for why
+    // that one is kept apart rather than folded into problem() itself
+    val problem = draft.problem() ?: if (draft.isBackdated(today)) SlotProblem.DATE_IN_PAST else null
     val anchor = remember(draft.anchorDate) {
         runCatching { LocalDate.parse(draft.anchorDate) }.getOrDefault(day)
     }
@@ -197,14 +214,14 @@ fun SlotEditorDialog(
             onPick = { id -> draft = draft.withExerciseAdded(id) },
             /*
              * Planning can create, and once could not. The argument for refusing was that the
-             * identity questions (form, edge, protocol) belong to the moment of the first set
-             * — which sounds right and is wrong in the hand: planning Tuesday's hangs on a
-             * 15 mm edge you have never hung is exactly what a plan is for, and the picker
-             * offered no way out of the dead end. Reported from the phone, 2026-08-08.
+             * identity questions (form, protocol) belong to the moment of the first set — which
+             * sounds right and is wrong in the hand: planning Tuesday's hangs on a protocol you
+             * have never tried is exactly what a plan is for, and the picker offered no way out
+             * of the dead end. Reported from the phone, 2026-08-08.
              */
             onCreate = onCreateExercise?.let { create ->
-                { name, form, edge, work, rest ->
-                    create(name, form, edge, work, rest) { id ->
+                { name, form, work, rest ->
+                    create(name, form, work, rest) { id ->
                         draft = draft.withExerciseAdded(id)
                     }
                 }
@@ -487,7 +504,16 @@ private fun PlannedExercisesSection(
     }
 }
 
-/** One planned exercise: where it sits, what it is, and how long the pauses in it are. */
+/**
+ * One planned exercise: where it sits, what it is, and how long the pauses in it are.
+ *
+ * ── The rest, typed rather than picked off a ladder ──────────────────────────
+ * It used to be six chips capped at 4:00 — "not able to choose anything above 4:00" was the
+ * complaint that started §13.9. Now it is [TimeField], the same free mm:ss entry the live
+ * workout's own rest dialog uses, with "Usual" kept as the one preset worth a tap: it is not
+ * a length of time at all, it is "ask [xyz.oleolegka.gachimuchi.domain.restHintSec] instead",
+ * and typing a number into the field could never mean that.
+ */
 @Composable
 private fun PlannedExerciseRow(
     position: Int,
@@ -500,6 +526,10 @@ private fun PlannedExerciseRow(
     onRest: (Int?) -> Unit,
 ) {
     val colors = LocalGachiColors.current
+    // re-derived whenever the COMMITTED rest changes for any reason — "Usual" tapped, a fresh
+    // slot opened, an exercise moved to this row by a reorder — but left alone the rest of the
+    // time, so a keystroke that does not yet parse (a lone "1") is not erased by its own write
+    var restText by remember(restSec) { mutableStateOf(restSec?.let(::formatDurationSec) ?: "") }
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -536,37 +566,30 @@ private fun PlannedExerciseRow(
                 )
             }
         }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Rest", fontSize = 12.sp, color = colors.inkMuted)
-            SiblingChip(
-                text = "Usual",
-                selected = restSec == null,
-                accent = colors.accent,
-                onClick = { onRest(null) },
-            )
-            REST_CHOICES.forEach { seconds ->
-                SiblingChip(
-                    text = fmtRest(seconds.toDouble()),
-                    selected = restSec == seconds,
-                    accent = colors.accent,
-                    onClick = { onRest(seconds) },
-                )
-            }
-        }
+        SiblingChip(
+            text = "Usual",
+            selected = restSec == null,
+            accent = colors.accent,
+            onClick = { restText = ""; onRest(null) },
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        TimeField(
+            label = "Rest, mm:ss",
+            value = restText,
+            onValueChange = { text ->
+                restText = text
+                // committed only once it is a real rest — MIN_STEP_SEC excludes zero, which
+                // restHintSec would otherwise read back as "nothing chosen" (§13.9's ceiling
+                // is MAX_REST_INPUT_SEC, an exercise's own, not MAX_STEP_SEC's hour)
+                parseDurationText(text)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }?.let(onRest)
+            },
+            bumpsSec = listOf(10, 30),
+            isError = restText.isNotBlank() &&
+                parseDurationText(restText)?.let { it !in MIN_STEP_SEC..MAX_REST_INPUT_SEC } ?: true,
+            modifier = Modifier.padding(top = 2.dp),
+        )
     }
 }
-
-/**
- * Rests offered as one tap. Chips rather than a number field for the reason the quick times
- * above are chips: the phone's numeric keyboard over a dialog is three interactions to say
- * something that has five plausible answers. A rest outside this set is a thing to set on
- * the day, on the timer, where it is actually being counted.
- */
-private val REST_CHOICES = listOf(60, 90, 120, 150, 180, 240)
 
 /**
  * A day picked by stepping, not by a calendar popup: the calendar is already on screen

@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.Session
 import xyz.oleolegka.gachimuchi.domain.SessionGroup
 import xyz.oleolegka.gachimuchi.domain.SessionSet
@@ -49,6 +52,7 @@ import xyz.oleolegka.gachimuchi.domain.bodyweightOf
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.cardioOf
 import xyz.oleolegka.gachimuchi.domain.durationOf
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.formatPace
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
@@ -58,12 +62,14 @@ import xyz.oleolegka.gachimuchi.domain.lastDuration
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.lastStrengthSet
 import xyz.oleolegka.gachimuchi.domain.parseCount
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.parsePace
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.tickOf
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
+import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerBar
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
@@ -122,9 +128,16 @@ fun LogScreen(
     timer: TimerUiState,
     timerActions: TimerActions,
     onEnableTimer: () -> Unit,
-    onStartExerciseProgram: (ExerciseRef) -> Unit,
+    /**
+     * Starts the one-tap program — a [ProgramStart] rather than an [ExerciseRef], because
+     * this screen is the one place a protocol-led run can begin with no card to already carry
+     * the side (see [MainViewModel.startProgramForExercise][xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise]).
+     * The dialogs below build the [ProgramStart] before this is ever called, so it always
+     * arrives complete.
+     */
+    onStartExerciseProgram: (ProgramStart) -> Unit,
     onSelectExercise: (Long?) -> Unit,
-    onCreateExercise: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
+    onCreateExercise: (String, ExerciseForm, Double?, Double?) -> Unit,
     onAddSet: (ActivityForm) -> Unit,
     onUndoSet: (Long) -> Unit,
     onClose: () -> Unit,
@@ -134,6 +147,28 @@ fun LogScreen(
     val session = remember(state.events, iso) { buildSession(state.events, iso) }
     val active = state.refById(activeExerciseId)
     var picking by remember { mutableStateOf(false) }
+
+    /*
+     * ── The two questions a one-tap program can owe before it starts ─────────────────
+     * Inside a workout both are answered by the card that was tapped: the SIDE is which of
+     * the exercise's two cards it is, the PLATE comes from [WeightDialog] once §13.5 decides
+     * one is worth asking. Here there is no card — only the entry panel's single active
+     * exercise — so the same two questions are asked in dialogs instead of being skipped, and
+     * [beginProgram] is the one place that decides which of them, if either, is still owed
+     * before [onStartExerciseProgram] is allowed to be called at all.
+     */
+    var choosingSideFor by remember { mutableStateOf<ExerciseRef?>(null) }
+    var weighingProgramFor by remember { mutableStateOf<ExerciseRef?>(null) }
+    var weighingProgramSide by remember { mutableStateOf<HoldSide?>(null) }
+
+    fun beginProgram(exercise: ExerciseRef, side: HoldSide?) {
+        if (lastAddedKg(state, exercise) == null) {
+            onStartExerciseProgram(ProgramStart(exercise, side, null))
+        } else {
+            weighingProgramFor = exercise
+            weighingProgramSide = side
+        }
+    }
 
     /*
      * A first run has nothing to log against, and every prompt on this screen would
@@ -185,7 +220,17 @@ fun LogScreen(
                     state = timer,
                     actions = timerActions,
                     exercise = active,
-                    onStartExerciseProgram = { active?.let(onStartExerciseProgram) },
+                    onStartExerciseProgram = {
+                        active?.let { exercise ->
+                            // one-sided: the card that would have carried this answer does
+                            // not exist here, so it is asked for instead of defaulted away
+                            if (exercise.oneSided) {
+                                choosingSideFor = exercise
+                            } else {
+                                beginProgram(exercise, side = null)
+                            }
+                        }
+                    },
                     onEnable = onEnableTimer,
                 )
                 EntryPanel(
@@ -217,6 +262,30 @@ fun LogScreen(
             onPick = onSelectExercise,
             onCreate = onCreateExercise,
             onDismiss = { picking = false },
+        )
+    }
+
+    choosingSideFor?.let { exercise ->
+        SideDialog(
+            exerciseName = exercise.name,
+            onConfirm = { side ->
+                choosingSideFor = null
+                beginProgram(exercise, side)
+            },
+            onDismiss = { choosingSideFor = null },
+        )
+    }
+
+    weighingProgramFor?.let { exercise ->
+        WeightDialog(
+            exerciseName = exercise.name,
+            initialKg = lastAddedKg(state, exercise),
+            onConfirm = { kg ->
+                onStartExerciseProgram(ProgramStart(exercise, weighingProgramSide, kg))
+                weighingProgramFor = null
+                weighingProgramSide = null
+            },
+            onDismiss = { weighingProgramFor = null; weighingProgramSide = null },
         )
     }
 }
@@ -359,7 +428,17 @@ private fun EntryPanel(
     val colors = LocalGachiColors.current
     Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            /*
+             * This panel IS the Scaffold's bottomBar, not a sheet drawn over the screen, and
+             * Scaffold gives the bottom bar slot no window insets of its own (it only turns
+             * whatever this composes to into the content's bottom padding) -- so the system
+             * navigation bar has to be read here, once. See WorkoutLogScreen's own bottom bar
+             * for the same reasoning, and why this stays correct on gesture navigation too:
+             * navigationBarsPadding reads the real inset instead of a guessed constant.
+             */
+            modifier = Modifier.fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             HorizontalDivider(color = colors.grid)
@@ -409,7 +488,6 @@ private fun EntryPanel(
 private fun contextLine(exercise: ExerciseRef): String = buildString {
     append(exercise.form.title.lowercase())
     if (exercise.form == ExerciseForm.HOLD) {
-        exercise.edge?.let { append(" - ${formatNumber(it)} mm edge") }
         exercise.protocol?.let { append(" - ${formatNumber(it.first)}:${formatNumber(it.second)} protocol") }
     }
 }
@@ -471,8 +549,153 @@ private fun WarmupChip(selected: Boolean, onToggle: () -> Unit) {
     )
 }
 
+/**
+ * The "not completed" toggle, shared by the two forms that can carry the flag — modelled on
+ * [WarmupChip] one line up, with the axis it defaults to turned around: OFF on arrival, always,
+ * because whether the LAST set was carried through says nothing about whether THIS one will be
+ * (owner: "если провисел весь цикл — хорошо, в следующий раз больше поставлю; а если не смог
+ * доделать, то больше брать и не надо"). The app cannot tell this on its own — the timer counts
+ * its seconds whether or not the lifter actually held on for all of them — so it is a mark set
+ * by hand, never inferred. See [StrengthSet.incomplete] for what ticking it changes: the set
+ * stays in the tonnage (the effort was real) and drops out of the records (the number was not
+ * actually held).
+ */
 @Composable
-internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+private fun IncompleteChip(selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text("Not completed") },
+        modifier = Modifier.heightIn(min = 40.dp),
+    )
+}
+
+/**
+ * "Last time this was not completed" — the one thing this card says about a PAST set rather
+ * than the one being built, and the reason [LoadedSet.incomplete] exists at all: the owner's
+ * whole ask was a note that feeds the NEXT decision about weight, not a badge for its own sake.
+ * Placed right under the weight and reps fields (or the hold time, on [HoldEntry]) — the numbers
+ * this is a comment on — rather than folded into [contextLine], which is read once when the
+ * card is chosen and not while the fields are being looked at.
+ *
+ * Silent when the answer is no (most of the time) or when there is no last set at all, on the
+ * same grounds every quiet default in this file follows: a card that speaks up about ordinary
+ * training is a card nobody reads carefully any more.
+ */
+@Composable
+private fun LastTimeIncompleteNote(show: Boolean) {
+    if (!show) return
+    val colors = LocalGachiColors.current
+    Text(
+        "Last time this was not completed - consider the same weight again, or less.",
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.warning,
+    )
+}
+
+/**
+ * Whether an entry card owes an answer for which side a set was — shared by every form that
+ * carries [LoadedSet.side], so [StrengthEntry] and [HoldEntry] settle the question the same
+ * way. Only a one-sided exercise owes an answer, and only when the card itself did not already
+ * say which one — on any other exercise, or with a fixed side, there is nothing left to ask.
+ */
+private fun sideMissingOf(oneSided: Boolean, fixedSide: HoldSide?, side: HoldSide?): Boolean =
+    oneSided && fixedSide == null && side == null
+
+/**
+ * The side chip row and the line explaining a disabled button — shared by every entry form
+ * that can carry a [LoadedSet.side]. See [HoldEntry]'s own KDoc for [fixedSide]: non-null, the
+ * card that raised this form already answered the question and this draws nothing at all.
+ */
+@Composable
+private fun SideChooser(
+    oneSided: Boolean,
+    fixedSide: HoldSide?,
+    side: HoldSide?,
+    onSideChange: (HoldSide?) -> Unit,
+    sideMissing: Boolean,
+) {
+    if (!oneSided || fixedSide != null) return
+    val colors = LocalGachiColors.current
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HoldSide.entries.forEach { option ->
+            FilterChip(
+                selected = side == option,
+                // tapping the chosen one again clears it rather than doing nothing, so a
+                // mis-tap is undone the same way it was made
+                onClick = { onSideChange(if (side == option) null else option) },
+                label = { Text(option.label()) },
+                modifier = Modifier.heightIn(min = 40.dp),
+            )
+        }
+    }
+    if (sideMissing) {
+        Text(
+            "Say which side. This one is trained a limb at a time, and each side keeps " +
+                "its own record - a set that names neither belongs to neither.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkSecondary,
+        )
+    }
+}
+
+/**
+ * Which hand the one-tap program belongs to, asked before it starts.
+ *
+ * Every other place a protocol-led run can begin already has a CARD that answers this: the
+ * two per-side cards a one-sided exercise gets inside a workout (see [WorkoutLogScreen]).
+ * This screen has no card, only the entry panel's single active exercise, so the question is
+ * put in a dialog that blocks the run rather than one that gets skipped — an unanswered side
+ * used to mean a set that dropped out of both hands' records (see
+ * [xyz.oleolegka.gachimuchi.domain.ProgramStart]).
+ *
+ * Draws [SideChooser] itself rather than a second chip row: the manual entry card just below
+ * asks this exact question the exact same way, and a program run is not allowed to ask it
+ * differently.
+ */
+@Composable
+private fun SideDialog(exerciseName: String, onConfirm: (HoldSide) -> Unit, onDismiss: () -> Unit) {
+    var side by remember(exerciseName) { mutableStateOf<HoldSide?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Which side?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(exerciseName, style = MaterialTheme.typography.titleSmall)
+                SideChooser(
+                    oneSided = true,
+                    fixedSide = null,
+                    side = side,
+                    onSideChange = { side = it },
+                    sideMissing = side == null,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { side?.let(onConfirm) }, enabled = side != null) {
+                Text("Start the set")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Strength sets: weight x reps and — on an exercise trained one limb at a time — which side.
+ *
+ * The side question is asked the same way [HoldEntry] asks it ([SideChooser], [sideMissingOf],
+ * [fixedSide]): the mechanism (two workout cards, per-side rest, per-side records) never
+ * depended on the exercise's form, only the field carrying the answer did — see
+ * [xyz.oleolegka.gachimuchi.domain.LoadedSet.side].
+ */
+@Composable
+internal fun StrengthEntry(
+    state: UiState,
+    exercise: ExerciseRef,
+    opDate: String,
+    onAddSet: (ActivityForm) -> Unit,
+    fixedSide: HoldSide? = null,
+) {
     val last = remember(state.events, exercise.id) { lastStrengthSet(state.events, exercise.link) }
     val prefillWeight = if (last?.ownWeight == true) last.addedKg else last?.weightKg
 
@@ -480,6 +703,14 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var ownWeight by remember(exercise.id, last) { mutableStateOf(last?.ownWeight ?: false) }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
+    // OFF ON ARRIVAL, on the same grounds [WarmupChip] gives for its own flag: whether the
+    // last set was carried through is not a property of the exercise, so this card opens on
+    // "carried through" however the previous set actually went. See [IncompleteChip].
+    var incomplete by remember(exercise.id, last) { mutableStateOf(false) }
+    // NOT prefilled from the last set, on the same grounds [HoldEntry] leaves its own side
+    // blank: one-sided work alternates, so last time's side is the wrong answer about as
+    // often as it is right, and the failure would be silent.
+    var side by remember(exercise.id, last, fixedSide) { mutableStateOf(fixedSide) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
@@ -488,10 +719,14 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
      * repeating the ramp-up is a repeat, and a working set after one is not. Comparing it
      * against the previous set rather than against false is what keeps the button honest in
      * both directions — the card starts unticked, so a working set after a working set still
-     * reads "Repeat set" and still costs one tap.
+     * reads "Repeat set" and still costs one tap. [incomplete] joins it for the same reason:
+     * a card that reads "Repeat set" while quietly UN-marking a set the lifter said fell short
+     * would silently turn the correction back into a repeat.
      */
     val untouched = last != null && weightValue == prefillWeight &&
-        repsValue == last.reps && ownWeight == last.ownWeight && warmup == last.warmup
+        repsValue == last.reps && ownWeight == last.ownWeight && warmup == last.warmup &&
+        incomplete == last.incomplete && side == last.sideOf
+    val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     StepperField(
         label = if (ownWeight) "Added weight, kg (empty means body weight only)" else "Weight, kg",
@@ -506,6 +741,9 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
         steps = listOf(1.0),
         decimal = false,
     )
+    // "In the past, this weight was not carried through" — the input the owner asked this
+    // whole feature to feed into: whether to push the weight up next time. See [IncompleteChip].
+    LastTimeIncompleteNote(last?.incomplete == true)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
             selected = ownWeight,
@@ -514,22 +752,27 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
             modifier = Modifier.heightIn(min = 40.dp),
         )
         WarmupChip(warmup) { warmup = !warmup }
+        IncompleteChip(incomplete) { incomplete = !incomplete }
     }
-    SubmitButton(repeat = untouched, enabled = repsValue != null && repsValue > 0) {
+    SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
+    SubmitButton(
+        repeat = untouched,
+        enabled = !sideMissing && repsValue != null && repsValue > 0,
+    ) {
         onAddSet(
             strengthSetOf(
                 exercise = exercise, opDate = opDate, reps = repsValue!!,
                 weightKg = weightValue, ownWeight = ownWeight, addedKg = weightValue,
-                warmup = warmup,
+                warmup = warmup, incomplete = incomplete, side = side,
             )
         )
     }
 }
 
 /**
- * Holds. Edge and protocol are NOT asked for: §12-A puts them on the exercise, so the
- * variables of a set are the added weight, the number of reps and — on an exercise trained
- * one limb at a time — which hand it was.
+ * Holds. The protocol is NOT asked for: §12-A puts it on the exercise, so the variables of
+ * a set are the added weight, the number of reps and — on an exercise trained one limb at
+ * a time — which hand it was.
  *
  * ── The side is asked for, and it cannot be skipped ─────────────────────────────
  * A record on a one-sided exercise is per (exercise, side): the weaker hand has its own
@@ -545,23 +788,42 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
  * failure is silent: two lefts in the journal, a right hand's history missing a set, and a
  * record on the wrong hand. The weight and the reps prefill because being wrong about them is
  * visible in the field before the button is pressed; the hand is not.
+ *
+ * ── [fixedSide] — asked already, by the card ─────────────────────────────────────
+ * Null everywhere this used to be the whole of it: a bare entry not raised from a workout, and
+ * the standalone [LogScreen] itself, where there is no card to have already said which hand.
+ * Inside a workout a one-sided exercise gets two CARDS, one per side (see domain/Workout.kt),
+ * and the card that was tapped is itself the answer — asking again with a chip row here would
+ * be the same question twice on the one screen used mid-set. So a non-null [fixedSide] hides the
+ * chips and writes that side, unconditionally, with nothing left for [sideMissing] to catch.
+ *
+ * [StrengthEntry] asks the same question the same way, for the same reason — this is the
+ * older of the two only because a hangboard is where the app's one-sided training started.
  */
 @Composable
-internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
-    val colors = LocalGachiColors.current
+internal fun HoldEntry(
+    state: UiState,
+    exercise: ExerciseRef,
+    opDate: String,
+    onAddSet: (ActivityForm) -> Unit,
+    fixedSide: HoldSide? = null,
+) {
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
+    var holdSeconds by remember(exercise.id, last) { mutableStateOf(last?.holdSec?.let(::formatNumber) ?: "") }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
-    var side by remember(exercise.id, last) { mutableStateOf<HoldSide?>(null) }
+    // OFF ON ARRIVAL — see [StrengthEntry]'s own note on why this is never prefilled.
+    var incomplete by remember(exercise.id, last) { mutableStateOf(false) }
+    var side by remember(exercise.id, last, fixedSide) { mutableStateOf(fixedSide) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
+    val holdSecValue = parseNumber(holdSeconds)
     val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
-        warmup == last.warmup && side == last.sideOf
-    // only a one-sided exercise owes an answer; on any other one a null side is what "both
-    // hands" has always meant and always will
-    val sideMissing = exercise.oneSided && side == null
+        holdSecValue == last.holdSec && warmup == last.warmup &&
+        incomplete == last.incomplete && side == last.sideOf
+    val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     StepperField(
         label = "Added weight, kg",
@@ -576,29 +838,27 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         steps = listOf(1.0),
         decimal = false,
     )
-    if (exercise.oneSided) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HoldSide.entries.forEach { option ->
-                FilterChip(
-                    selected = side == option,
-                    // tapping the chosen one again clears it rather than doing nothing, so a
-                    // mis-tap is undone the same way it was made
-                    onClick = { side = if (side == option) null else option },
-                    label = { Text(option.label()) },
-                    modifier = Modifier.heightIn(min = 40.dp),
-                )
-            }
-        }
-        if (sideMissing) {
-            Text(
-                "Say which side. This one is trained a limb at a time, and each side keeps " +
-                    "its own record - a set that names neither belongs to neither.",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkSecondary,
-            )
-        }
+    /*
+     * THE LENGTH OF ONE HOLD, in seconds — see [HoldSet.holdSec]. Nothing else here can supply
+     * it: the catalog's work:rest protocol is a plan, not a record of what this set actually
+     * did, and a hold with no protocol at all (a plank) has no other source for it whatsoever.
+     * Left blank the set is stored exactly as it always was — nothing invented for a length
+     * nobody stated.
+     */
+    StepperField(
+        label = "Hold time, s",
+        value = holdSeconds,
+        onValueChange = { holdSeconds = it },
+        steps = listOf(1.0, 5.0),
+    )
+    // "Last time this was not held for the full protocol" — the owner's own example ("провисел
+    // не 7 секунд, а 5") is exactly what this line is for. See [IncompleteChip].
+    LastTimeIncompleteNote(last?.incomplete == true)
+    SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        WarmupChip(warmup) { warmup = !warmup }
+        IncompleteChip(incomplete) { incomplete = !incomplete }
     }
-    WarmupChip(warmup) { warmup = !warmup }
     SubmitButton(
         repeat = untouched,
         enabled = !sideMissing &&
@@ -607,7 +867,7 @@ internal fun HoldEntry(state: UiState, exercise: ExerciseRef, opDate: String, on
         onAddSet(
             holdSetOf(
                 exercise = exercise, opDate = opDate, addedKg = weightValue, reps = repsValue,
-                warmup = warmup, side = side,
+                holdSec = holdSecValue, warmup = warmup, incomplete = incomplete, side = side,
             )
         )
     }
@@ -657,13 +917,16 @@ internal fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, 
 @Composable
 internal fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastDuration(state.events, exercise.link) }
-    var minutes by remember(exercise.id, last) {
-        mutableStateOf(last?.durationSec?.let { formatNumber(it / 60.0) } ?: "")
+    // mm:ss, free entry — it used to be a MINUTES field reaching a whole number of seconds
+    // only through a decimal point ("0.5" for thirty seconds), the owner's own word for it
+    // was "шиза" (§13.9)
+    var duration by remember(exercise.id, last) {
+        mutableStateOf(last?.durationSec?.let(::formatDurationSec) ?: "")
     }
-    val seconds = parseNumber(minutes)?.takeIf { it > 0 }?.let { (it * 60).toInt() }
+    val seconds = parseDurationText(duration)?.takeIf { it > 0 }
     val untouched = last != null && seconds == last.durationSec
 
-    StepperField(label = "Minutes", value = minutes, onValueChange = { minutes = it }, steps = listOf(1.0, 5.0))
+    TimeField(label = "Duration, mm:ss", value = duration, onValueChange = { duration = it }, bumpsSec = listOf(10))
     SubmitButton(
         repeat = untouched,
         enabled = seconds != null && seconds > 0,

@@ -96,6 +96,15 @@ data class ProgramGroup(
  * Optional rather than required, because most programs are not one exercise: a circuit is
  * five, and forcing a link on it would mean picking a lie. Null means "ask when it
  * finishes" (ui/components/RunLogDialog.kt), not "never offer".
+ *
+ * ── [uid] (schema version 19) ─────────────────────────────────────────────────
+ * The stable identity of this program across devices and edits — the same role
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.uid] plays for a catalog row. It is what an
+ * exercise's protocol is now keyed on ([xyz.oleolegka.gachimuchi.domain.ExerciseIdentity]), and
+ * a local row id (`Long`) could never fill that role: it counts how many programs THIS phone
+ * has written and means nothing on another one, which is exactly what would silently break
+ * cross-device identity comparison ([xyz.oleolegka.gachimuchi.domain.PortableExercise.identity],
+ * `mergeExercises`) the moment a device compared its own numbering against someone else's.
  */
 @Serializable
 data class WorkoutProgram(
@@ -107,6 +116,13 @@ data class WorkoutProgram(
     @SerialName("exercise_id") val exerciseId: Long? = null,
     /** Free-text heading this program is filed under on the timer tab. Blank means none. */
     @SerialName("category") val category: String = "",
+    @SerialName("uid") val uid: String = newUid(),
+    /**
+     * Kept out of the timer tab's list (schema version 20) — see
+     * [xyz.oleolegka.gachimuchi.data.db.ProgramEntity.hidden]. Presentation only: a hidden
+     * program still resolves as a protocol, still runs, still shows on the identity chip.
+     */
+    @SerialName("hidden") val hidden: Boolean = false,
 )
 
 /** Programs under one heading, in the order they are stored. */
@@ -315,6 +331,20 @@ fun WorkoutProgram.flatten(): List<WorkoutStep> {
     return out
 }
 
+/**
+ * The first block of a program's first group, or null for an empty program.
+ *
+ * ── Why this exists ──────────────────────────────────────────────────────────────
+ * A protocol built from a plain "work, rest" pair — the shape the exercise create/edit dialogs
+ * still speak (see `ActivityRepository`'s find-or-create-protocol-program logic) — is always
+ * exactly this: one group, one block, `repeats == 1` on both. This is the read side of that
+ * shape, used both to spot a matching program when one already exists in the library and to
+ * turn a resolved program back into the two numbers `ExerciseRef.workSec`/`restSec` want (see
+ * [xyz.oleolegka.gachimuchi.domain.CatalogRow.toRef]). It says nothing about whether a program
+ * genuinely IS that minimal shape — a caller comparing `repeats` and block count does that.
+ */
+fun WorkoutProgram.firstBlock(): ProgramBlock? = groups.firstOrNull()?.blocks?.firstOrNull()
+
 /** Total length of a program once expanded, in seconds. */
 fun WorkoutProgram.totalSec(): Int = flatten().sumOf { it.durationSec }
 
@@ -354,9 +384,9 @@ fun restProgram(restSec: Int, label: String = "Rest"): WorkoutProgram = WorkoutP
  * The integration a standalone timer app cannot have: a program built FROM A CATALOG
  * EXERCISE.
  *
- * A hangboard exercise already carries its work:rest protocol and its edge (§12-A puts
- * them on the exercise, not on the set), so "Hangs 20 mm - 7:3" plus a rep count, a set
- * count and a pause between sets is a complete interval program with nothing left to ask.
+ * A hangboard exercise already carries its work:rest protocol (§12-A puts it on the
+ * exercise, not on the set), so "Hangs - 7:3" plus a rep count, a set count and a pause
+ * between sets is a complete interval program with nothing left to ask.
  * That is the whole point: the numbers are already in the catalog and in the journal, so
  * starting the right timer costs one tap instead of building a program by hand.
  *
@@ -395,6 +425,34 @@ fun programFromExercise(
         ),
     )
 }
+
+/**
+ * Everything the one-tap program needs from whatever it is launched FROM, bundled as one
+ * value rather than passed as three loose arguments.
+ *
+ * ── Why bundled ──────────────────────────────────────────────────────────────────
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise] used to take
+ * `exercise`, `addedKg` and `side` as three independent parameters, two of them defaulted
+ * to null. That let a caller supply the exercise and silently skip the other two — which is
+ * exactly what the standalone entry screen did, so a one-sided hangboard run started outside
+ * a workout wrote sets that named no side and dropped out of both hands' records. Folding
+ * the three into one required value removes the silent option: a screen that has not worked
+ * out [side] and [addedKg] cannot build a [ProgramStart] at all, so it cannot call the
+ * function that starts a run.
+ *
+ * [side] is nullable on purpose — most exercises are not trained one limb at a time, and for
+ * those there is nothing to ask. It is NOT optional to supply, only optional in what it may
+ * contain: every caller states an answer, even when that answer is "there is no side here".
+ *
+ * [addedKg] is the plate hung before the set, asked for only when there is a reason to
+ * (§13.5) — see [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen]'s `WeightDialog` for
+ * where that question is actually put to the user.
+ */
+data class ProgramStart(
+    val exercise: ExerciseRef,
+    val side: HoldSide?,
+    val addedKg: Double?,
+)
 
 // --- the two programs that ship with the app ------------------------------------------
 

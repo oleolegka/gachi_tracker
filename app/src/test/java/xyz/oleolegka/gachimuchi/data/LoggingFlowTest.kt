@@ -56,8 +56,8 @@ class LoggingFlowTest {
     @After
     fun tearDown() = db.close()
 
-    private suspend fun ref(name: String, form: ExerciseForm, edge: Double? = null, work: Double? = null, rest: Double? = null) =
-        repo.exercise(repo.ensureExercise(name, form, edge, work, rest))!!.toRef()
+    private suspend fun ref(name: String, form: ExerciseForm, work: Double? = null, rest: Double? = null) =
+        repo.toRef(repo.exercise(repo.ensureExercise(name, form, work, rest))!!)
 
     @Test
     fun `a set is logged, prefills the card, and repeating it writes an identical second one`() = runTest {
@@ -96,13 +96,12 @@ class LoggingFlowTest {
     }
 
     @Test
-    fun `a hold exercise carries edge and protocol, and every set inherits them`() = runTest {
-        val hangs = ref("Hangs 20 mm", ExerciseForm.HOLD, edge = 20.0, work = 7.0, rest = 3.0)
-        assertEquals(20.0, hangs.edgeMm!!, 1e-9)
+    fun `a hold exercise carries a protocol, and every set inherits it`() = runTest {
+        val hangs = ref("Hangs", ExerciseForm.HOLD, work = 7.0, rest = 3.0)
+        assertEquals(7.0, hangs.workSec!!, 1e-9)
 
         repo.record(holdSetOf(hangs, day, addedKg = 8.0, reps = 5))
         val set = buildSession(repo.allEvents(), day).groups.single().sets.single().form as HoldSet
-        assertEquals(20.0, set.edgeMm!!, 1e-9)
         assertEquals(7.0, set.workSec!!, 1e-9)
         assertEquals(3.0, set.restSec!!, 1e-9)
         assertEquals(hangs.id, set.exerciseId)
@@ -111,7 +110,7 @@ class LoggingFlowTest {
     @Test
     fun `all six forms go through the database and land in one session`() = runTest {
         repo.record(strengthSetOf(ref("Bench press", ExerciseForm.STRENGTH), day, reps = 5, weightKg = 60.0))
-        repo.record(holdSetOf(ref("Hangs", ExerciseForm.HOLD, 20.0, 7.0, 3.0), day, addedKg = 6.0, reps = 5))
+        repo.record(holdSetOf(ref("Hangs", ExerciseForm.HOLD, 7.0, 3.0), day, addedKg = 6.0, reps = 5))
         repo.record(cardioOf(ref("Running", ExerciseForm.CARDIO), day, distanceM = 5000.0, durationSec = 1500))
         repo.record(durationOf(ref("Emil hangs", ExerciseForm.DURATION), day, durationSec = 600))
         repo.record(tickOf(ref("Stretching", ExerciseForm.TICK), day))

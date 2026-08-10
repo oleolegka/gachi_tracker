@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,6 +36,7 @@ import xyz.oleolegka.gachimuchi.domain.formatClock
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.runSummaryLine
+import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.Instant
 import java.time.ZoneId
@@ -102,7 +104,12 @@ fun RunLogDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    chosen?.name ?: outcome.programName,
+                    // side-suffixed the same way a card names itself (WorkoutLogScreen), so an
+                    // offer from the left card and one from the right read as two sessions and
+                    // not as the same run asked about twice
+                    (chosen?.name ?: outcome.programName).let { name ->
+                        outcome.sideOf?.let { "$name - ${it.label()}" } ?: name
+                    },
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Text(
@@ -133,11 +140,19 @@ fun RunLogDialog(
                     ExerciseChoice(candidates = candidates) { chosen = it }
                 } else {
                     sets.forEach { set ->
-                        SetRow(set) { reps ->
-                            sets = sets.map {
-                                if (it.setNumber == set.setNumber) it.copy(reps = reps) else it
-                            }
-                        }
+                        SetRow(
+                            set = set,
+                            onRepsChange = { reps ->
+                                sets = sets.map {
+                                    if (it.setNumber == set.setNumber) it.copy(reps = reps) else it
+                                }
+                            },
+                            onIncompleteChange = { incomplete ->
+                                sets = sets.map {
+                                    if (it.setNumber == set.setNumber) it.copy(incomplete = incomplete) else it
+                                }
+                            },
+                        )
                     }
 
                     StepperField(
@@ -173,7 +188,7 @@ fun RunLogDialog(
             chosen?.let { target ->
                 TextButton(
                     enabled = live > 0,
-                    onClick = { onLog(target, sets, parseNumber(weight)?.takeIf { it > 0 }) },
+                    onClick = { onLog(target, sets, parseNumber(weight)?.takeIf { it != 0.0 }) },
                 ) { Text(if (live == 1) "Log 1 set" else "Log $live sets") }
             }
         },
@@ -196,8 +211,8 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
 
     if (candidates.isEmpty()) {
         Text(
-            "There is no hold exercise in the catalog to file this under. Create one (name, " +
-                "edge and work:rest) and this program can be logged next time - the numbers " +
+            "There is no hold exercise in the catalog to file this under. Create one (name " +
+                "and work:rest) and this program can be logged next time - the numbers " +
                 "above are what it counted.",
             style = MaterialTheme.typography.bodyMedium,
             color = colors.inkMuted,
@@ -221,9 +236,7 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
             Text(candidate.name, style = MaterialTheme.typography.bodyMedium)
             Text(
                 buildString {
-                    candidate.edge?.let { append("${formatNumber(it)} mm") }
                     candidate.protocol?.let {
-                        if (isNotEmpty()) append("   ")
                         append("${formatNumber(it.first)}:${formatNumber(it.second)}")
                     }
                 },
@@ -234,33 +247,61 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
     }
 }
 
+/**
+ * One set of the offer: the rep count, correctable the same way it always was, and — new —
+ * whether THIS set was carried through. Per row and not once for the whole offer, because a
+ * fingerboard session is six hangs and falling off on the fourth says nothing about the other
+ * five: see [xyz.oleolegka.gachimuchi.domain.holdSetsFromRun], which is what turns
+ * [onIncompleteChange] into the same [xyz.oleolegka.gachimuchi.domain.LoadedSet.incomplete] mark
+ * the rest of the app sets by hand.
+ */
 @Composable
-private fun SetRow(set: CompletedSet, onChange: (Int) -> Unit) {
+private fun SetRow(set: CompletedSet, onRepsChange: (Int) -> Unit, onIncompleteChange: (Boolean) -> Unit) {
     val colors = LocalGachiColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            "Set ${set.setNumber}",
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        RepButton("-") { onChange((set.reps - 1).coerceAtLeast(0)) }
-        Text(
-            set.reps.toString(),
-            modifier = Modifier.width(32.dp),
-            textAlign = TextAlign.Center,
-            style = MaterialTheme.typography.titleMedium,
-        )
-        RepButton("+") { onChange((set.reps + 1).coerceAtMost(MAX_REPS_PER_SET)) }
-        Text(
-            "of ${set.plannedReps}",
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkMuted,
-        )
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "Set ${set.setNumber}",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            RepButton("-") { onRepsChange((set.reps - 1).coerceAtLeast(0)) }
+            Text(
+                set.reps.toString(),
+                modifier = Modifier.width(32.dp),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            RepButton("+") { onRepsChange((set.reps + 1).coerceAtMost(MAX_REPS_PER_SET)) }
+            Text(
+                "of ${set.plannedReps}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+        }
+        RunSetIncompleteChip(set.incomplete) { onIncompleteChange(!set.incomplete) }
     }
+}
+
+/**
+ * The "not completed" toggle for one row of the offer — the same fact
+ * [xyz.oleolegka.gachimuchi.ui.screens.IncompleteChip] sets when logging by hand and
+ * [xyz.oleolegka.gachimuchi.ui.components.EntryEditor]'s own toggle corrects afterwards, styled
+ * to match both. A third copy of the same small [FilterChip] rather than a shared one, on the
+ * same footing those two already stand on — see either of their own KDoc for the same choice
+ * made before this one existed.
+ */
+@Composable
+private fun RunSetIncompleteChip(selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text("Not completed") },
+        modifier = Modifier.heightIn(min = 40.dp),
+    )
 }
 
 @Composable

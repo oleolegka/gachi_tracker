@@ -1,6 +1,7 @@
 package xyz.oleolegka.gachimuchi.data
 
 import android.content.Context
+import androidx.room.withTransaction
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
@@ -10,31 +11,32 @@ import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
+import xyz.oleolegka.gachimuchi.domain.ExerciseMerge
 import xyz.oleolegka.gachimuchi.domain.ImportReport
 import xyz.oleolegka.gachimuchi.domain.JournalFile
 import xyz.oleolegka.gachimuchi.domain.PortableEvent
-import xyz.oleolegka.gachimuchi.domain.PortableExercise
 import xyz.oleolegka.gachimuchi.domain.PortablePlannedExercise
 import xyz.oleolegka.gachimuchi.domain.PortableProgramRow
 import xyz.oleolegka.gachimuchi.domain.PortableSettings
 import xyz.oleolegka.gachimuchi.domain.PortableSlot
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
-import xyz.oleolegka.gachimuchi.domain.elementToPayload
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.mergeExercises
-import xyz.oleolegka.gachimuchi.domain.payloadToElement
 import xyz.oleolegka.gachimuchi.domain.portableSettings
 import xyz.oleolegka.gachimuchi.domain.toTimerSettings
 import xyz.oleolegka.gachimuchi.domain.uniqueProgramName
 import xyz.oleolegka.gachimuchi.domain.writeJournalFile
 import java.time.LocalDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /**
  * The database half of the backup: the journal out of Room into a file, and a file back into
  * Room without writing anything twice.
  *
- * The format itself, and every judgement about what a valid file is, lives in
+ * The format itself — one CSV table, everything the app holds as either a journal row or a
+ * whole reference row — and every judgement about what a valid file is, lives in
  * domain/JournalTransfer.kt. What is here is the part that needs Room: which tables are read,
  * in which order rows are written back, and how the one link the schema still keeps as a row
  * number (`slot_exercises.exercise_id`) is translated into a uid on the way out and back on
@@ -64,23 +66,22 @@ class JournalBackup(
 
     // --- out ---------------------------------------------------------------------------
 
-    /** The whole journal as file text. */
+    /**
+     * The whole journal as file text: the journal itself, EVERY row of it (live and dead —
+     * see domain/JournalTransfer.kt's `current_version` column for how a reader tells them
+     * apart), plus the catalog, the plan, the programs and the settings, each carried whole.
+     */
     suspend fun export(exportedAt: String = "", deviceId: String = ""): String {
         val exercises = db.exercises().all()
         val uidOfExercise = exercises.associate { it.id to it.uid }
+        // the reverse of programsOut's own exercise lookup: an exercise names its protocol
+        // program by uid the same way a program names its exercise by uid
+        val uidOfProgram = db.programs().allPrograms().associate { it.id to it.uid }
 
         return writeJournalFile(
-            events = db.events().all().map { row ->
-                PortableEvent(
-                    uid = row.uid,
-                    ts = row.ts,
-                    type = row.type,
-                    payload = payloadToElement(row.payload),
-                    workoutUid = row.workoutUid,
-                    authorId = row.authorId,
-                )
-            },
-            exercises = exercises.map { it.toPortable() },
+            events = db.events().all().map { it.toJournalEvent() },
+            catalog = exercises.map { it.toCatalogRow() },
+            exercises = exercises.map { it.toPortable(it.protocolProgramId?.let(uidOfProgram::get)) },
             slots = slotsOut(uidOfExercise),
             programs = programsOut(uidOfExercise),
             settings = settings?.read(),
@@ -155,48 +156,89 @@ class JournalBackup(
      * translated through it, then the journal (which refers to the catalog only inside its
      * own payloads), then the plan and the programs, which need catalog row numbers that do
      * not exist until the catalog has been written.
+     *
+     * ── Every table this touches, in ONE transaction ────────────────────────────
+     * A big file is hundreds or thousands of rows across four tables, and the order above is
+     * exactly why a restore interrupted midway used to leave this class's own worry made real:
+     * "a catalog with rows the journal already refers to, or a journal with events naming a
+     * catalog that is not there yet" — a database in a shape the app itself never produces on
+     * its own. `withTransaction` makes the whole restore atomic — every table written, or none
+     * of them — the same guarantee [export] never had to give because reading never leaves a
+     * partial state behind. [BackupSettings.write] stays OUTSIDE it on purpose: it is
+     * SharedPreferences, not a database row, and has never been this transaction's to protect.
      */
     suspend fun restore(file: JournalFile): ImportReport {
         val notes = ArrayList<String>()
 
-        val merge = mergeExercises(file.exercises, db.exercises().all().map { it.toPortable() })
-        for (row in merge.toInsert) {
-            db.exercises().insert(
-                ExerciseEntity(
-                    name = row.name,
-                    form = row.form,
-                    createdAt = row.createdAt.ifBlank { now() },
-                    edgeMm = row.edgeMm,
-                    protocolWorkSec = row.protocolWorkSec,
-                    protocolRestSec = row.protocolRestSec,
-                    defaultRestSec = row.defaultRestSec,
-                    ledByProtocol = row.ledByProtocol,
-                    oneSided = row.oneSided,
-                    bodyweightShare = row.bodyweightShare,
-                    uid = row.uid,
-                    hidden = row.hidden,
-                    // identity_key is left to the entity's own default, which computes it from
-                    // the four values above: a key carried in the file could disagree with them
-                )
+        lateinit var merge: ExerciseMerge
+        lateinit var events: Counted
+        lateinit var slots: Counted
+        lateinit var programs: Counted
+
+        db.withTransaction {
+            // resolved for the STORED side of the identity comparison too, or every stored
+            // exercise would compare as "no protocol" and a genuine duplicate could slip past
+            // mergeExercises — see [export] for the same lookup built the other way round
+            val uidOfProgram = db.programs().allPrograms().associate { it.id to it.uid }
+            merge = mergeExercises(
+                file.exercises,
+                db.exercises().all().map { it.toPortable(it.protocolProgramId?.let(uidOfProgram::get)) },
             )
+            for (row in merge.toInsert) {
+                db.exercises().insert(
+                    ExerciseEntity(
+                        name = row.name,
+                        form = row.form,
+                        createdAt = row.createdAt.ifBlank { now() },
+                        // the local row id of the program this uid names cannot be known yet —
+                        // the program itself may still be waiting in file.programs, below — so
+                        // this is filled in afterwards by [setProtocolProgramId]; the identity
+                        // key needs no such wait, because it is keyed on the uid STRING the file
+                        // already carries, not on a local id (see
+                        // [xyz.oleolegka.gachimuchi.domain.PortableExercise])
+                        defaultRestSec = row.defaultRestSec,
+                        ledByProtocol = row.ledByProtocol,
+                        oneSided = row.oneSided,
+                        bodyweightShare = row.bodyweightShare,
+                        uid = row.uid,
+                        hidden = row.hidden,
+                        identityKey = exerciseIdentityKey(row.name, row.form, row.protocolProgramUid),
+                    )
+                )
+            }
+
+            // the catalog, now that it is complete, as the two number-carrying tables need it
+            val idOfUid = db.exercises().all().associate { it.uid to it.id }
+
+            events = restoreEvents(file.events)
+            slots = restoreSlots(file.slots, merge::resolve, idOfUid)
+            programs = restorePrograms(file.programs, merge::resolve, idOfUid, notes)
+
+            /*
+             * The protocol link, backfilled now that the programs section has been written:
+             * every program the file names by uid either just landed above or was already here
+             * under that uid. A row whose program is in neither case (a hand-edited or
+             * inconsistent file) keeps `protocol_program_id = null` — a dangling reference reads
+             * as "no protocol", exactly as it does everywhere else this column is read.
+             */
+            val programIdOfUid = db.programs().allPrograms().associate { it.uid to it.id }
+            for (row in merge.toInsert) {
+                val programUid = row.protocolProgramUid ?: continue
+                val exerciseId = idOfUid[row.uid] ?: continue
+                programIdOfUid[programUid]?.let { db.exercises().setProtocolProgramId(exerciseId, it) }
+            }
         }
+
         if (merge.aliases.isNotEmpty()) {
             notes += "${merge.aliases.size} exercise(s) in the file were the same exercise this " +
                 "phone already had under a different key; the key already here was kept. Sets " +
                 "imported for them stay in the journal but will not appear in that exercise's " +
                 "own records."
         }
-
-        // the catalog, now that it is complete, as the two number-carrying tables need it
-        val idOfUid = db.exercises().all().associate { it.uid to it.id }
-
-        val events = restoreEvents(file.events)
-        val slots = restoreSlots(file.slots, merge::resolve, idOfUid)
         if (slots.skipped > 0) {
             notes += "${slots.skipped} planned line(s) named an exercise the file does not " +
                 "carry, and were left out of the plan."
         }
-        val programs = restorePrograms(file.programs, merge::resolve, idOfUid, notes)
 
         val carried = file.settings
         val settingsApplied = carried != null && settings != null
@@ -239,18 +281,34 @@ class JournalBackup(
         if (fresh.isNotEmpty()) {
             db.events().insertAll(
                 fresh.map { event ->
-                    val payload = elementToPayload(event.payload)
+                    val payload = event.payload
                     /*
-                     * The file carries a local time and no zone — it is the exchange format and
-                     * it predates the columns — so a restored row is resolved in THE ZONE OF THE
-                     * DEVICE DOING THE RESTORE, exactly as the 15 -> 16 migration resolves the
-                     * rows already on the phone, and with the same caveat: a journal exported
-                     * abroad and restored at home gets the offset of home. That is a loss the
-                     * file cannot avoid until the format itself carries the offset; leaving the
-                     * columns empty instead would make every restored row unsortable against
-                     * every row this phone wrote.
+                     * The file now carries the offset the row was written at ([PortableEvent
+                     * .tzOffsetMin], schema version 2 of the file format), so a restored row is
+                     * resolved against THAT offset, wherever the restore itself happens to run —
+                     * a journal exported abroad and restored at home keeps the offset it was
+                     * exported with. [WriteTime.of] is handed a [ZonedDateTime] built from the
+                     * file's local wall clock at a FIXED offset (not a named zone, which could
+                     * mean a different UTC delta on a different day): that reproduces the file's
+                     * own offset exactly rather than re-deriving it from a device.
+                     *
+                     * A file with no offset (v1, written before this column existed, or a row
+                     * whose own `ts` never resolved to one) has nothing else to go on, so this
+                     * falls back to THE ZONE OF THE DEVICE DOING THE RESTORE, exactly as the 15
+                     * -> 16 migration resolves the rows already on the phone, and with the same
+                     * caveat: a v1 journal exported abroad and restored at home still gets the
+                     * offset of home. That loss is unavoidable for a file the exporting device
+                     * never recorded an offset into in the first place; leaving the columns empty
+                     * instead would make every restored row unsortable against every row this
+                     * phone wrote.
                      */
-                    val written = WriteTime.ofLocal(event.ts)
+                    val written = event.tzOffsetMin
+                        ?.let { offsetMin ->
+                            runCatching {
+                                WriteTime.of(LocalDateTime.parse(event.ts).atZone(ZoneOffset.ofTotalSeconds(offsetMin * 60)))
+                            }.getOrNull()
+                        }
+                        ?: WriteTime.ofLocal(event.ts)
                     EventEntity(
                         ts = event.ts,
                         authorId = event.authorId,
@@ -262,6 +320,11 @@ class JournalBackup(
                         opDate = opDateOfPayload(payload),
                         tsUtc = written?.utc,
                         tzOffsetMin = written?.offsetMin,
+                        // carried verbatim from the file rather than re-derived: WHEN THE
+                        // TRAINING HAPPENED, as opposed to ts (when the row was written), is an
+                        // independent fact this format used to lose silently on every restore —
+                        // see PortableEvent's own KDoc
+                        occurredTs = event.occurredTs,
                     )
                 }
             )
@@ -382,20 +445,8 @@ class JournalBackup(
     }
 }
 
-private fun ExerciseEntity.toPortable(): PortableExercise = PortableExercise(
-    uid = uid,
-    name = name,
-    form = form,
-    createdAt = createdAt,
-    edgeMm = edgeMm,
-    protocolWorkSec = protocolWorkSec,
-    protocolRestSec = protocolRestSec,
-    defaultRestSec = defaultRestSec,
-    ledByProtocol = ledByProtocol,
-    oneSided = oneSided,
-    bodyweightShare = bodyweightShare,
-    hidden = hidden,
-)
+// ExerciseEntity.toPortable() has moved to data/CatalogMapping.kt, alongside the rest of the
+// catalog row's views.
 
 /**
  * Where the preferences in a backup come from and go to.

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,19 +37,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.domain.ActivityRef
-import xyz.oleolegka.gachimuchi.domain.DayState
+import xyz.oleolegka.gachimuchi.domain.DayDots
 import xyz.oleolegka.gachimuchi.domain.DayStatus
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
-import xyz.oleolegka.gachimuchi.domain.activitiesByDay
+import xyz.oleolegka.gachimuchi.domain.SlotState
 import xyz.oleolegka.gachimuchi.domain.activityStamps
+import xyz.oleolegka.gachimuchi.domain.calendarDots
 import xyz.oleolegka.gachimuchi.domain.dayCards
+import xyz.oleolegka.gachimuchi.domain.journalInstanceCounts
 import xyz.oleolegka.gachimuchi.domain.planVsFact
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.DayActions
@@ -68,7 +71,8 @@ import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 
 /**
- * Calendar (§12-B): a compact month navigator over a scrolling agenda of days.
+ * Calendar (§12-B, dots rework 2026-08-10): a compact month navigator over a scrolling
+ * agenda of days.
  *
  * ── The grid is a navigator, not the workspace ──────────────────────────────────
  * The month is small and dense on purpose: it exists to jump to a day, and the day's
@@ -79,11 +83,30 @@ import java.time.temporal.ChronoUnit
  * rather than blanked. A calendar that hides them makes the first and last week of every
  * month look like something is missing.
  *
- * The dots under a date are ACTIVITIES, coloured by form and capped at three — a row of
- * eight dots stops being countable, and the count is the only thing the dots are for. The
- * cell's own tint is the day's PLAN verdict, which is a summary of its slots: done, missed
- * or still outstanding. The two say different things — dots are what happened, the tint is
- * what it means against the plan — and the legend under the grid names both.
+ * ── The cell is a clock, not a verdict ────────────────────────────────────────────
+ * It used to carry the day's own [xyz.oleolegka.gachimuchi.domain.DayState] as a coloured
+ * wash — and had no honest answer for "two sessions today, one done and one missed": a day
+ * is not one verdict, its SLOTS are (reported from the phone, 2026-08-10). The cell now
+ * paints nothing but WHEN the day is — one hair lighter for today and what is still to come,
+ * one hair darker for what has already happened — and every verdict moved onto the dots.
+ *
+ * ── A dot is one journal instance, coloured by what it says ─────────────────────
+ * A dot is not "an activity" any more: a whole WORKOUT is one dot however many exercises it
+ * holds, and a run of entries logged with no workout around it is one dot too — the same
+ * units domain/DayCards.kt turns into cards (domain/Analytics.kt's `journalInstanceCounts`).
+ * Every one of those is GREEN, whether or not it happened to close a plan — training that
+ * was never on the plan still earns its dot. A slot the day's window has already closed with
+ * nothing recorded against it draws a RED dot, and a slot still open draws a BLUE one; a slot
+ * that IS closed draws no dot of its own, because the green instance that closed it already
+ * did (domain/Schedule.kt's `calendarDots` has the full rule). Capped at six, and a seventh
+ * does not disappear the way the old three-dot cap silently did — it is counted in a visible
+ * "+N" instead.
+ *
+ * Every dot carries a thin RING. The bug this closes, verbatim from the phone: the selected
+ * day's fill and a planned slot's colour are numerically the SAME blue (`accent`), and
+ * without a ring a planned dot on the day you have tapped disappears into the cell under it.
+ * The ring is not a patch for that one collision — it is what makes every dot legible
+ * against every background this screen can put behind it, selection included.
  *
  * ── Every slot carries its own verdict ──────────────────────────────────────────
  * The rule is written out in domain/Schedule.kt and is decided by TIME: the morning gym
@@ -127,7 +150,6 @@ fun CalendarScreen(
     onCreateExercise: ((
         name: String,
         form: ExerciseForm,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         then: (Long) -> Unit,
@@ -166,10 +188,12 @@ fun CalendarScreen(
         val stamps = activityStamps(state.events, gridStart.toString(), gridEnd.toString())
         planVsFact(state.slots, stamps, gridStart, gridEnd, now)
     }
-    val activities = remember(state.events, gridStart, gridEnd) {
-        activitiesByDay(state.events, gridStart.toString(), gridEnd.toString())
+    // one green dot per journal instance, plus a red or blue one for every slot [days] above
+    // did not already mark DONE — see calendarDots' own KDoc for why a DONE slot draws none
+    val dotsByDay: Map<String, DayDots> = remember(state.events, gridStart, gridEnd, days) {
+        val instances = journalInstanceCounts(state.events, gridStart.toString(), gridEnd.toString())
+        days.associate { it.day to calendarDots(it, instances[it.day] ?: 0) }
     }
-    val formOf = remember(state.exercises) { { id: Long? -> state.formOf(id) } }
 
     val selectedDate = remember(selected) { runCatching { LocalDate.parse(selected) }.getOrDefault(today) }
     val selectedDay = remember(state.events, state.slots, selectedDate, today, now) {
@@ -196,8 +220,7 @@ fun CalendarScreen(
             MonthNavigator(
                 month = month,
                 days = days,
-                activities = activities,
-                formOf = formOf,
+                dotsByDay = dotsByDay,
                 today = today,
                 selected = selected,
                 onSelect = { selected = it },
@@ -209,7 +232,12 @@ fun CalendarScreen(
         item {
             Column(Modifier.fillMaxWidth()) {
                 SectionHeader("Selected day", fmtWeekdayDay(selectedDate))
-                DayCardList(day = selectedDay, date = selectedDate, actions = cardActions)
+                DayCardList(
+                    day = selectedDay,
+                    date = selectedDate,
+                    actions = cardActions,
+                    pastWorkoutNames = state.pastWorkoutNames,
+                )
                 PlanButton(
                     onClick = { editing = SlotEditorTarget(null, selectedDate) },
                     modifier = Modifier.padding(top = 9.dp),
@@ -284,8 +312,7 @@ private fun PlanButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
 private fun MonthNavigator(
     month: LocalDate,
     days: List<DayStatus>,
-    activities: Map<String, List<ActivityRef>>,
-    formOf: (Long?) -> ExerciseForm?,
+    dotsByDay: Map<String, DayDots>,
     today: LocalDate,
     selected: String,
     onSelect: (String) -> Unit,
@@ -343,12 +370,13 @@ private fun MonthNavigator(
                         if (status == null) {
                             Box(Modifier.weight(1f))
                         } else {
+                            val date = LocalDate.parse(status.day)
                             DayCell(
                                 status = status,
-                                dots = activities[status.day].orEmpty(),
-                                formOf = formOf,
-                                inMonth = LocalDate.parse(status.day).month == month.month,
+                                dots = dotsByDay[status.day] ?: DayDots(emptyList(), 0),
+                                inMonth = date.month == month.month,
                                 isToday = status.day == today.toString(),
+                                isPast = date.isBefore(today),
                                 isSelected = status.day == selected,
                                 onClick = { onSelect(status.day) },
                                 modifier = Modifier.weight(1f),
@@ -366,8 +394,13 @@ private fun MonthNavigator(
                 LegendItem("done", colors.good)
                 LegendItem("missed", colors.critical)
                 LegendItem("planned", colors.accent)
-                LegendItem("dots = activities", colors.forForm(ExerciseForm.STRENGTH))
             }
+            Text(
+                "A dot is a whole session or entry. Up to six a day; +N is the rest.",
+                fontSize = 10.sp,
+                color = colors.inkMuted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }
@@ -382,44 +415,42 @@ private fun LegendItem(label: String, color: Color) {
 }
 
 /**
- * One day: the number, a plan verdict, and up to three dots for the activities logged on it.
+ * One day: the number, a background that says only WHEN the day is, and its dots.
  *
- * The verdict is a WASH of the state's colour rather than the colour itself — the number
- * has to stay readable, and a saturated square would shout louder than the dots, which are
- * the finer information. Only the three verdicts the legend names are painted: an
- * unplanned day is a plain cell with dots on it, which is exactly what "activity, no plan"
- * looks like, and an empty day is a plain cell with nothing.
+ * ── The background carries no verdict any more ────────────────────────────────
+ * Just the two close shades the file header describes — [isPast] picks between them, and
+ * neither is [status] at all, which is the whole point of the rework: nothing here reads
+ * [DayStatus.state] any more, because a single tint had no way to say "one done, one missed".
+ *
+ * ── Why a composited sliver of black, not a second theme role ────────────────────
+ * `surface` and `recessed` (ui/theme/Theme.kt) are close in light mode but SWAP which one is
+ * darker in dark mode (see the note on `SurfaceRecessedDark`) — picking between them here
+ * would make the past read lighter than the future in one theme and darker in the other.
+ * Compositing a few percent of black onto the surface darkens it a little in EITHER theme,
+ * which is the one thing "future lighter, past darker" needs to hold both ways.
  */
 @Composable
 private fun DayCell(
     status: DayStatus,
-    dots: List<ActivityRef>,
-    formOf: (Long?) -> ExerciseForm?,
+    dots: DayDots,
     inMonth: Boolean,
     isToday: Boolean,
+    isPast: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalGachiColors.current
     val date = LocalDate.parse(status.day)
-    val wash = when (status.state) {
-        DayState.DONE, DayState.MISS, DayState.PLAN -> colors.forDayState(status.state).copy(alpha = 0.16f)
-        DayState.EXTRA, DayState.EMPTY -> null
-    }
+    val surface = MaterialTheme.colorScheme.surface
+    val cellBackground = if (isPast) PAST_TINT.compositeOver(surface) else surface
     Box(
         modifier
             .aspectRatio(1f / 1.06f)
             .heightIn(min = 44.dp)
             .clip(RoundedCornerShape(10.dp))
-            .then(
-                when {
-                    // the selection is the strongest signal on the grid and always wins
-                    isSelected -> Modifier.background(colors.accent)
-                    wash != null -> Modifier.background(wash)
-                    else -> Modifier
-                }
-            )
+            // the selection is the strongest signal on the grid and always wins
+            .background(if (isSelected) colors.accent else cellBackground)
             .then(
                 if (isToday && !isSelected) {
                     Modifier.border(1.5.dp, colors.accent, RoundedCornerShape(10.dp))
@@ -443,21 +474,68 @@ private fun DayCell(
                     else -> colors.inkMuted.copy(alpha = 0.5f)
                 },
             )
-            Row(
-                Modifier.height(6.dp).padding(top = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                dots.take(3).forEach { activity ->
-                    val form = formOf(activity.exerciseId)
-                    Box(
-                        Modifier
-                            .size(5.dp)
-                            .clip(CircleShape)
-                            .background(form?.let { colors.forForm(it) } ?: colors.inkMuted)
-                    )
-                }
-            }
+            DotRow(status.day, dots)
         }
     }
+}
+
+/** How much black a past cell's background is nudged by — see [DayCell]'s own header. */
+private val PAST_TINT = Color.Black.copy(alpha = 0.05f)
+
+/**
+ * Up to [xyz.oleolegka.gachimuchi.domain.MAX_CALENDAR_DOTS] coloured dots, plus a "+N" mark
+ * when [DayDots.overflow] says more were left off.
+ *
+ * ── The ring around every dot, not only the ones that collide ────────────────────
+ * The selected cell fills solid `accent`, and a PLANNED dot is also `accent` — same colour,
+ * numerically. A ring drawn on every dot regardless still reads as a ring on a background
+ * that already contrasts fine, so there is nothing to lose by not special-casing the
+ * collision, and everything to lose by missing a background this screen adds later that
+ * collides with green or red instead.
+ *
+ * A fixed-height row, always: with zero dots it is still as tall as it is with six, so the
+ * day number sits at the same height in every cell of the grid.
+ *
+ * Each dot carries a [day]-qualified content description, which is what
+ * ui/screens/CalendarScreenTest.kt reads to tell one day's dots from another's — there is
+ * nothing visible on a dot to query by otherwise, and a colour is not text a test can assert.
+ */
+@Composable
+private fun DotRow(day: String, dots: DayDots) {
+    val colors = LocalGachiColors.current
+    val ring = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    Row(
+        Modifier.heightIn(min = 9.dp).padding(top = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        dots.states.forEach { state ->
+            Box(
+                Modifier
+                    .size(4.5.dp)
+                    .clip(CircleShape)
+                    .background(colors.forSlotState(state))
+                    .border(0.6.dp, ring, CircleShape)
+                    .semantics { contentDescription = "$day dot: ${dotDescription(state)}" }
+            )
+        }
+        if (dots.overflow > 0) {
+            Text(
+                "+${dots.overflow}",
+                fontSize = 7.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.inkMuted,
+                modifier = Modifier
+                    .padding(start = 1.dp)
+                    .semantics { contentDescription = "$day: ${dots.overflow} more" },
+            )
+        }
+    }
+}
+
+/** The word the legend uses for [state] — the same three [MonthNavigator] names underneath. */
+private fun dotDescription(state: SlotState): String = when (state) {
+    SlotState.DONE -> "done"
+    SlotState.MISS -> "missed"
+    SlotState.PLAN -> "planned"
 }

@@ -60,6 +60,29 @@ class ScheduleTest {
     }
 
     @Test
+    fun `a weekly slot set up today does not turn an earlier Monday into a planned day`() {
+        // the reported bug, verbatim: "every Monday" back-projected into the calendar's
+        // past the moment it was created. setUpOn stands for "today" -- the day the plan
+        // was actually made, two Mondays after the fixture's own -- and occursOn already
+        // refuses anything before the anchor (see the test above); this states that same
+        // guarantee from the angle the bug report used
+        val setUpOn = monday.plusDays(14)
+        val slots = listOf(slot(1, "Gym", REPEAT_WEEKLY, setUpOn))
+
+        val days = planVsFact(slots, emptyList(), monday, setUpOn.plusDays(7), at(setUpOn, "09:00"))
+            .associateBy { it.day }
+
+        // the two Mondays before the plan existed stayed empty: no slot, no verdict at all
+        assertEquals(DayState.EMPTY, days.getValue(monday.toString()).state)
+        assertTrue(days.getValue(monday.toString()).slots.isEmpty())
+        assertEquals(DayState.EMPTY, days.getValue(monday.plusDays(7).toString()).state)
+        assertTrue(days.getValue(monday.plusDays(7).toString()).slots.isEmpty())
+        // from the day it was set up on, the plan is there
+        assertEquals(DayState.PLAN, days.getValue(setUpOn.toString()).state)
+        assertEquals(DayState.PLAN, days.getValue(setUpOn.plusDays(7).toString()).state)
+    }
+
+    @Test
     fun `a daily slot covers every day from its anchor on`() {
         val slots = listOf(slot(1, "Stretching", REPEAT_DAILY, monday))
         assertEquals(5, slotsForRange(slots, monday.minusDays(2), monday.plusDays(4)).size)
@@ -413,6 +436,66 @@ class ScheduleTest {
      * instead of writing today's date onto it. What a slot in the past offers is decided in
      * domain/DayCards.kt and tested in DayCardsTest.
      */
+
+    // --- the calendar's dots (2026-08-10 rework) ---
+
+    @Test
+    fun `two sessions with different outcomes give two dots of different colour`() {
+        // the case the old per-day wash could not answer: one slot done, one missed
+        val slots = listOf(
+            slot(1, "Gym", REPEAT_NONE, monday, "08:00"),
+            slot(2, "Hangboard", REPEAT_NONE, monday, "20:00"),
+        )
+        val day = planVsFact(slots, listOf(act(7, monday, "20:05")), monday, monday, at(monday, "21:00")).single()
+        assertEquals(listOf(SlotState.MISS, SlotState.DONE), day.slots.map { it.state }) // sanity
+
+        val dots = calendarDots(day, instanceCount = 1)
+
+        // the DONE slot draws no dot of its own: the instance that closed it already did
+        assertEquals(listOf(SlotState.DONE, SlotState.MISS), dots.states)
+        assertEquals(0, dots.overflow)
+    }
+
+    @Test
+    fun `every instance is a green dot, whether or not it closed a plan`() {
+        val day = planVsFact(emptyList(), emptyList(), monday, monday, at(monday, "12:00")).single()
+
+        val dots = calendarDots(day, instanceCount = 3)
+
+        assertEquals(listOf(SlotState.DONE, SlotState.DONE, SlotState.DONE), dots.states)
+        assertEquals(0, dots.overflow)
+    }
+
+    @Test
+    fun `a seventh dot does not vanish silently -- it is counted instead`() {
+        val day = planVsFact(emptyList(), emptyList(), monday, monday, at(monday, "12:00")).single()
+
+        val dots = calendarDots(day, instanceCount = 7)
+
+        assertEquals(6, dots.states.size)
+        assertEquals(1, dots.overflow)
+    }
+
+    @Test
+    fun `outstanding slots count towards the same cap as instances`() {
+        val slots = (1..3).map { slot(it.toLong(), "Slot $it", REPEAT_NONE, monday, "0${it + 6}:00") }
+        // three PLAN slots, none of them due yet, plus five green instances: eight candidates
+        val day = planVsFact(slots, emptyList(), monday, monday, at(monday, "00:01")).single()
+
+        val dots = calendarDots(day, instanceCount = 5, maxDots = 6)
+
+        assertEquals(6, dots.states.size)
+        assertEquals(2, dots.overflow)
+    }
+
+    @Test
+    fun `a day with nothing planned and nothing done has no dots at all`() {
+        val day = planVsFact(emptyList(), emptyList(), monday, monday, at(monday, "12:00")).single()
+
+        val dots = calendarDots(day, instanceCount = 0)
+
+        assertTrue(dots.isEmpty)
+    }
 
     // --- journal events turned into calendar facts ---
 

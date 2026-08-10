@@ -81,6 +81,15 @@ enum class RunOrigin {
  * see at a glance which set was cut short. [restAfterSec] is the pause the program actually
  * put between this set and the next one — known exactly, unlike the pause the session feed
  * has to derive from the gap between two writes, which is why it is worth recording.
+ *
+ * [incomplete] is the same mark [LoadedSet.incomplete] is everywhere else — "the reps happened
+ * but the target was not carried through" — and it lives here rather than being asked for
+ * separately once the sets are written, because the run knows nothing about which effort fell
+ * short; only the person who was on the bar does, and
+ * [xyz.oleolegka.gachimuchi.ui.components.RunLogDialog] is where they say so, one row at a
+ * time, the same dialog where they already correct the rep count. OFF for every set
+ * the timer produces: whether an effort was carried through is not something the timer counted
+ * and not something worth guessing at.
  */
 @Serializable
 data class CompletedSet(
@@ -89,6 +98,7 @@ data class CompletedSet(
     @SerialName("planned_reps") val plannedReps: Int,
     @SerialName("work_sec") val workSec: Int,
     @SerialName("rest_after_sec") val restAfterSec: Int?,
+    @SerialName("incomplete") val incomplete: Boolean = false,
 )
 
 /**
@@ -178,6 +188,13 @@ data class RunOutcome(
     @SerialName("ended_at_wall_ms") val endedAtWallMs: Long = 0,
     /** ISO date the run ended on — the date its sets are written under. */
     @SerialName("op_date") val opDate: String = "",
+    /**
+     * Which hand the run trained, carried over from [RunSnapshot.side] so the offer can still
+     * answer the question after the process that started the run is long gone — an outcome is
+     * PERSISTED and may be confirmed the morning after (see the type doc above). Null for an
+     * exercise with only one card and for a run with no card of its own (the timer tab).
+     */
+    @SerialName("side") val side: String? = null,
 ) {
     /**
      * Whether this run is worth interrupting the user about. A run that completed no effort
@@ -190,6 +207,9 @@ data class RunOutcome(
      */
     val offersLogging: Boolean
         get() = sets.isNotEmpty()
+
+    /** [side] read as the domain compares it — see [HoldSet.sideOf], the same idea for a set. */
+    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
 
     /** Whether the offer is about something that just happened, or about a run found later. */
     fun isFresh(nowWallMs: Long): Boolean =
@@ -257,6 +277,7 @@ fun runOutcome(
         sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
+        side = snapshot.side,
     )
 }
 
@@ -293,6 +314,7 @@ fun salvagedOutcome(snapshot: RunSnapshot, zone: ZoneId = ZoneId.systemDefault()
         sets = completedSets(snapshot.steps, endedAtIndex = snapshot.state.stepIndex, finished = false),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
+        side = snapshot.side,
     )
 }
 
@@ -312,12 +334,28 @@ private fun isoDateOf(wallMs: Long, zone: ZoneId): String =
  * Sets edited down to zero reps are dropped: that is how the offer says "this one did not
  * happen". The pause is written on every set but the last, because there is no pause after
  * the last one, and an empty [ExerciseRef] form other than a hold yields nothing at all.
+ *
+ * [CompletedSet.workSec] is written as [HoldSet.holdSec] on every set, not left for the
+ * catalog's protocol snapshot to stand in for later. It is the ONE source that is exact here —
+ * the run counted this many seconds of this many hangs, not "whatever the exercise is set to
+ * today" — and unlike the entry card, this path always knows it: there is no length left for
+ * the user to type in.
+ *
+ * [side] is stamped on every set exactly as the entry card stamps it — the answer to "which
+ * card was this run started from", not asked again here. A run with no side (the ordinary
+ * two-handed case, or one started from the timer tab rather than a card) leaves it null, the
+ * same as an entry card with nothing to ask.
+ *
+ * [CompletedSet.incomplete] is carried onto its own [HoldSet] and nothing else's — a fingerboard
+ * session is six hangs and a lifter who fell off the fourth said so about the fourth, not about
+ * the other five (see [xyz.oleolegka.gachimuchi.ui.components.RunLogDialog]).
  */
 fun holdSetsFromRun(
     exercise: ExerciseRef,
     opDate: String,
     sets: List<CompletedSet>,
     addedKg: Double? = null,
+    side: HoldSide? = null,
 ): List<HoldSet> {
     if (exercise.form != ExerciseForm.HOLD) return emptyList()
     val live = sets.filter { it.reps > 0 }
@@ -327,7 +365,10 @@ fun holdSetsFromRun(
             opDate = opDate,
             addedKg = addedKg,
             reps = set.reps,
+            holdSec = set.workSec.toDouble(),
             restAfterSec = if (index < live.lastIndex) set.restAfterSec?.toDouble() else null,
+            incomplete = set.incomplete,
+            side = side,
         )
     }
 }

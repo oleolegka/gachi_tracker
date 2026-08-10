@@ -11,12 +11,15 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,29 +51,37 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.ActivityEvent
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
-import xyz.oleolegka.gachimuchi.domain.MAX_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.Workout
 import xyz.oleolegka.gachimuchi.domain.WorkoutExercise
 import xyz.oleolegka.gachimuchi.domain.activityName
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.cardKey
 import xyz.oleolegka.gachimuchi.domain.ceilSeconds
 import xyz.oleolegka.gachimuchi.domain.formatClock
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.lastTimeOf
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
-import xyz.oleolegka.gachimuchi.domain.parseCount
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
+import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.components.CardRadius
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
@@ -82,6 +93,7 @@ import xyz.oleolegka.gachimuchi.ui.components.moved
 import xyz.oleolegka.gachimuchi.ui.components.rememberReorderState
 import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
+import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
@@ -153,8 +165,12 @@ data class WorkoutLogActions(
      * exercise that is already there does not reorder it and the last rest wins (see
      * `buildWorkout`). Two callbacks would be two names for the same write, and the screen
      * would have to decide which of them a given tap was — a decision it has no reason to make.
+     *
+     * [side] names one CARD. A new exercise trained one limb at a time gets this called TWICE by
+     * this screen, once per [HoldSide] — see [RestAsk.New] — and an existing card's own "set a
+     * rest" calls it once, with that card's own side (null for an exercise that has only one).
      */
-    val addExercise: (exerciseId: Long, restSec: Int) -> Unit,
+    val addExercise: (exerciseId: Long, restSec: Int, side: HoldSide?) -> Unit,
 
     /**
      * Create a catalog exercise, and hand its id back.
@@ -166,7 +182,6 @@ data class WorkoutLogActions(
     val createExercise: (
         name: String,
         form: ExerciseForm,
-        edgeMm: Double?,
         workSec: Double?,
         restSec: Double?,
         then: (Long) -> Unit,
@@ -188,7 +203,12 @@ data class WorkoutLogActions(
      * added is still training that happened. So "remove this exercise" is a removal of the
      * whole block or it is nothing, and the confirmation says which sets are going.
      */
-    val removeExercise: (eventIds: List<Long>) -> Unit,
+    /**
+     * [exerciseId]/[side] name the card even when [eventIds] is empty — a card staged into a
+     * draft that has not been written yet has nothing to delete, and this is how a caller
+     * knows which staged card to drop, and which rest bar (if any) to take down with it.
+     */
+    val removeExercise: (eventIds: List<Long>, exerciseId: Long?, side: HoldSide?) -> Unit,
 
     /**
      * State the order the exercises of this workout are to be done in, WHOLE.
@@ -197,8 +217,11 @@ data class WorkoutLogActions(
      * `TYPE_WORKOUT_ORDER_SET`. What that buys the screen is that it never has to describe a
      * move: it hands over the arrangement it is currently showing, and the journal's answer
      * either matches it or replaces it.
+     *
+     * By CARD, not by exercise (see [OrderedCard]) — a one-sided exercise's two cards each get
+     * their own entry, so dragging the left one past the right one states a real order.
      */
-    val reorderExercises: (order: List<ExerciseLink>) -> Unit,
+    val reorderExercises: (order: List<OrderedCard>) -> Unit,
 
     /**
      * Declare the workout over.
@@ -216,8 +239,47 @@ data class WorkoutLogActions(
      * (§13.5): the plate goes on before you get under the cable, so that is when the app can
      * ask without being in the way. Null means nothing was asked — see [WorkoutLogScreen] for
      * the rule that decides.
+     *
+     * [side] names the CARD that was tapped, the same as [addExercise] does — a one-sided
+     * exercise led by its protocol still draws two cards, and this is what stops both of them
+     * leading to one run that cannot say which hand it counted.
      */
-    val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?) -> Unit,
+    val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?, side: HoldSide?) -> Unit,
+
+    /**
+     * Mark one CARD done — see `ActivityRepository.finishWorkoutExercise` (§14.2).
+     *
+     * The card keeps everything already on it, collapses, and joins the finished group above
+     * every active card.
+     *
+     * ── Where this DIFFERS from finishing the whole workout, deliberately ───────────
+     * A finished workout is a status and not a lock: its cards stay tappable, and the set
+     * remembered on the way to the car goes straight in. A finished CARD is not that. The ask
+     * was "so it gets in the way less and cannot be tapped again by accident", and on this
+     * screen a tap on the card is the only way to the entry form — so the tap goes, and with
+     * it the only route to logging into this card until "Back to active" puts it among the
+     * active ones again.
+     *
+     * The DOMAIN still refuses nothing (see TYPE_WORKOUT_EXERCISE_FINISHED): a set landing on
+     * a finished card is recorded and does not un-finish it, which is what keeps a set arriving
+     * from anywhere else — an import, a merge, a later screen — from being dropped on the
+     * floor. It is this screen, and only this screen, that stops offering.
+     */
+    val finishExercise: (exercise: ExerciseLink, side: HoldSide?) -> Unit,
+
+    /**
+     * Undo [finishExercise] for one card: deletes the "card finished" event named by the
+     * block itself — the same reversal every other entry in this app gets, and why this asks
+     * for an id rather than an exercise: the card the screen is holding already has the one
+     * event that made it finished.
+     */
+    val unfinishExercise: (eventId: Long) -> Unit,
+
+    /**
+     * Undo [finish] for the whole workout — the same reversal [unfinishExercise] is for one
+     * card, named by the id of the "workout finished" event itself.
+     */
+    val unfinishWorkout: (eventId: Long) -> Unit,
 
     /** Go back to the set already running. It has never stopped; this only shows it again. */
     val openConductor: () -> Unit,
@@ -230,7 +292,14 @@ data class WorkoutLogActions(
 @Composable
 fun WorkoutLogScreen(
     state: UiState,
-    workoutId: Long,
+    /**
+     * The workout being logged, or null while it is still a draft — see §13.1. A draft has no
+     * row in the journal yet, so this screen has nothing to fold [state.events] against; it
+     * draws [draftWorkout] instead, and every action closes over the draft rather than an id.
+     */
+    workoutId: Long?,
+    /** The draft this screen shows when [workoutId] is null — see [draftWorkout]. */
+    draftWorkout: Workout? = null,
     settings: TimerSettings,
     /** Every rest the app is counting, of which at most one belongs to each card. */
     floors: List<RestFloor>,
@@ -267,7 +336,11 @@ fun WorkoutLogScreen(
     nowMs: Long = rememberTickingNow(active = floors.isNotEmpty()),
 ) {
     val colors = LocalGachiColors.current
-    val workout = remember(state.events, workoutId) { buildWorkout(state.events, workoutId) }
+    /** No start event written yet — see [workoutId]'s own KDoc. */
+    val draftMode = workoutId == null
+    val workout = remember(state.events, workoutId, draftWorkout) {
+        workoutId?.let { buildWorkout(state.events, it) } ?: draftWorkout
+    }
 
     if (workout == null) {
         // a wipe, a reseed, a workout that was never in this journal: say so rather than
@@ -282,16 +355,37 @@ fun WorkoutLogScreen(
     val date = remember(opDate) { runCatching { LocalDate.parse(opDate) }.getOrNull() }
 
     var picking by rememberSaveable { mutableStateOf(false) }
-    /** The exercise whose rest is being asked about, or null for no question on screen. */
+    /** The exercise the rest dialog is asking about, or null for no question on screen. */
     var askingRestFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    /**
+     * Which CARD [askingRestFor] means — [HoldSide.code], or null for either "this exercise has
+     * only one card" or "fresh from the picker, both cards at once" ([askingRestIsNew] tells the
+     * two apart). Kept as three primitives rather than one small class because
+     * [rememberSaveable] needs a type it already knows how to put in a bundle.
+     */
+    var askingRestSide by rememberSaveable { mutableStateOf<String?>(null) }
+    /**
+     * Whether the rest dialog was raised from the picker — a brand new exercise, where a
+     * one-sided one owes BOTH its cards the same rest at once — rather than from a card already
+     * in the workout asking to change its own.
+     */
+    var askingRestIsNew by rememberSaveable { mutableStateOf(false) }
     /** The exercise whose quick entry form is raised, or null. */
     var entryFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    /**
+     * Which CARD [entryFor] was raised from — see [WorkoutExercise.side] — so the form knows
+     * without asking again which hand the card it was tapped from already answered for.
+     */
+    var entrySide by rememberSaveable { mutableStateOf<String?>(null) }
     /** The exercise whose protocol-led set is waiting on the weight question, or null. */
     var weighingFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** Which CARD [weighingFor] was raised from — the same idea as [entrySide], for the other tap. */
+    var weighingSide by rememberSaveable { mutableStateOf<String?>(null) }
     /**
-     * The exercise whose removal is being confirmed, by [ExerciseLink.key] rather than by
+     * The card whose removal is being confirmed, by [WorkoutExercise.cardKey] rather than by
      * catalog id: a block can be there for an exercise this phone has no catalog row for, and
-     * that block is exactly the one somebody would want out of the workout.
+     * that block is exactly the one somebody would want out of the workout — and a one-sided
+     * exercise has two blocks that must be told apart.
      */
     var removingKey by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -314,11 +408,11 @@ fun WorkoutLogScreen(
     var preview by remember { mutableStateOf<List<String>?>(null) }
     val live = workout.exercises
     val shown = remember(live, preview) {
-        preview?.let { keys -> keys.mapNotNull { key -> live.firstOrNull { it.exercise.key == key } } }
+        preview?.let { keys -> keys.mapNotNull { key -> live.firstOrNull { it.cardKey == key } } }
             ?: live
     }
     LaunchedEffect(live, preview) {
-        val liveKeys = live.map { it.exercise.key }
+        val liveKeys = live.map { it.cardKey }
         val held = preview ?: return@LaunchedEffect
         // the journal has caught up, or the workout has changed under the preview (an exercise
         // added or removed) and a stale arrangement would hide it
@@ -333,12 +427,27 @@ fun WorkoutLogScreen(
      * otherwise the second swap of a drag is computed against the arrangement from before the
      * first, and the card lands somewhere nobody dragged it.
      */
-    val liveKeys = { live.map { it.exercise.key } }
+    val liveKeys = { live.map { it.cardKey } }
     val shownKeys = { preview ?: liveKeys() }
+    /*
+     * THE TWO GROUPS A CARD CAN BE DRAGGED WITHIN, and the reason a card cannot leave its own.
+     *
+     * Finished cards are drawn above the active ones and ordered by when they were finished
+     * (domain/Workout.kt, groupedByCardStatus). A drag that carried a card across the line
+     * would write an order this screen would then throw away on the next fold - the gesture
+     * would appear to work, land nowhere, and leave the person who made it to guess why. The
+     * grouping is what stops the gesture at the boundary instead.
+     *
+     * Read off the LIVE cards rather than the preview: what group a card belongs to is a fact
+     * about the workout, not about a drag in progress, and mid-drag the preview is exactly the
+     * thing being second-guessed.
+     */
+    val groupOfCard = { key: String -> live.firstOrNull { it.cardKey == key }?.finished }
     val reorder = rememberReorderState(
         listState = listState,
         keys = shownKeys,
         onOrder = { order -> preview = order },
+        groupOf = groupOfCard,
     )
 
     /**
@@ -405,9 +514,20 @@ fun WorkoutLogScreen(
                      * working. It is simply pressed once at the end of a session, and every
                      * control the thumb can reach without aiming is reserved for the moves
                      * made twenty times an hour.
+                     *
+                     * THE SAME SLOT DOES THREE THINGS, one at a time, never more than one on
+                     * screen at once: draft, finish, and undo the finish. A draft has nothing
+                     * to finish yet — this IS the explicit "start workout" §13.1 asks for — and
+                     * a finished workout is a status and not a lock, so the way back is right
+                     * where the way there was.
                      */
-                    TextButton(onClick = actions.finish, enabled = !workout.finished) {
-                        Text(if (workout.finished) "Finished" else "Finish")
+                    when {
+                        draftMode -> TextButton(onClick = actions.finish) { Text("Start workout") }
+                        workout.finished -> TextButton(
+                            onClick = { workout.finishedEventId?.let(actions.unfinishWorkout) },
+                        ) { Text("Reopen") }
+
+                        else -> TextButton(onClick = actions.finish) { Text("Finish") }
                     }
                 },
             )
@@ -420,11 +540,22 @@ fun WorkoutLogScreen(
             }
         },
         bottomBar = {
+            /*
+             * Scaffold does NOT give the bottom bar slot any window insets of its own — it only
+             * measures whatever this composes and uses that height as the content's bottom
+             * padding (see the Material3 Scaffold source: `bottom = bottomBarHeight ?: insets`
+             * only falls back to insets when there is no bottom bar at all). So the system
+             * navigation bar has to be accounted for HERE, once, or the button sits under it on
+             * three-button navigation — [navigationBarsPadding] reads the real inset (small on
+             * gesture nav, larger on three-button nav) rather than a guessed constant, which is
+             * what keeps gesture nav exactly as it already was.
+             */
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                 Button(
                     onClick = { picking = true },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .navigationBarsPadding()
                         .padding(horizontal = 15.dp, vertical = 10.dp)
                         .heightIn(min = 52.dp),
                 ) {
@@ -453,9 +584,9 @@ fun WorkoutLogScreen(
                 }
             }
 
-            items(shown.size, key = { shown[it].exercise.key }) { index ->
+            items(shown.size, key = { shown[it].cardKey }) { index ->
                 val exercise = shown[index]
-                val key = exercise.exercise.key
+                val key = exercise.cardKey
                 val id = exercise.exerciseId
                 // an exercise this phone has no catalog row for cannot have a form built
                 // for it, so it is shown and not offered — see WorkoutExercise.exerciseId
@@ -466,7 +597,7 @@ fun WorkoutLogScreen(
                     restSec = exercise.restSec,
                     sets = exercise.sets.map { it.form.summaryLine() },
                     running = running,
-                    floor = id?.let { e -> floors.firstOrNull { it.exerciseId == e } },
+                    floor = id?.let { e -> floors.firstOrNull { it.exerciseId == e && it.side == exercise.side?.code } },
                     nowMs = nowMs,
                     onTap = when {
                         running -> actions.openConductor
@@ -478,6 +609,13 @@ fun WorkoutLogScreen(
                          * `ledByProtocol` is the exercise's own answer (a maximum-weight hang
                          * carries a protocol and is still led by weight — §13.2), and the
                          * protocol has to actually be there for a run to be built out of it.
+                         *
+                         * NOW side-aware: `exercise.side` is which of the two cards this tap
+                         * landed on, and it is passed straight through to the run — the same
+                         * value the manual entry form below is handed as `entrySide` — so a
+                         * one-sided exercise's two protocol-led cards lead to two runs that
+                         * each know which hand they counted, instead of one run that knows
+                         * neither.
                          */
                         ledByProtocol(ref) && ref.protocol != null -> {
                             {
@@ -488,18 +626,32 @@ fun WorkoutLogScreen(
                                  * and no screens at all.
                                  */
                                 if (lastAddedKg(state, ref) == null) {
-                                    actions.startProtocolSet(ref, null)
+                                    actions.startProtocolSet(ref, null, exercise.side)
                                 } else {
                                     weighingFor = ref.id
+                                    weighingSide = exercise.side?.code
                                 }
                             }
                         }
 
                         else -> {
-                            { entryFor = ref.id }
+                            {
+                                entryFor = ref.id
+                                entrySide = exercise.side?.code
+                            }
                         }
                     },
-                    onRest = id?.let { e -> { askingRestFor = e } },
+                    // the same rule the auto-started rest already follows (§13.9) — a weigh-in
+                    // is not followed by another set of itself, and the button offering to
+                    // time a pause after one was the remaining trace of "brother mistook the
+                    // scales for an exercise"
+                    onRest = id?.takeIf { ref != null && startsRest(ref.form) }?.let { e ->
+                        {
+                            askingRestFor = e
+                            askingRestSide = exercise.side?.code
+                            askingRestIsNew = false
+                        }
+                    },
                     onRemove = { removingKey = key },
                     /*
                      * Nothing to drag when there is one card, and a lift with nowhere to go
@@ -526,6 +678,19 @@ fun WorkoutLogScreen(
                      */
                     onMoveUp = if (index == 0) null else ({ moveExercise(index, index - 1) }),
                     onMoveDown = if (index == shown.lastIndex) null else ({ moveExercise(index, index + 1) }),
+                    finished = exercise.finished,
+                    // a card of a draft cannot be finished — the workout it would belong to
+                    // does not exist yet, and offering the button would ask a question the
+                    // journal has no row to answer
+                    onFinish = if (draftMode || exercise.finished || ref == null) {
+                        null
+                    } else {
+                        { actions.finishExercise(ref.link, exercise.side) }
+                    },
+                    // the id of the event that said "done" IS the handle for undoing it
+                    onUnfinish = exercise.finishedEventId?.let { eventId ->
+                        { actions.unfinishExercise(eventId) }
+                    },
                 )
             }
 
@@ -564,9 +729,13 @@ fun WorkoutLogScreen(
             today = date ?: LocalDate.now(),
             startInCreate = state.exercises.isEmpty(),
             // picked or created, the next question is the same one, so both land on it
-            onPick = { id -> askingRestFor = id },
-            onCreate = { name, form, edge, work, rest ->
-                actions.createExercise(name, form, edge, work, rest) { id -> askingRestFor = id }
+            onPick = { id -> askingRestFor = id; askingRestSide = null; askingRestIsNew = true },
+            onCreate = { name, form, work, rest ->
+                actions.createExercise(name, form, work, rest) { id ->
+                    askingRestFor = id
+                    askingRestSide = null
+                    askingRestIsNew = true
+                }
             },
             onDismiss = { picking = false },
         )
@@ -580,7 +749,12 @@ fun WorkoutLogScreen(
      * replaces it, and nothing is drawn about it meanwhile.
      */
     askingRestFor?.let { id -> state.refById(id)?.let { ref ->
-        val already = workout.exercises.firstOrNull { it.exerciseId == id }
+        // fresh from the picker: nothing is "already" there yet, whatever a stale card of the
+        // same exercise from an earlier session says — see the write below for what "fresh"
+        // then does for a one-sided exercise
+        val already = if (askingRestIsNew) null else {
+            workout.exercises.firstOrNull { it.exerciseId == id && it.side?.code == askingRestSide }
+        }
         RestDialog(
             exerciseName = ref.name,
             // what was chosen for THIS workout wins; failing that, restHintSec knows the
@@ -589,7 +763,19 @@ fun WorkoutLogScreen(
                 ?: restHintSec(settings, state.events, ref),
             confirmLabel = if (already == null) "Add to workout" else "Save",
             onConfirm = { sec ->
-                actions.addExercise(id, sec)
+                /*
+                 * A one-sided exercise picked fresh gets BOTH its cards, at this same rest, in
+                 * one answer to one question — the two-card rule holds regardless of which of
+                 * the two ways an exercise enters a workout. A card already in the workout
+                 * changing its own rest touches only that card: [askingRestSide] names it, and
+                 * it is never null for a card that came from a real left/right split.
+                 */
+                if (askingRestIsNew && ref.oneSided) {
+                    actions.addExercise(id, sec, HoldSide.LEFT)
+                    actions.addExercise(id, sec, HoldSide.RIGHT)
+                } else {
+                    actions.addExercise(id, sec, askingRestSide?.let(HoldSide::fromCode))
+                }
                 askingRestFor = null
             },
             onDismiss = { askingRestFor = null },
@@ -601,10 +787,11 @@ fun WorkoutLogScreen(
             exerciseName = ref.name,
             initialKg = lastAddedKg(state, ref),
             onConfirm = { kg ->
-                actions.startProtocolSet(ref, kg)
+                actions.startProtocolSet(ref, kg, weighingSide?.let(HoldSide::fromCode))
                 weighingFor = null
+                weighingSide = null
             },
-            onDismiss = { weighingFor = null },
+            onDismiss = { weighingFor = null; weighingSide = null },
         )
     } }
 
@@ -615,7 +802,7 @@ fun WorkoutLogScreen(
      * under the question simply draws nothing.
      */
     removingKey?.let { key ->
-        workout.exercises.firstOrNull { it.exercise.key == key }?.let { exercise ->
+        workout.exercises.firstOrNull { it.cardKey == key }?.let { exercise ->
             val setCount = exercise.sets.size
             ConfirmRemoveDialog(
                 title = "Remove this exercise from the workout?",
@@ -631,7 +818,13 @@ fun WorkoutLogScreen(
                 onConfirm = {
                     removingKey = null
                     actions.removeExercise(
-                        exercise.addedEventIds + exercise.sets.map { it.id }
+                        // every row the card owns — the "added" rows, the sets, AND the "card
+                        // finished" row when there is one, or a removed finished card comes
+                        // back as an empty ghost with nothing left to clear it (§14.1)
+                        exercise.addedEventIds + exercise.sets.map { it.id } +
+                            listOfNotNull(exercise.finishedEventId),
+                        exercise.exerciseId,
+                        exercise.side,
                     )
                 },
                 onDismiss = { removingKey = null },
@@ -645,11 +838,13 @@ fun WorkoutLogScreen(
             exercise = ref,
             opDate = opDate,
             workoutId = workoutId,
+            fixedSide = entrySide?.let(HoldSide::fromCode),
             onAddSet = { form ->
                 actions.addSet(form)
                 entryFor = null
+                entrySide = null
             },
-            onDismiss = { entryFor = null },
+            onDismiss = { entryFor = null; entrySide = null },
         )
     } }
 }
@@ -680,12 +875,12 @@ fun WorkoutLogScreen(
 private fun stateOrder(
     keys: List<String>,
     live: List<WorkoutExercise>,
-    reorder: (List<ExerciseLink>) -> Unit,
+    reorder: (List<OrderedCard>) -> Unit,
 ): Boolean {
-    if (keys == live.map { it.exercise.key }) return false
-    val wanted = keys.mapNotNull { key -> live.firstOrNull { it.exercise.key == key } }
+    if (keys == live.map { it.cardKey }) return false
+    val wanted = keys.mapNotNull { key -> live.firstOrNull { it.cardKey == key } }
     if (wanted.size != live.size) return false
-    reorder(wanted.map { it.exercise })
+    reorder(wanted.map { OrderedCard(it.exercise, it.side) })
     return true
 }
 
@@ -732,21 +927,29 @@ private fun lastSetOf(workout: Workout): Long? =
  *
  * Only hold sets carry an added weight, which is also the only form that carries a protocol —
  * so this is the whole of the question for every exercise that can reach it.
+ *
+ * `internal` rather than `private`: [LogScreen] asks the same §13.5 question before its own
+ * one-tap program starts, and it has to be the SAME question — a second copy would drift the
+ * first time one of the two screens changed what counts as "nothing was hung".
  */
-private fun lastAddedKg(state: UiState, exercise: ExerciseRef): Double? =
+internal fun lastAddedKg(state: UiState, exercise: ExerciseRef): Double? =
     lastHoldSet(state.events, exercise.link)?.addedKg?.takeIf { it != 0.0 }
 
 /**
- * The exercise's name.
+ * The exercise's name — with the hand appended, for the exercise trained one limb at a time
+ * that this card is one half of. Without it the two cards a one-sided exercise gets would read
+ * as the same name twice, which is no way to tell which one just got tapped.
  *
  * The catalog first, because that is the name the user maintains. The set's own payload is
  * the fallback and it matters: the journal outlives the catalog, and a card headed
  * "Exercise 14" is one you cannot use.
  */
-private fun exerciseName(state: UiState, exercise: WorkoutExercise): String =
-    state.exerciseById(exercise.exerciseId)?.name
+private fun exerciseName(state: UiState, exercise: WorkoutExercise): String {
+    val name = state.exerciseById(exercise.exerciseId)?.name
         ?: exercise.sets.firstOrNull()?.form?.activityName()
         ?: "Exercise ${exercise.exerciseId}"
+    return exercise.side?.let { "$name - ${it.label()}" } ?: name
+}
 
 /**
  * What came due while a protocol-led set had the rests silenced.
@@ -828,9 +1031,24 @@ private fun ExerciseCard(
     /** Move this card one place, from the menu. Null at the end it is already at. */
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
+    /**
+     * This card is done for today: drawn thin, ticked, and refusing to log anything.
+     *
+     * REFUSING is the point rather than a side effect. The ask was "so it gets in the way less
+     * and cannot be tapped again by accident", and a card that still takes a tap while looking
+     * finished would be the worst of the two states. So [onTap], the rest button and the
+     * countdown all go, and what is left is the name, the tick and the way back.
+     */
+    finished: Boolean = false,
+    /** Put a finished card back among the active ones. Null on a card that is not finished. */
+    onUnfinish: (() -> Unit)? = null,
+    /** Mark this card done. Null on a card that already is. */
+    onFinish: (() -> Unit)? = null,
 ) {
     val colors = LocalGachiColors.current
     val menu = buildList {
+        onFinish?.let { add(ItemAction("Mark as done") { it() }) }
+        onUnfinish?.let { add(ItemAction("Back to active") { it() }) }
         onMoveUp?.let { add(ItemAction("Move up") { it() }) }
         onMoveDown?.let { add(ItemAction("Move down") { it() }) }
         // destructive last, and away from the top of the menu where the finger already is
@@ -839,7 +1057,8 @@ private fun ExerciseCard(
     ItemActions(
         title = name,
         actions = menu,
-        onTap = onTap,
+        // a finished card takes no taps at all: see [finished]
+        onTap = onTap.takeIf { !finished },
         drag = drag,
         modifier = Modifier
             .fillMaxWidth()
@@ -860,14 +1079,22 @@ private fun ExerciseCard(
             Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (finished) {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Done",
+                    tint = colors.good,
+                    modifier = Modifier.padding(end = 8.dp).size(18.dp),
+                )
+            }
             Text(
                 name,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (finished) colors.inkMuted else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
-            if (onRest != null) {
+            if (onRest != null && !finished) {
                 TextButton(onClick = onRest, modifier = Modifier.heightIn(min = 44.dp)) {
                     Text(
                         restSec?.takeIf { it >= MIN_STEP_SEC }
@@ -878,6 +1105,13 @@ private fun ExerciseCard(
                 }
             }
         }
+        /*
+         * EVERYTHING BELOW THE NAME IS WHAT "COLLAPSED" MEANS. A finished card keeps its name,
+         * its tick and its menu, and drops the divider, the set list, the running line and the
+         * countdown - which is the whole of the height it used to take.
+         */
+        if (finished) return@GachiCard
+
         HorizontalDivider(color = colors.grid)
 
         if (running) {
@@ -974,8 +1208,10 @@ private fun RestDialog(
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    var draft by remember(exerciseName, initialSec) { mutableStateOf(initialSec.toString()) }
-    val seconds = parseCount(draft)?.takeIf { it in MIN_STEP_SEC..MAX_STEP_SEC }
+    // seeded from a whole number of seconds (the rest this card already has, or the catalog's
+    // remembered answer) and typed as mm:ss from there — see ui/components/TimeField.kt (§13.9)
+    var draft by remember(exerciseName, initialSec) { mutableStateOf(formatDurationSec(initialSec)) }
+    val seconds = parseDurationText(draft)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -987,21 +1223,13 @@ private fun RestDialog(
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                StepperField(
-                    label = "Rest, seconds",
-                    value = draft,
-                    onValueChange = { draft = it },
-                    steps = listOf(15.0, 30.0),
-                    decimal = false,
-                )
                 /*
-                 * The chosen rest, said the way a person reads a rest, and said LOUDLY.
-                 *
-                 * The field above holds bare seconds because that is what the steppers add
-                 * to, and "90" is not a length of time anyone recognises at a glance. This
-                 * line used to be the small grey afterthought under it, which put the only
-                 * legible form of the answer in the smallest type on the screen — reported
-                 * from the phone as "hard to tell what is even selected" (2026-08-08).
+                 * Said LOUDLY as well as typed: the field holds "5:00" already, which reads
+                 * fine on its own, but the confirmation line stays because a number that big
+                 * benefits from being said twice, once in the smaller field and once where it
+                 * cannot be missed — reported from the phone as "hard to tell what is even
+                 * selected" (2026-08-08), before mm:ss entry existed to make the field itself
+                 * legible at all.
                  */
                 Text(
                     seconds?.let(::formatClock) ?: "--:--",
@@ -1014,9 +1242,16 @@ private fun RestDialog(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                 )
+                TimeField(
+                    label = "Rest, mm:ss",
+                    value = draft,
+                    onValueChange = { draft = it },
+                    bumpsSec = listOf(10, 30),
+                    isError = draft.isNotBlank() && seconds == null,
+                )
                 if (seconds == null) {
                     Text(
-                        "A rest is between 1 second and an hour.",
+                        "A rest is between 1 second and a day.",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.inkSecondary,
                         modifier = Modifier.fillMaxWidth(),
@@ -1049,9 +1284,13 @@ private fun RestDialog(
  * with the field cleared. This dialog is only ever raised when the last set DID carry one
  * (see [lastAddedKg]), so the ordinary path is one tap on a number that is already right, and
  * the only thing that ever needs typing is the day the plate comes off or changes.
+ *
+ * `internal` rather than `private`: [LogScreen] raises the exact same dialog before its own
+ * one-tap program starts, on the same §13.5 rule — see [lastAddedKg]'s own note on why that
+ * has to stay one question asked one way rather than two that can drift apart.
  */
 @Composable
-private fun WeightDialog(
+internal fun WeightDialog(
     exerciseName: String,
     initialKg: Double?,
     onConfirm: (Double?) -> Unit,
@@ -1112,7 +1351,10 @@ private fun QuickEntrySheet(
     state: UiState,
     exercise: ExerciseRef,
     opDate: String,
-    workoutId: Long,
+    /** The workout this sheet is raised for, or null while it is still a draft (§13.1). */
+    workoutId: Long?,
+    /** The card this sheet was raised from already answered which side — see [HoldEntry]. */
+    fixedSide: HoldSide? = null,
     onAddSet: (ActivityForm) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1143,15 +1385,15 @@ private fun QuickEntrySheet(
                 lastTime?.let { last ->
                     val day = runCatching { LocalDate.parse(last.opDate) }.getOrNull()
                     val dayText = day?.let { fmtShortDay(it) } ?: last.opDate
-                    "Last time ($dayText): " + last.sets.joinToString(", ") { it.form.summaryLine() }
+                    "Last time ($dayText): " + last.sets.joinToString(", ") { it.lastTimeSetLine() }
                 } ?: "No earlier set of this one.",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkSecondary,
             )
 
             when (exercise.form) {
-                ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet)
-                ExerciseForm.HOLD -> HoldEntry(state, exercise, opDate, onAddSet)
+                ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet, fixedSide)
+                ExerciseForm.HOLD -> HoldEntry(state, exercise, opDate, onAddSet, fixedSide)
                 ExerciseForm.CARDIO -> CardioEntry(state, exercise, opDate, onAddSet)
                 ExerciseForm.DURATION -> DurationEntry(state, exercise, opDate, onAddSet)
                 ExerciseForm.TICK -> TickEntry(exercise, opDate, onAddSet)
@@ -1161,4 +1403,17 @@ private fun QuickEntrySheet(
             Spacer(Modifier.height(16.dp))
         }
     }
+}
+
+/**
+ * One entry of the "Last time" line: the set's own [summaryLine], with "(not completed)" tacked
+ * on for the one this was actually asked for — see [StrengthSet.incomplete]. This is the
+ * decision the owner asked the whole flag to feed: whether to push the weight up next time, or
+ * hold it, or bring it down, and that decision is made right here, against the set that fell
+ * short and not just the newest one — see [StrengthEntry]'s own [LastTimeIncompleteNote] for the
+ * same fact stated once, for the screen that has no "Last time" line of its own to attach it to.
+ */
+private fun ActivityEvent.lastTimeSetLine(): String {
+    val text = form.summaryLine()
+    return if ((form as? LoadedSet)?.incomplete == true) "$text (not completed)" else text
 }

@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The only thing the app ever shares: a program export written into cache/exports.
-    Nothing else is reachable through the provider - not the database, not the
-    preferences, not the rest of the cache.
+    Everything the FileProvider ever exposes: a program export written into cache/exports for
+    "share", and one camera capture at a time written into cache/camera so the system camera
+    app has somewhere to write a photo of an exercise's machine before this app copies it into
+    its own storage (see data/ExercisePictureStore.kt). Nothing else is reachable through the
+    provider - not the database, not the preferences, not the rest of the cache.
 -->
 <paths>
     <cache-path
         name="exports"
         path="exports/" />
+    <cache-path
+        name="camera"
+        path="camera/" />
 </paths>

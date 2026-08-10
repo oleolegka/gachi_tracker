@@ -1,6 +1,8 @@
 package xyz.oleolegka.gachimuchi.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -121,6 +123,33 @@ class SlotDraftTest {
         assertNull(base.copy(timeText = "99:99").toSlot())
         // every reason has a sentence to show under the fields
         SlotProblem.entries.forEach { assertTrue(problemText(it).isNotBlank()) }
+    }
+
+    // --- plans cannot be backdated (§12-B, 2026-08-10) --------------------------------------
+
+    @Test
+    fun `a draft anchored before today is backdated, one anchored on or after it is not`() {
+        val base = SlotDraft(name = "Gym", anchorDate = monday.toString())
+        assertTrue(base.isBackdated(monday.plusDays(1)))
+        assertFalse(base.isBackdated(monday))
+        assertFalse(base.isBackdated(monday.minusDays(1)))
+    }
+
+    @Test
+    fun `an unreadable date is not backdated -- problem already refuses it on its own`() {
+        // isBackdated only ever runs after problem() has passed, so a date it cannot even
+        // parse is not this function's business to flag
+        assertFalse(SlotDraft(name = "Gym", anchorDate = "someday").isBackdated(monday))
+    }
+
+    @Test
+    fun `isBackdated is not what toSlot checks -- a repository seeding old data still can`() {
+        // toSlot has no "today" of its own (data/ActivityRepository.kt's saveSlot calls it
+        // directly), so a backdated draft still turns into a Slot here; the refusal is the
+        // EDITOR's own, made from isBackdated, not from problem()/toSlot()
+        val backdated = SlotDraft(name = "Gym", anchorDate = monday.minusDays(10).toString())
+        assertNull(backdated.problem())
+        assertNotNull(backdated.toSlot())
     }
 
     @Test

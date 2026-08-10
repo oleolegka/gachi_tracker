@@ -24,10 +24,19 @@ import xyz.oleolegka.gachimuchi.data.toRef
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.CelebrationCue
 import xyz.oleolegka.gachimuchi.domain.CompletedSet
+import xyz.oleolegka.gachimuchi.domain.DraftCard
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
+import xyz.oleolegka.gachimuchi.domain.OrderedCard
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
+import xyz.oleolegka.gachimuchi.domain.asPlanned
+import xyz.oleolegka.gachimuchi.domain.lastWorkoutNamed
+import xyz.oleolegka.gachimuchi.domain.pastWorkoutNames
+import xyz.oleolegka.gachimuchi.domain.resolvedCards
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
@@ -41,6 +50,8 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
 import xyz.oleolegka.gachimuchi.domain.dayWatchDelayMs
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.deletedExerciseLinks
+import xyz.oleolegka.gachimuchi.domain.actualRestSec
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
 import xyz.oleolegka.gachimuchi.domain.exerciseLink
@@ -73,6 +84,16 @@ data class UiState(
     val events: List<JournalEvent> = emptyList(),
     val exercises: List<ExerciseEntity> = emptyList(),
     val slots: List<Slot> = emptyList(),
+    /**
+     * The program library, by local row id — folded in here so that [refById] and every screen
+     * that needs an exercise's resolved protocol (the identity chip, the picker's protocol
+     * caption, the hold-exercise list `GachiApp.kt` builds for the timer tab) can do it without
+     * a second, separate `combine` of their own. This is NOT the only place the library is
+     * exposed: [xyz.oleolegka.gachimuchi.ui.MainViewModel.programs] stays a StateFlow of its
+     * own too, because the program editor screen reads that directly and has no reason to carry
+     * the rest of [UiState] along with it.
+     */
+    val programsById: Map<Long, WorkoutProgram> = emptyMap(),
     val loading: Boolean = true,
 ) {
     fun exerciseById(id: Long?): ExerciseEntity? = id?.let { e -> exercises.firstOrNull { it.id == e } }
@@ -80,8 +101,21 @@ data class UiState(
     fun formOf(id: Long?): ExerciseForm? =
         exerciseById(id)?.let { runCatching { ExerciseForm.fromCode(it.form) }.getOrNull() }
 
+    /**
+     * The domain's view of a catalog row, protocol resolved — what the entry card builds its
+     * forms from, and what every screen wanting `ExerciseRef.workSec`/`restSec` reads.
+     */
+    fun refOf(exercise: ExerciseEntity): ExerciseRef =
+        exercise.toRef(exercise.protocolProgramId?.let { programsById[it] })
+
     /** The catalog row as the domain sees it — what the entry card builds its forms from. */
-    fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.toRef()
+    fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.let(::refOf)
+
+    /**
+     * Names offered by a "start like last time" dropdown (§13.9) — see
+     * [xyz.oleolegka.gachimuchi.domain.pastWorkoutNames] for what decides the list and its order.
+     */
+    val pastWorkoutNames: List<String> get() = pastWorkoutNames(events)
 
     /**
      * How the journal names an exercise the screen is holding a number for.
@@ -122,8 +156,24 @@ class MainViewModel(
 ) : ViewModel() {
 
     val state: StateFlow<UiState> =
-        combine(repo.events, repo.exercises, repo.slots) { events, exercises, slots ->
-            UiState(events, exercises, slots, loading = false)
+        combine(repo.events, repo.exercises, repo.slots, programRepo.programs) { events, exercises, slots, programs ->
+            /*
+             * The ONE place a deleted exercise's own catalog row is taken out of what the app
+             * shows — every screen reads the exercise list off this [UiState], never off
+             * `repo.exercises` directly (see ui/screens/ExercisePicker.kt, OverviewScreen.kt,
+             * GachiApp.kt's hold-exercise list). Its history is a separate concern, handled by
+             * the SAME fold one level down: readActivities/buildWorkout already drop a deleted
+             * exercise's own entries because they go through domain/Amendments.kt, which this
+             * merely mirrors for the row itself — see [deletedExerciseLinks]'s own KDoc for why
+             * the two are two folds of one journal rather than one shared answer.
+             */
+            val gone = deletedExerciseLinks(events)
+            val visibleExercises = if (gone.isEmpty()) {
+                exercises
+            } else {
+                exercises.filterNot { ex -> gone.any { it.matches(ExerciseLink(ex.uid, ex.id)) } }
+            }
+            UiState(events, visibleExercises, slots, programs.associateBy { it.id }, loading = false)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
     /**
@@ -183,8 +233,21 @@ class MainViewModel(
      * side by side, and starting one for an exercise that already has one replaces only that
      * one.
      *
-     * The duration is resolved AFTER the write, so the gap that has just been measured (the
-     * pause before this very set) is part of what the offer is based on.
+     * The new floor's duration is resolved AFTER the write, so the gap that has just been
+     * measured (the pause before this very set) is part of what the offer is based on.
+     *
+     * ── The OLD floor closes the loop on the set BEFORE this one ────────────────
+     * If an exercise already had a floor running, that floor's [xyz.oleolegka.gachimuchi.domain.RestFloor.startedAtWallMs]
+     * is the wall-clock moment its own previous set was recorded — the one honest reading of
+     * how long the rest between them actually was, rather than [xyz.oleolegka.gachimuchi.domain.secondsBetween]'s
+     * guess from two write times. It is read and turned into an amendment BEFORE the write
+     * below, because after it the new set would itself become "the previous set" and
+     * [ActivityRepository.recordActualRest] would target the wrong row.
+     *
+     * This deliberately does NOT require [TimerSettings.autoStartRest] to still be on: that
+     * setting only decides whether a NEW floor starts, further down. A floor already running
+     * is a fact about a rest that genuinely happened, and turning autoStartRest off between two
+     * sets is not a reason to stop believing the clock that already ran.
      */
     fun addSet(form: ActivityForm, attachToWorkout: Boolean = true, intoWorkoutId: Long? = null) {
         viewModelScope.launch {
@@ -192,13 +255,7 @@ class MainViewModel(
             // BEFORE the write, or the set would be compared against itself and no set
             // would ever be a record
             val record = if (worthAPicture) recordBrokenBy(form) else null
-            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
-            if (worthAPicture) {
-                _celebrations.tryEmit(
-                    CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
-                )
-            }
-            val settings = timer.settings.value
+
             /*
              * TRAINING TYPED UP AFTER THE FACT IS SILENT (§13.6). A rest that ended a
              * fortnight ago is not something to wait out, and a countdown starting while
@@ -206,6 +263,7 @@ class MainViewModel(
              * own, not this class's idea of today, so the rule holds however stale that is.
              */
             val live = form.opDate == LocalDate.now().toString()
+            val settings = timer.settings.value
             /*
              * A floor belongs to an exercise: it is drawn under that exercise's card and it
              * says that exercise's name out loud. A set recorded against nothing has nowhere
@@ -214,8 +272,29 @@ class MainViewModel(
              * form which one day does not cannot produce a floor called "null".
              */
             val exerciseId = form.exerciseId
+            /*
+             * Which CARD this set belongs to, for an exercise trained one limb at a time — the
+             * left hand's rest and the right hand's are two floors, not one, so the exercise id
+             * alone no longer names the countdown a set closes out or the one it starts. Only a
+             * [LoadedSet] ever carries a side; every other form floors by exercise id alone,
+             * side always null, exactly as before this existed.
+             */
+            val side = (form as? LoadedSet)?.sideOf
+            if (live && timer.enabled.value && startsRest(form) && exerciseId != null) {
+                timer.floors.floors.value.firstOrNull { it.exerciseId == exerciseId && it.side == side?.code }
+                    ?.actualRestSec(System.currentTimeMillis())
+                    ?.let { repo.recordActualRest(form.exerciseLink()!!, it, side) }
+            }
+
+            repo.record(form, attachToWorkout = attachToWorkout, intoWorkoutId = intoWorkoutId)
+            if (worthAPicture) {
+                _celebrations.tryEmit(
+                    CelebrationCue(serial = ++celebrationSerial, isRecord = record != null, text = record?.text)
+                )
+            }
             if (live && timer.enabled.value && settings.autoStartRest && startsRest(form) && exerciseId != null) {
                 val exercise = repo.exercise(exerciseId)
+                val label = exercise?.name ?: "Rest"
                 /*
                  * THE REST THAT WAS CHOSEN, and only failing that the one that was measured —
                  * which is what [restHintSec] resolves and what [resolveRestSec] on its own
@@ -227,8 +306,11 @@ class MainViewModel(
                  */
                 timer.floors.start(
                     exerciseId = exerciseId,
-                    exerciseName = exercise?.name ?: "Rest",
-                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.toRef()) * 1000L,
+                    // said by hand as well as by card, since the summary line and the shade
+                    // notification only ever have the name to tell the two floors apart by
+                    exerciseName = if (side != null) "$label - ${side.label()}" else label,
+                    orderedMs = restHintSec(settings, repo.allEvents(), exercise?.let { repo.toRef(it) }) * 1000L,
+                    side = side?.code,
                 )
             }
         }
@@ -267,6 +349,118 @@ class MainViewModel(
         }
     }
 
+    // --- the workout that has not started yet (§13.1) ---------------------------------------
+    //
+    // Sketching a session ahead of time used to mean pressing "start", which wrote a real
+    // `workout_started` row an hour before the person meant to train and took the plan card
+    // off Today under it. "I did not want to start a workout, why did the app decide that I
+    // did." So the start event is now created LAZILY: adding exercises to a draft touches only
+    // this state, and nothing is written to the journal until an explicit "start workout" or
+    // the first set — see [promoteDraft].
+
+    /**
+     * A workout being sketched before it has actually begun. [cards] are staged locally and
+     * become real `workout_exercise_added` rows only when [promoteDraft] fires; nothing here
+     * is in the journal, so the plan card it came from (if any) stays exactly what it was.
+     */
+    data class WorkoutDraft(
+        val day: LocalDate,
+        val slotId: Long? = null,
+        val name: String? = null,
+        val cards: List<DraftCard> = emptyList(),
+    )
+
+    private val _draft = MutableStateFlow<WorkoutDraft?>(null)
+    val draft: StateFlow<WorkoutDraft?> = _draft.asStateFlow()
+
+    /**
+     * Opens a draft for [day] — pre-filled from [slotId]'s plan, or, when [slotId] is null and
+     * [name] is exactly the name of a past workout, from the LATEST workout that carried it
+     * (§13.9, "start like last time": three workouts can share one name, and this is the one
+     * place that decides which — see [lastWorkoutNamed]). Neither source applying leaves the
+     * draft empty, which is the ordinary state for a workout started off-plan under a name
+     * nothing has used before.
+     *
+     * Both sources are resolved through [resolvedCards], the one funnel
+     * [ActivityRepository.copyPlannedExercises] also goes through for a real workout — so a
+     * plan and a past workout are turned into cards the same way regardless of which wrote this
+     * one.
+     *
+     * Replaces whatever draft was open, on the same "starting one closes the last" grounds
+     * [ActivityRepository.startWorkout] already applies to real workouts. NOTHING IS WRITTEN TO
+     * THE JOURNAL by this either way — the workout itself is only opened once [promoteDraft]
+     * fires.
+     */
+    fun beginDraft(day: LocalDate, slotId: Long? = null, name: String? = null) {
+        viewModelScope.launch {
+            val events = repo.allEvents()
+            val planned = when {
+                slotId != null -> repo.slotExercises(slotId)
+                name != null -> lastWorkoutNamed(events, name)?.let(::asPlanned).orEmpty()
+                else -> emptyList()
+            }
+            val settings = timer.settings.value
+            val cards = resolvedCards(
+                planned,
+                refOf = { id -> state.value.refById(id) },
+                restFallback = { ref -> restHintSec(settings, events, ref) },
+            )
+            _draft.value = WorkoutDraft(day, slotId, name, cards)
+        }
+    }
+
+    /** Stages an exercise into the draft, or — called again for one already there — changes its rest. */
+    fun updateDraftCard(exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+        val current = _draft.value ?: return
+        val without = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side }
+        _draft.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side))
+    }
+
+    /** Takes a card off the draft. There is nothing to undo in the journal — it was never written. */
+    fun removeDraftCard(exerciseId: Long, side: HoldSide? = null) {
+        val current = _draft.value ?: return
+        _draft.value = current.copy(cards = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side })
+    }
+
+    /** States the draft's order — the same shape a real workout's [setWorkoutExerciseOrder] does. */
+    fun reorderDraftCards(order: List<OrderedCard>) {
+        val current = _draft.value ?: return
+        val reordered = order.mapNotNull { entry ->
+            current.cards.firstOrNull { it.exerciseId == entry.exercise.id && it.side == entry.side }
+        }
+        _draft.value = current.copy(cards = reordered)
+    }
+
+    /** Leaves the draft behind without starting anything — closing the screen before either did. */
+    fun discardDraft() {
+        _draft.value = null
+    }
+
+    /**
+     * Turns the draft into a real workout: the start event, then every staged card's own
+     * "added" row — the two writes [ActivityRepository.startWorkout] and
+     * [ActivityRepository.addExerciseToWorkout] always were, just no longer made in advance of
+     * there being anything to write them for. [then] receives the new workout's id, the same
+     * way [startWorkout] hands one back, because the caller's next move needs it — to file the
+     * set that triggered this, or simply to start showing the real workout instead of the draft.
+     *
+     * [ActivityRepository.startWorkout] itself is deliberately NOT what this calls: it also
+     * copies a plan's composition, which here would duplicate the very cards [beginDraft]
+     * already staged from that same plan.
+     *
+     * A no-op when there is no draft open — the caller raced an empty state, or promoted twice
+     * for the two things that can trigger it (the button and the first set) landing together.
+     */
+    fun promoteDraft(then: (Long) -> Unit) {
+        val current = _draft.value ?: return
+        _draft.value = null
+        viewModelScope.launch {
+            val id = repo.startWorkout(current.day.toString(), current.slotId, current.name)
+            current.cards.forEach { card -> repo.addExerciseToWorkout(id, card.exerciseId, card.restSec, card.side) }
+            then(id)
+        }
+    }
+
     /**
      * Puts an exercise into a workout at a chosen rest — and, called again for one already
      * there, changes that rest.
@@ -277,9 +471,12 @@ class MainViewModel(
      * choice made here is what the NEXT workout will be offered — the two writes are two
      * different facts and neither can be derived from the other; see
      * [ActivityRepository.addExerciseToWorkout].
+     *
+     * [side] names one CARD of a one-sided exercise. Adding both is two calls — see
+     * [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen] for where they are made.
      */
-    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int) {
-        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec) }
+    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec, side) }
     }
 
     /**
@@ -289,7 +486,7 @@ class MainViewModel(
      * The WHOLE order, every time, because that is what the event carries: the screen hands over
      * the arrangement it is showing and does not have to describe a move.
      */
-    fun setWorkoutExerciseOrder(workoutId: Long, order: List<ExerciseLink>) {
+    fun setWorkoutExerciseOrder(workoutId: Long, order: List<OrderedCard>) {
         viewModelScope.launch { repo.setWorkoutExerciseOrder(workoutId, order) }
     }
 
@@ -302,6 +499,44 @@ class MainViewModel(
      */
     fun finishWorkout(workoutId: Long) {
         viewModelScope.launch { repo.finishWorkout(workoutId) }
+    }
+
+    /**
+     * Puts a workout that was marked done back in progress, by deleting the event that said
+     * it was finished — see [ActivityRepository.unfinishWorkout]. The whole-workout twin of
+     * [unfinishWorkoutExercise]: nothing already recorded is touched, and nothing is restarted.
+     */
+    fun unfinishWorkout(eventId: Long) {
+        viewModelScope.launch { repo.unfinishWorkout(eventId) }
+    }
+
+    /**
+     * Marks one CARD done — see [ActivityRepository.finishWorkoutExercise] — and stops timing
+     * its rest.
+     *
+     * The two are one action from here, and that is a decision worth stating rather than
+     * leaving implicit: a card that no longer offers a "log a set" button has nothing left
+     * for a countdown to be FOR, and a beep arriving under a card the user has just declared
+     * done reads as the app disagreeing with them. Nothing is lost by dismissing rather than
+     * pausing it — a floor is only ever "not before" a NEXT set, and the next set on this card
+     * starts a fresh one the same way it always has, finished or not.
+     */
+    fun finishWorkoutExercise(workoutId: Long, exercise: ExerciseLink, side: HoldSide? = null) {
+        exercise.id?.let { timer.floors.dismiss(it, side?.code) }
+        viewModelScope.launch { repo.finishWorkoutExercise(workoutId, exercise, side) }
+    }
+
+    /**
+     * Puts a card that was marked done back among the active ones, by deleting the event that
+     * said it was finished — see [ActivityRepository.unfinishWorkoutExercise].
+     *
+     * NOTHING is restarted here, and that is deliberate: the rest countdown dismissed on the
+     * way in measured a pause that is now minutes in the past, and starting it again would put
+     * a number on the screen that describes nothing. The next set on this card starts a fresh
+     * one, exactly as it does for a card that was never finished at all.
+     */
+    fun unfinishWorkoutExercise(eventId: Long) {
+        viewModelScope.launch { repo.unfinishWorkoutExercise(eventId) }
     }
 
     // --- celebration -------------------------------------------------------------------
@@ -323,15 +558,28 @@ class MainViewModel(
      * The record this set breaks, judged against the journal AS IT IS NOW — the same
      * comparison the session feed makes for a set already written (domain/Session.kt), so
      * the overlay and the feed cannot disagree about what was a record.
+     *
+     * [StrengthSet.warmup] and [StrengthSet.incomplete] are both passed through — a card that
+     * writes either must not pop a "new record" cue for a set domain/Records.kt already refuses
+     * to count. [HoldSet] needs nothing of the sort passed separately: [evaluateHoldRecord] reads
+     * both flags straight off the form it is handed.
      */
     private suspend fun recordBrokenBy(form: ActivityForm): RecordHit? {
         val exercise = form.exerciseLink() ?: return null
         val events = repo.allEvents()
         return when (form) {
-            is StrengthSet ->
-                evaluateStrengthRecord(strengthSetsOfExercise(events, exercise), form.weightKg, form.reps)
+            // outward one branch — LoadedSet is the only pair with a record model; which record
+            // function applies still depends on the concrete form, so that stays nested
+            is LoadedSet -> when (form) {
+                is StrengthSet ->
+                    evaluateStrengthRecord(
+                        strengthSetsOfExercise(events, exercise), form.weightKg, form.reps,
+                        warmup = form.warmup, side = form.sideOf, incomplete = form.incomplete,
+                    )
 
-            is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
+                is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
+            }
+
             else -> null
         }
     }
@@ -374,13 +622,15 @@ class MainViewModel(
      *
      * Still one deletion event per row, because that is the only thing the journal has to say
      * with: there is no "delete these" event and inventing one would mean a second shape for
-     * every reader in domain/Amendments.kt to understand. What this adds over a loop at the
-     * call site is that the writes are in one coroutine, so the journal is never read back
-     * half-removed by the flow the screen is collecting.
+     * every reader in domain/Amendments.kt to understand. What ties the rows together is
+     * [ActivityRepository.deleteEntries]'s own transaction, not a coroutine on its own — one
+     * coroutine keeps the journal from being READ back half-removed by the flow the screen is
+     * collecting, but only a database transaction keeps it from being WRITTEN back half-removed
+     * when the process itself does not survive the loop.
      */
     fun deleteEntries(eventIds: List<Long>) {
         if (eventIds.isEmpty()) return
-        viewModelScope.launch { eventIds.forEach { repo.deleteEntry(it) } }
+        viewModelScope.launch { repo.deleteEntries(eventIds) }
     }
 
     /**
@@ -397,10 +647,14 @@ class MainViewModel(
      * The journal is read here rather than in the screen because a card knows only an id; the
      * rows a workout is made of are a question about the journal, and this is the layer that
      * has one.
+     *
+     * The write itself goes through [ActivityRepository.deleteEntries], as one transaction —
+     * see its own KDoc for why a loop of [ActivityRepository.deleteEntry] calls used to be able
+     * to leave a workout half gone.
      */
     fun deleteWorkout(workoutId: Long) {
         viewModelScope.launch {
-            workoutEventIds(repo.allEvents(), workoutId).forEach { repo.deleteEntry(it) }
+            repo.deleteEntries(workoutEventIds(repo.allEvents(), workoutId))
         }
     }
 
@@ -416,9 +670,9 @@ class MainViewModel(
     }
 
     /**
-     * Creates a catalog exercise and immediately points the entry card at it. For holds,
-     * edge and protocol are part of the identity (§12-A) and are stored on the exercise
-     * rather than asked for on every set.
+     * Creates a catalog exercise and immediately points the entry card at it. For holds, the
+     * protocol is part of the identity (§12-A) and is stored on the exercise rather than asked
+     * for on every set.
      *
      * [then] receives the new row's id. It exists because creating an exercise mid-workout is
      * never the last step — the workout then asks what rest it should get, and that question
@@ -428,13 +682,12 @@ class MainViewModel(
     fun createExercise(
         name: String,
         form: ExerciseForm,
-        edgeMm: Double? = null,
         workSec: Double? = null,
         restSec: Double? = null,
         then: ((Long) -> Unit)? = null,
     ) {
         viewModelScope.launch {
-            val id = repo.ensureExercise(name.trim(), form, edgeMm, workSec, restSec)
+            val id = repo.ensureExercise(name.trim(), form, workSec, restSec)
             _activeExerciseId.value = id
             then?.invoke(id)
         }
@@ -506,8 +759,13 @@ class MainViewModel(
 
     fun dismissFloorSummary() = timer.floors.clearSummary()
 
-    /** Takes one rest bar off, by hand. */
-    fun dismissFloor(exerciseId: Long) = timer.floors.dismiss(exerciseId)
+    /**
+     * Takes one rest bar off, by hand — [side] names the CARD, the same as everywhere else a
+     * one-sided exercise's two cards are told apart, so taking one hand's card out of a
+     * workout does not leave the other hand's rest untouched by mistake, and does not touch
+     * the OTHER hand's own countdown either.
+     */
+    fun dismissFloor(exerciseId: Long, side: HoldSide? = null) = timer.floors.dismiss(exerciseId, side?.code)
 
     /**
      * The plate answered on the way INTO the set that is running, or null when none was.
@@ -530,24 +788,39 @@ class MainViewModel(
      * the catalog row, the rep count comes from the last set of it that was logged, the set
      * count from the settings, and the pause between sets from what was actually rested.
      *
-     * [addedKg] is the one thing that can be asked first, and only when there is a reason to
-     * (§13.5) — the caller decides that, because the caller is the one that would be putting
-     * the extra screen in front of the user.
+     * Takes a single [ProgramStart] rather than the exercise, the plate and the side as three
+     * loose parameters — see that type's own KDoc for why. In short: with three independent
+     * parameters, two of them defaulted to null, a caller could supply the exercise and
+     * quietly skip the other two, which is exactly what let a standalone one-sided run start
+     * with no side and vanish from both hands' records. A [ProgramStart] cannot be built
+     * without an answer for [ProgramStart.side], even when that answer is "there is no side
+     * to answer for".
+     *
+     * [ProgramStart.addedKg] is the one thing that can be asked first, and only when there is
+     * a reason to (§13.5) — the caller decides that, because the caller is the one that would
+     * be putting the extra screen in front of the user.
+     *
+     * [ProgramStart.side] names the CARD this run was started from, for an exercise trained
+     * one limb at a time — the same answer the manual entry form is handed as `fixedSide`. It
+     * travels with the run (`RunSnapshot.side`) and comes back out on every set the run's
+     * offer writes ([logRunSets]), which is what makes the two cards of a protocol-led
+     * one-sided exercise lead to two distinguishable runs instead of one that forgets which
+     * hand it was.
      */
-    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null) {
-        _entryAddedKg.value = addedKg
+    fun startProgramForExercise(start: ProgramStart) {
+        _entryAddedKg.value = start.addedKg
         viewModelScope.launch {
             val events = repo.allEvents()
             val settings = timerSettings.value
-            val reps = lastHoldSet(events, exercise.link)?.reps ?: DEFAULT_HOLD_REPS
+            val reps = lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
-                exercise = exercise,
+                exercise = start.exercise,
                 reps = reps,
                 sets = settings.defaultSets,
-                restBetweenSetsSec = resolveRestSec(settings, events, exercise.id),
+                restBetweenSetsSec = resolveRestSec(settings, events, start.exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch
-            timer.start(program, exercise.id, RunOrigin.EXERCISE)
+            timer.start(program, start.exercise.id, RunOrigin.EXERCISE, start.side)
         }
     }
 
@@ -584,6 +857,11 @@ class MainViewModel(
 
     fun deleteProgram(id: Long) {
         viewModelScope.launch { programRepo.delete(id) }
+    }
+
+    /** Keeps a program out of the library list, or brings it back — see `ProgramEntity.hidden`. */
+    fun setProgramHidden(id: Long, hidden: Boolean) {
+        viewModelScope.launch { programRepo.setHidden(id, hidden) }
     }
 
     /**
@@ -641,7 +919,9 @@ class MainViewModel(
              * tried again.
              */
             val ok = runCatching {
-                holdSetsFromRun(exercise, day, sets, addedKg).forEach { written += repo.record(it) }
+                holdSetsFromRun(exercise, day, sets, addedKg, outcome?.sideOf).forEach {
+                    written += repo.record(it)
+                }
             }.isSuccess
 
             if (ok) {

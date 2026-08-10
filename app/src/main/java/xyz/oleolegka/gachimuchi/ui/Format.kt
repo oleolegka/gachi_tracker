@@ -275,8 +275,8 @@ fun ActivityForm.summaryLine(): String = when (this) {
     }
 
     is HoldSet -> buildString {
-        // §12-A: edge and protocol are properties of the exercise, so the added weight is
-        // what matters in a set line; edge and protocol are shown only as context
+        // §12-A: the protocol is a property of the exercise, so the added weight is what
+        // matters in a set line; the protocol is shown only as context
         // signed too, and for a hangboard the sign is the more important half: most of the
         // work happens on the negative side of this axis, and a bare "15 kg" said neither
         // which direction it went nor that it was ADDED weight rather than an absolute one
@@ -286,7 +286,6 @@ fun ActivityForm.summaryLine(): String = when (this) {
         if (workSec != null && restSec != null) {
             append(", ${workSec.toInt()}:${restSec.toInt()} protocol")
         }
-        edgeMm?.let { append(", ${it.toInt()} mm edge") }
     }
 
     is Duration -> fmtDuration(durationSec)

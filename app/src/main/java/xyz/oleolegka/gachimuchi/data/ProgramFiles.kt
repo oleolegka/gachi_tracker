@@ -128,8 +128,11 @@ object ProgramFiles {
      * folder). The copy goes into the cache and is exposed through a FileProvider: a
      * `file://` URI has been illegal to share since Android 7, and the provider grants read
      * access to this one file for this one send instead.
+     *
+     * [mime] defaults to the program file's own type because that was this function's only
+     * caller for a long time; the journal backup (a CSV now, not JSON) passes its own.
      */
-    fun share(context: Context, text: String, fileName: String, title: String): String? =
+    fun share(context: Context, text: String, fileName: String, title: String, mime: String = PROGRAM_FILE_MIME): String? =
         runCatching {
             val dir = File(context.cacheDir, SHARE_DIR).apply { mkdirs() }
             val file = File(dir, fileName)
@@ -138,7 +141,7 @@ object ProgramFiles {
                 context, context.packageName + AUTHORITY_SUFFIX, file,
             )
             val send = Intent(Intent.ACTION_SEND)
-                .setType(PROGRAM_FILE_MIME)
+                .setType(mime)
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .putExtra(Intent.EXTRA_SUBJECT, fileName)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

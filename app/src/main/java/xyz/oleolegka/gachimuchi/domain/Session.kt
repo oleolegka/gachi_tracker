@@ -21,8 +21,8 @@ import java.time.temporal.ChronoUnit
 
 /**
  * The catalog attributes the entry card needs, without dragging Room types into the
- * domain. For holds this carries the §12-A identity (edge and protocol), which is why
- * those two are never asked for per set: they belong to the exercise.
+ * domain. For holds this carries the §12-A identity (the protocol), which is why it is
+ * never asked for per set: it belongs to the exercise.
  */
 data class ExerciseRef(
     val id: Long,
@@ -38,7 +38,6 @@ data class ExerciseRef(
      * and cannot be merged with another device's, which is the honest consequence.
      */
     val uid: String? = null,
-    val edgeMm: Double? = null,
     val workSec: Double? = null,
     val restSec: Double? = null,
     /**
@@ -77,9 +76,6 @@ data class ExerciseRef(
             null
         }
 
-    /** Same rule for the edge: a non-positive one was never filled in. */
-    val edge: Double? = edgeMm?.takeIf { it > 0 }
-
     /** How the journal names this exercise — see [ExerciseLink]. */
     val link: ExerciseLink = ExerciseLink(uid, id)
 }
@@ -97,7 +93,7 @@ fun ActivityForm.activityName(): String = when (this) {
 // --- building a form out of what the entry card collected -----------------------------
 //
 // The builders exist so that a screen never constructs a payload by hand: an exercise
-// knows its own identity (id, name and — for holds — edge and protocol), and forgetting
+// knows its own identity (id, name and — for holds — the protocol), and forgetting
 // to pass one of those would silently split the history of one exercise in two.
 
 /**
@@ -114,25 +110,34 @@ fun strengthSetOf(
     addedKg: Double? = null,
     /** Ramp-up rather than working weight — see [StrengthSet.warmup]. */
     warmup: Boolean = false,
+    /** Fell short of the reps this was attempted at — see [StrengthSet.incomplete]. */
+    incomplete: Boolean = false,
+    /**
+     * Which side this was, for an exercise trained one limb at a time ([ExerciseRef.oneSided])
+     * — a pistol squat, a one-arm row. See [holdSetOf]'s own [HoldSide] parameter for why this
+     * is not validated against the flag here either.
+     */
+    side: HoldSide? = null,
 ): StrengthSet = if (ownWeight) {
     StrengthSet(
         exercise = exercise.name, reps = reps, ownWeight = true,
         // zero is "nothing was added", which the payload says by leaving the field out; the
         // sign is KEPT, because a negative one is assistance and not a mistyped positive
         addedKg = addedKg?.takeIf { it != 0.0 }, exerciseId = exercise.id,
-        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup,
+        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup, incomplete = incomplete,
+        side = side?.code,
     )
 } else {
     StrengthSet(
         exercise = exercise.name, reps = reps, weightKg = weightKg?.takeIf { it > 0 },
         exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
-        warmup = warmup,
+        warmup = warmup, incomplete = incomplete, side = side?.code,
     )
 }
 
 /**
- * A hold set. §12-A: edge and protocol come FROM THE EXERCISE and are written into the
- * payload as a snapshot — the entry card never asks for them.
+ * A hold set. §12-A: the protocol comes FROM THE EXERCISE and is written into the payload
+ * as a snapshot — the entry card never asks for it.
  */
 fun holdSetOf(
     exercise: ExerciseRef,
@@ -148,13 +153,15 @@ fun holdSetOf(
     restAfterSec: Double? = null,
     /** Ramp-up rather than a working hang — see [StrengthSet.warmup]. */
     warmup: Boolean = false,
+    /** Fell short of the protocol this was attempted at — see [StrengthSet.incomplete]. */
+    incomplete: Boolean = false,
     /**
      * Which hand this was, for an exercise trained one at a time ([ExerciseRef.oneSided]).
      *
      * NOT validated against that flag, deliberately. This builder runs inside the Add
      * button's own click handler, and a `require` here would come out as a crash on the one
-     * button the app is built around — the same reasoning the edge and the protocol are
-     * sanitised for rather than rejected. A one-sided exercise logged without a side is a
+     * button the app is built around — the same reasoning the protocol is sanitised for
+     * rather than rejected. A one-sided exercise logged without a side is a
      * defect the READERS report, out loud, where nobody is mid-set (see [holdRecord]).
      */
     side: HoldSide? = null,
@@ -166,15 +173,12 @@ fun holdSetOf(
     holdSec = holdSec?.takeIf { it > 0 },
     workSec = exercise.protocol?.first,
     restSec = exercise.protocol?.second,
-    // through [ExerciseRef.edge], for the same reason the reps above go through takeIf:
-    // a zero on the catalog row would be rejected by the validator and take the screen
-    // down at the moment the Add button is pressed
-    edgeMm = exercise.edge,
     // the sign survives: a hang off a band is recorded as a negative added weight, and
     // stripping it would silently turn "helped by 15 kg" into an unweighted hang
     addedKg = addedKg?.takeIf { it != 0.0 },
     ownWeight = true,
     warmup = warmup,
+    incomplete = incomplete,
     side = side?.code,
     exerciseId = exercise.id,
     exerciseUid = exercise.uid,
@@ -265,20 +269,21 @@ fun bodyweightAt(events: List<JournalEvent>, opDate: String): Double? =
  */
 val ActivityForm.wantsBodyweightSnapshot: Boolean
     get() = when (this) {
-        is StrengthSet -> ownWeight && bodyweightKg == null
-        is HoldSet -> ownWeight && bodyweightKg == null
+        is LoadedSet -> ownWeight && bodyweightKg == null
         else -> false
     }
 
-fun ActivityForm.withBodyweightSnapshot(weightAt: (String) -> Double?): ActivityForm = when {
-    this is StrengthSet && ownWeight && bodyweightKg == null ->
-        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
-
-    this is HoldSet && ownWeight && bodyweightKg == null ->
-        weightAt(opDate)?.let { copy(bodyweightKg = it) } ?: this
-
-    else -> this
-}
+fun ActivityForm.withBodyweightSnapshot(weightAt: (String) -> Double?): ActivityForm =
+    if (this !is LoadedSet || !ownWeight || bodyweightKg != null) {
+        this
+    } else {
+        weightAt(opDate)?.let { snapshot ->
+            when (this) {
+                is StrengthSet -> copy(bodyweightKg = snapshot)
+                is HoldSet -> copy(bodyweightKg = snapshot)
+            }
+        } ?: this
+    }
 
 // --- the session feed ----------------------------------------------------------------
 
@@ -301,8 +306,14 @@ data class SessionSet(
      * The pause before this set, in seconds. Taken from the previous set's explicit
      * `rest_after_sec` when it has one, otherwise derived from the gap between the two
      * write times. Null for the first set of an exercise and for implausible gaps.
+     *
+     * STILL BY WRITE TIME, deliberately unchanged by [happenedAt] below — a floor measures
+     * wall-clock time between two ACTUAL writes, and a set typed up long after the fact was
+     * never rested for. See [buildSession]'s own note on this.
      */
     val restBeforeSec: Double?,
+    /** See [xyz.oleolegka.gachimuchi.domain.happenedAt] — what [buildSession] sorts a group by. */
+    val happenedAt: String = ts,
 )
 
 /** The sets of one exercise within the session, in the order they were recorded. */
@@ -329,10 +340,30 @@ data class Session(
 /**
  * Builds the session of [opDate] out of the journal.
  *
- * Groups follow the order in which the exercises FIRST appeared that day, and the sets
- * inside a group follow the order they were recorded in — the screen is a live tape of
- * the workout, not a sorted report. Cancelled sets are gone (the reducers drop them),
- * but their events remain in the journal.
+ * Groups follow the order in which the exercises FIRST appeared that day, by write time — that
+ * decision is unaffected by any of this, see below. WITHIN a group, the sets are sorted by
+ * [ActivityEvent.happenedAt] rather than left in journal order: the screen is a tape of the
+ * workout as it was actually done, and journal order stopped being that the moment a set could
+ * be corrected without moving (domain/Amendments.kt's header). Cancelled sets are gone (the
+ * reducers drop them), but their events remain in the journal.
+ *
+ * ── What is deliberately STILL by write time ─────────────────────────────────────
+ * The rest-before-a-set calculation reads the journal in ITS OWN order, unchanged —
+ * [restBeforeSec]'s derived half is a gap between two ACTUAL writes (a set typed up after the
+ * fact was never rested for, whatever [happenedAt] says it happened at). This is the one place
+ * write order stays the right answer: the floor measures wall-clock time between two writes,
+ * and a correction changes what a row says, never when it was typed.
+ *
+ * ── What is NOT, any more: the record check ───────────────────────────────────────
+ * [recordAt] used to ask "was this a record against everything EARLIER IN THE JOURNAL" — a
+ * question that quietly meant "everything with a smaller row id" for as long as an edit could
+ * not move. It can now: a corrected set is a whole new row appended at the END of the journal
+ * (domain/Amendments.kt's header) that may have happened FIRST. Judging it against rows that
+ * come after it in write order but before it in training order got the record wrong in both
+ * directions — a correction to an early set could steal a later set's record, or hand the
+ * correction one of its own it never broke. So [recordAt] now asks "was this a record against
+ * everything that happened EARLIER" — by [happenedAt], the same clock the display order and
+ * every other reader in this change reads through.
  *
  * Grouping goes by exercise_id, so entries spelled differently (the bot writes whatever
  * sentence it was given) still land in one block. Entries with no id (written before the
@@ -345,7 +376,7 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
     val labels = HashMap<String, Pair<Long?, String>>()
     val lastTs = HashMap<String, String>()
 
-    for ((index, ev) in all.withIndex()) {
+    for (ev in all) {
         if (ev.opDate != opDate) continue
         val exercise = ev.form.exerciseLink()
         val groupKey = exercise?.key ?: "name:${ev.key ?: ev.type}"
@@ -360,41 +391,68 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
             eventId = ev.id,
             ts = ev.ts,
             form = ev.form,
-            record = recordAt(all, index),
+            record = recordAt(all, ev),
             restBeforeSec = rest,
+            happenedAt = ev.happenedAt,
         )
         lastTs[groupKey] = ev.ts
     }
 
     val groups = buckets.map { (key, sets) ->
         val (id, name) = labels.getValue(key)
-        SessionGroup(groupKey = key, exerciseId = id, name = name, sets = sets)
+        // happenedAt first, then eventId (journal order) as the tie-break for two sets that
+        // happened in the same wall-clock second — the same rule domain/Amendments.kt's
+        // journalView already settles a tie by, so two ties resolve the same way everywhere
+        SessionGroup(
+            groupKey = key, exerciseId = id, name = name,
+            sets = sets.sortedWith(compareBy({ it.happenedAt }, { it.eventId })),
+        )
     }
     return Session(opDate, groups)
 }
 
 /**
- * The record broken by the set at [index], compared against everything EARLIER in the
- * journal — the same comparison the bot performs at write time. Entries with no
- * exercise_id are skipped: there is nothing to compare them against.
+ * The record [target] broke, compared against everything that happened EARLIER — the same
+ * comparison the bot performs at write time, asked of the training log AS IT ACTUALLY
+ * UNFOLDED rather than as it happens to be laid out on disk. Entries with no exercise_id are
+ * skipped: there is nothing to compare them against.
+ *
+ * "Earlier" is decided by [happenedAt] and not by position in [all] — see this function's own
+ * caller, [buildSession], for why a row's journal position stopped being a safe stand-in for
+ * when it happened. [isBefore] is the same happenedAt-then-id rule every other "the order
+ * things really happened in" reader in this file and domain/Workout.kt settles a tie by, so a
+ * set that lands in the same wall-clock second as another is judged the same way everywhere.
  */
-private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
-    val prior = all.subList(0, index)
-    val exercise = all[index].form.exerciseLink() ?: return null
+private fun recordAt(all: List<ActivityEvent>, target: ActivityEvent): RecordHit? {
+    val exercise = target.form.exerciseLink() ?: return null
+    val prior = all.filter { isBefore(it, target) }
     fun <T : ActivityForm> priorOf(pick: (ActivityForm) -> T?): List<T> =
         prior.mapNotNull { pick(it.form)?.takeIf { _ -> it.form.exerciseLink()?.matches(exercise) == true } }
 
-    return when (val form = all[index].form) {
-        is StrengthSet ->
-            evaluateStrengthRecord(
-                priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup,
-            )
+    return when (val form = target.form) {
+        // outward one branch — LoadedSet is the only pair that has a record model at all; which
+        // record function applies still depends on the concrete form, so that stays nested
+        is LoadedSet -> when (form) {
+            is StrengthSet ->
+                evaluateStrengthRecord(
+                    priorOf { it as? StrengthSet }, form.weightKg, form.reps,
+                    warmup = form.warmup, side = form.sideOf, incomplete = form.incomplete,
+                )
 
-        is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
+            is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)
+        }
 
         else -> null
     }
 }
+
+/**
+ * Whether [a] happened strictly before [b] — [happenedAt] first, [ActivityEvent.id] (journal
+ * order) as the tie-break for two entries the clock cannot tell apart, the same rule
+ * [buildSession]'s own group sort and domain/Workout.kt already settle a same-second tie by.
+ */
+private fun isBefore(a: ActivityEvent, b: ActivityEvent): Boolean =
+    a.happenedAt < b.happenedAt || (a.happenedAt == b.happenedAt && a.id < b.id)
 
 /**
  * The rest a form states outright (the bot writes it; the app does not).
@@ -405,8 +463,7 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
  * the same two events.
  */
 internal fun explicitRestAfter(form: ActivityForm): Double? = when (form) {
-    is StrengthSet -> form.restAfterSec
-    is HoldSet -> form.restAfterSec
+    is LoadedSet -> form.restAfterSec
     else -> null
 }
 

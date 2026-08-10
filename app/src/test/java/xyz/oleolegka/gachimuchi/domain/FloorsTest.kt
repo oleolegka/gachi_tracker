@@ -436,11 +436,79 @@ class FloorsTest {
         assertEquals(210_000L, floors.first { it.exerciseId == 1L }.readyAtMs)
     }
 
+    /**
+     * The whole reason [RestFloor.side] exists: a one-sided exercise's left and right card each
+     * get their own countdown, so marking the right hand's set must not stop the left hand's
+     * still-running rest — which is exactly what happened before a floor was keyed by
+     * (exerciseId, side) rather than by exerciseId alone.
+     */
+    @Test
+    fun `two cards of one exercise keep two independent floors`() {
+        val left = startFloor(1, "Hangs - Left", orderedMs = 120_000, nowElapsed = 0, nowWall = WALL, side = "left")
+        val right = startFloor(1, "Hangs - Right", orderedMs = 60_000, nowElapsed = 0, nowWall = WALL, side = "right")
+
+        val floors = listOf(left).withFloor(right)
+
+        assertEquals("marking the right hand did not touch the left hand's rest", 2, floors.size)
+        assertEquals(120_000L, floors.first { it.side == "left" }.readyAtMs)
+        assertEquals(60_000L, floors.first { it.side == "right" }.readyAtMs)
+
+        // a second right-hand set still replaces only the right hand's floor
+        val rightAgain =
+            startFloor(1, "Hangs - Right", orderedMs = 90_000, nowElapsed = 30_000, nowWall = WALL, side = "right")
+        val settled = floors.withFloor(rightAgain)
+
+        assertEquals(2, settled.size)
+        assertEquals("untouched by the right hand's new set", 120_000L, settled.first { it.side == "left" }.readyAtMs)
+        assertEquals(120_000L, settled.first { it.side == "right" }.readyAtMs)
+    }
+
     @Test
     fun `no floors at all asks for no alarm`() {
         assertNull(nextFloorSignalMs(emptyList(), conductorRunning = false))
         val cue = floorCue(emptyList(), conductorRunning = false, now = 10_000)
         assertNull(cue.signal)
         assertNull(cue.wakeAtMs)
+    }
+
+    // --- the rest a floor actually measured ---------------------------------------------
+
+    @Test
+    fun `the actual rest is the wall-clock gap since the floor started`() {
+        val rest = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL + 90_000)
+        assertEquals(90.0, rest!!, 1e-9)
+    }
+
+    /** Standing at the doorway of the rest for two and a half minutes is not a rest of zero. */
+    @Test
+    fun `a set recorded the instant the floor started reads as zero rest, not no rest`() {
+        val rest = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL)
+        assertEquals(0.0, rest!!, 1e-9)
+    }
+
+    /**
+     * The same line [MAX_REST_SEC] draws for the DERIVED gap ([secondsBetween]): past twenty
+     * minutes this is a break in the workout, not a rest between sets of one exercise, however
+     * exactly the wall clock can measure it.
+     */
+    @Test
+    fun `right at twenty minutes it is still a rest, one second later it is a break`() {
+        val atTheLine = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL + (MAX_REST_SEC * 1000).toLong())
+        assertEquals(MAX_REST_SEC, atTheLine!!, 1e-9)
+
+        val overTheLine = floor(1, readyAt = 120_000)
+            .actualRestSec(nowWallMs = WALL + (MAX_REST_SEC * 1000).toLong() + 1_000)
+        assertNull("an hour standing around is a break, not a rest, however exactly it is measured", overTheLine)
+    }
+
+    /**
+     * The wall clock is the one clock a user or an NTP sync can move (see the note at the top
+     * of this file). A jump backwards between the floor starting and the next set landing must
+     * not be reported as a negative rest — there is nothing this reading can honestly say.
+     */
+    @Test
+    fun `a wall clock that jumped backwards reads as no measurement, not a negative rest`() {
+        val rest = floor(1, readyAt = 120_000).actualRestSec(nowWallMs = WALL - 5_000)
+        assertNull(rest)
     }
 }

@@ -30,18 +30,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRecord
+import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.FormSeries
 import xyz.oleolegka.gachimuchi.domain.Granularity
-import xyz.oleolegka.gachimuchi.domain.HoldSibling
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.granularity
-import xyz.oleolegka.gachimuchi.domain.holdSiblings
 import xyz.oleolegka.gachimuchi.domain.onAxis
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.recordsOf
@@ -50,15 +50,16 @@ import xyz.oleolegka.gachimuchi.domain.trendSeries
 import xyz.oleolegka.gachimuchi.domain.volumeSeries
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.BarChart
+import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.EmptyState
 import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.IdentityChip
 import xyz.oleolegka.gachimuchi.ui.components.LineChart
 import xyz.oleolegka.gachimuchi.ui.components.NoteText
+import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.SegmentControl
-import xyz.oleolegka.gachimuchi.ui.components.SiblingChip
 import xyz.oleolegka.gachimuchi.ui.components.StatCard
 import xyz.oleolegka.gachimuchi.ui.axisUnit
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
@@ -80,13 +81,18 @@ import java.time.temporal.ChronoUnit
  * Cardio has no records block either: §8.3c has never defined cardio records, so the
  * screen says that out loud instead of showing an empty "Records" heading.
  *
- * ── §12-A: the hangboard is several exercises ───────────────────────────────────
- * Edge and protocol are part of a hold exercise's IDENTITY, so "Hangs 20 mm 7:3" and
- * "Hangs 15 mm 7:3" are separate catalog rows with separate histories. That makes the
- * detail screen unusable without a way to hop between them, hence the sibling chips; the
- * identity chips under them state the edge and the protocol so it is never ambiguous which
- * of the siblings the chart belongs to. Those two values come from the catalog COLUMNS,
- * not from parsing the name.
+ * ── §12-A: the protocol is part of a hold exercise's identity ───────────────────
+ * "Hangs" at 7:3 and "Hangs" at 10:5 are separate catalog rows with separate histories, so
+ * the identity chip under the title states the protocol — it comes from the catalog COLUMNS,
+ * not from parsing the name — which is never ambiguous about which exercise the chart below
+ * belongs to.
+ *
+ * A §12-A sibling switcher used to sit here too, letting the screen hop between hangboard
+ * exercises that differed only by EDGE (the hangboard lip width, in mm). The edge attribute
+ * has been removed from the app entirely (see `MIGRATION_17_18` in `data/db/AppDatabase.kt`)
+ * and the switcher left with it: there is nothing left for it to compare, and "Hangs 20mm" is
+ * simply a different exercise from "Hangs" now, the same way any two differently-named
+ * exercises are.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,12 +103,12 @@ fun FormDetailScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var currentId by remember(exerciseId) { mutableStateOf(exerciseId) }
     var period by remember(exerciseId) { mutableStateOf(Period.MONTH) }
     var menuOpen by remember(exerciseId) { mutableStateOf(false) }
+    var confirmDelete by remember(exerciseId) { mutableStateOf(false) }
 
-    val entity = state.exerciseById(currentId)
-    val form = state.formOf(currentId)
+    val entity = state.exerciseById(exerciseId)
+    val form = state.formOf(exerciseId)
     val colors = LocalGachiColors.current
     val editor = rememberExerciseEditor()
 
@@ -116,7 +122,12 @@ fun FormDetailScreen(
 
     val activities = remember(state.events) { readActivities(state.events) }
     // the screen navigates by row number; the journal is keyed by identity (see ExerciseLink)
-    val link = remember(state.exercises, currentId) { state.linkOf(currentId) }
+    val link = remember(state.exercises, exerciseId) { state.linkOf(exerciseId) }
+    // what the delete confirmation warns about: not "are you sure" on its own, but how many
+    // entries are about to stop being shown anywhere
+    val entryCount = remember(activities, link) {
+        activities.count { it.form.exerciseLink()?.matches(link) == true }
+    }
     val trendAll = remember(activities, link, form) { trendSeries(activities, link, form) }
     /*
      * The two catalog columns are passed rather than left to their defaults, and the defaults
@@ -130,11 +141,6 @@ fun FormDetailScreen(
     }
     val records = remember(activities, link, form, entity.oneSided) {
         recordsOf(activities, link, form, entity.oneSided)
-    }
-
-    val siblings = remember(state.exercises, currentId, form) {
-        if (form != ExerciseForm.HOLD) emptyList()
-        else holdSiblings(state.exercises.map { it.toSibling() }, currentId)
     }
 
     // the bucket width follows the window, so a year is weeks rather than 365 bars
@@ -179,11 +185,11 @@ fun FormDetailScreen(
                 actions = {
                     /*
                      * The catalog is editable HERE and nowhere else, because this is the screen
-                     * that shows an exercise as a thing in its own right — its name, its edge,
-                     * its protocol, its history — and therefore the screen somebody is looking
-                     * at when they notice one of those is wrong. The picker is for choosing,
-                     * and a menu of corrections in a list you are trying to get out of quickly
-                     * is a menu in the way.
+                     * that shows an exercise as a thing in its own right — its name, its
+                     * protocol, its history — and therefore the screen somebody is looking at
+                     * when they notice one of those is wrong. The picker is for choosing, and
+                     * a menu of corrections in a list you are trying to get out of quickly is
+                     * a menu in the way.
                      */
                     IconButton(onClick = { menuOpen = true }) {
                         Icon(Icons.Filled.MoreVert, contentDescription = "More")
@@ -205,6 +211,13 @@ fun FormDetailScreen(
                                 editor.toggleHidden(entity)
                             },
                         )
+                        DropdownMenuItem(
+                            text = { Text("Delete exercise") },
+                            onClick = {
+                                menuOpen = false
+                                confirmDelete = true
+                            },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -222,29 +235,15 @@ fun FormDetailScreen(
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         NoteText(
-                            "An exercise is name + edge + protocol. \"Hangs 20 mm 7:3\" and " +
-                                "\"15 mm 7:3\" are different exercises. What is tracked and what " +
-                                "counts as a record is the WEIGHT."
+                            "An exercise is name + protocol. \"Hangs\" at 7:3 and \"Hangs\" at " +
+                                "10:5 are different exercises. What is tracked and what counts " +
+                                "as a record is the WEIGHT."
                         )
-                        if (siblings.size > 1) {
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                siblings.forEach { sibling ->
-                                    SiblingChip(
-                                        text = sibling.name,
-                                        selected = sibling.exerciseId == currentId,
-                                        accent = colors.forForm(ExerciseForm.HOLD),
-                                        onClick = { currentId = sibling.exerciseId },
-                                    )
-                                }
-                            }
-                        }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            entity.edgeMm?.let { IdentityChip("edge", "${it.toInt()} mm") }
-                            if (entity.protocolWorkSec != null && entity.protocolRestSec != null) {
-                                IdentityChip(
-                                    "protocol",
-                                    "${entity.protocolWorkSec.toInt()}:${entity.protocolRestSec.toInt()}",
-                                )
+                            val protocolBlock =
+                                entity.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
+                            if (protocolBlock != null) {
+                                IdentityChip("protocol", "${protocolBlock.workSec}:${protocolBlock.restSec}")
                             }
                             IdentityChip("metric", "weight")
                         }
@@ -305,6 +304,29 @@ fun FormDetailScreen(
 
             item { RecordsBlock(form, records, today) }
         }
+    }
+
+    if (confirmDelete) {
+        ConfirmRemoveDialog(
+            title = "Delete this exercise?",
+            subject = entity.name,
+            explanation = (
+                if (entryCount == 0) {
+                    "Nothing has been recorded under it yet, so nothing else disappears with it. "
+                } else {
+                    "Its $entryCount ${if (entryCount == 1) "entry" else "entries"} go with it " +
+                        "and stop showing anywhere - the history, the calendar, its own trend " +
+                        "and records, the streak. "
+                }
+                ) + REMOVAL_IS_REVERSIBLE,
+            confirmLabel = "Delete",
+            onConfirm = {
+                confirmDelete = false
+                editor.delete(entity)
+                onClose()
+            },
+            onDismiss = { confirmDelete = false },
+        )
     }
 }
 
@@ -401,15 +423,35 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
 
             else -> {
                 SectionHeader("Records", "with the date")
+                /*
+                 * ONE ROW PER AXIS, not one per [ExerciseRecord]. `holdRecord` (domain/Records.kt)
+                 * is right to keep the left hand's best and the right hand's best as two separate
+                 * comparisons — years of divergence between them makes merging the COMPARISON
+                 * dishonest. But a screen that then drew each of those as its own full-width
+                 * card, both captioned "Most weight hung", read as two different achievements
+                 * for two different exercises rather than one exercise reported per hand. Same
+                 * axis, same card, both hands on one line — see [mergedValue] and [mergedWhen].
+                 *
+                 * `groupBy` keeps the order [holdRecord] already produced (left, right, then the
+                 * sets that named no side), so a two-handed exercise or a strength exercise —
+                 * where every group is a singleton — draws exactly as it always did.
+                 */
+                val grouped = records.groupBy { it.axis }.values.toList()
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    records.forEachIndexed { index, record ->
-                        val (number, unit) = fmtValueParts(record.value, recordFormat(record))
+                    grouped.forEachIndexed { index, group ->
+                        val leading = group.first()
+                        val single = group.size == 1
+                        val (number, unit) = fmtValueParts(leading.value, recordFormat(leading))
                         StatCard(
-                            label = recordLabel(record),
-                            value = number,
+                            label = recordLabel(leading),
+                            value = if (single) number else mergedValue(group),
                             unit = unit,
-                            `when` = fmtShortDay(LocalDate.parse(record.opDate)),
-                            // only the leading record gets the badge: two green pills next to
+                            `when` = if (single) {
+                                fmtShortDay(LocalDate.parse(leading.opDate))
+                            } else {
+                                mergedWhen(group)
+                            },
+                            // only the leading row gets the badge: two green pills next to
                             // each other stop meaning "this is the notable one"
                             badge = index == 0,
                             modifier = Modifier.fillMaxWidth(),
@@ -419,6 +461,28 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
             }
         }
     }
+}
+
+/**
+ * "Left" / "Right" / "No side" — the same words [FormDetailScreen]'s own identity chip and
+ * `WorkoutLogScreen`'s cards already use for a [HoldSide], plus the honest third case: a
+ * record built from sets that named no hand at all ([ExerciseRecord.sideMissing]). Never
+ * called for a record that is not part of a merged, side-split group — see [mergedValue].
+ */
+private fun sideTag(record: ExerciseRecord): String = when (record.side) {
+    HoldSide.LEFT -> "Left"
+    HoldSide.RIGHT -> "Right"
+    null -> "No side"
+}
+
+/** "Left 10 / Right 8" — the big-number line for a merged axis group; the unit is shared. */
+private fun mergedValue(group: List<ExerciseRecord>): String = group.joinToString(" / ") { record ->
+    "${sideTag(record)} ${fmtValueParts(record.value, recordFormat(record)).first}"
+}
+
+/** "Left Aug 5 / Right Jul 20" — every side's own date, §12-C still honoured per side. */
+private fun mergedWhen(group: List<ExerciseRecord>): String = group.joinToString(" / ") { record ->
+    "${sideTag(record)} ${fmtShortDay(LocalDate.parse(record.opDate))}"
 }
 
 private fun recordLabel(record: ExerciseRecord): String = when (record.axis) {
@@ -489,12 +553,3 @@ private fun historySpanDays(trend: FormSeries?, volume: FormSeries?, today: Loca
         .minByOrNull { it.opDate } ?: return 0
     return ChronoUnit.DAYS.between(LocalDate.parse(first.opDate), today).toInt().coerceAtLeast(0)
 }
-
-/** Catalog row -> the sibling record the §12-A switcher is built from. */
-private fun ExerciseEntity.toSibling() = HoldSibling(
-    exerciseId = id,
-    name = name,
-    edgeMm = edgeMm,
-    workSec = protocolWorkSec,
-    restSec = protocolRestSec,
-)

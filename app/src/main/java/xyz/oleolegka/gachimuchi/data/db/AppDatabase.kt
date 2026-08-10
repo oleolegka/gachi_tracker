@@ -9,9 +9,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.serialization.json.contentOrNull
 import xyz.oleolegka.gachimuchi.data.WriteTime
 import xyz.oleolegka.gachimuchi.data.opDateOfPayload
+import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
+import xyz.oleolegka.gachimuchi.domain.fmtNum
 import xyz.oleolegka.gachimuchi.domain.freeExerciseName
+import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.newUid
+import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.planLegacyAmendmentMigration
 
 /**
  * The local database (SQLite via Room). The schema repeats the server one (`bot/db.py`):
@@ -39,7 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.newUid
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 16,
+    version = 23,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1085,12 +1090,684 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 16 -> 17: the length of ONE hold is now recorded on the set that used it.
+         *
+         * [xyz.oleolegka.gachimuchi.domain.HoldSet.holdSec] existed in the payload from the
+         * start, but nothing ever wrote it — the entry card asked for added weight and reps and
+         * never for how long a hang lasted, so every hold set in every journal has always
+         * carried a null there. The cost was quiet: a protocol-led hold could still get a
+         * length by falling back to its exercise's work:rest snapshot ([HoldSet.workSec], see
+         * [xyz.oleolegka.gachimuchi.domain.holdSecondsUnderTension]), but the record axis
+         * ([xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord]) reads `hold_sec` ALONE and
+         * never that fallback, so "hung longer" could not fire, ever, for any hold in any
+         * journal — and a hold with no protocol at all (a plank) had no length recorded
+         * anywhere, not even for the volume chart.
+         *
+         * ── The backfill, and its one honest limit ───────────────────────────────────
+         * No column changes here — `hold_sec` is a payload field, not a table column — so this
+         * is a payload rewrite exactly like [MIGRATION_13_14]'s body-weight snapshot. Every
+         * existing `hold_set` row that carries a protocol snapshot (`work_sec`) and no
+         * `hold_sec` of its own gets `hold_sec` set to that snapshot: for a protocol-led hold
+         * the two ARE the same number by definition (§12-A), so this invents nothing.
+         *
+         * A hold with no protocol snapshot — the unweighted plank, an old hangboard set logged
+         * before the exercise carried a protocol at all — is left exactly as it was. There is no
+         * honest number to give it: nobody recorded how long that hold lasted, and inventing an
+         * average would be training data the user never produced.
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val rewritten = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `payload` FROM `events` WHERE `type` = 'hold_set'"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        withHoldSecFromProtocol(c.getString(1))?.let { rewritten += id to it }
+                    }
+                }
+                for ((id, payload) in rewritten) {
+                    db.execSQL(
+                        "UPDATE `events` SET `payload` = ? WHERE `id` = ?",
+                        arrayOf<Any>(payload, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * Version 17 -> 18: the hangboard edge (the lip width, in mm) leaves the domain model
+         * entirely, and the §12-A sibling switcher that compared exercises by it leaves with it.
+         *
+         * ── What was wrong ───────────────────────────────────────────────────────
+         * Nothing was wrong with the column; the owner simply does not want it any more. It is
+         * a climbing-specific value with no comparison this app has any business making — "it
+         * lives in the name, I don't need edge-based comparison" — and keeping a column, an
+         * identity dimension and a whole switcher screen around for a fact the app no longer
+         * cares to model would be dead weight pretending to be a feature.
+         *
+         * ── Why FOLDING rather than DROPPING ─────────────────────────────────────
+         * An edge on file is a number the user hand-recorded standing at the hangboard, and
+         * dropping the column outright would erase it as though it had never been said. So
+         * before the column goes, every row that has one gets it folded into its own NAME —
+         * "Hangs" with a 20 mm edge becomes "Hangs 20mm" — unconditionally, for every row with
+         * a non-null edge and not only the ones that are about to collide. It is a fact the user
+         * recorded and it stays legible even for a row whose edge nothing else on the phone
+         * shares. The number goes through [xyz.oleolegka.gachimuchi.domain.fmtNum] for the same
+         * reason the old edge field's own comment gave: "20" rather than "20.0", an edge is
+         * written the way it is spoken.
+         *
+         * ── Why RENAMING beats MERGING here too ──────────────────────────────────
+         * Folding the edge into two different names can still produce a collision under the new
+         * identity rule — a row already called "Hangs 20mm" with no edge of its own, and another
+         * called "Hangs" with a 20 mm edge that has just been folded to the same words. Exactly
+         * the argument [MIGRATION_14_15] makes for its own duplicates applies again: merging
+         * would repoint sets inside payloads with nobody watching, and leaving one row's key
+         * silently different from what it displays would hide a duplicate rather than resolve
+         * it. So a collision here is broken the same way — by [freeExerciseName] appending
+         * " (2)" — reusing [fillIdentityKeys] rather than a second mechanism, because "how a
+         * clash is broken" is a rule this schema already has exactly one implementation of.
+         *
+         * ── Sequence, and why it is in this order ────────────────────────────────
+         * 1. While `edge_mm` still exists, every row's `name` is updated in place, for every row
+         *    where `edge_mm IS NOT NULL` — this has to happen before the column carrying the
+         *    value is gone.
+         * 2. The `exercises` table is rebuilt without `edge_mm`, following the exact
+         *    `_new_exercises` pattern [MIGRATION_14_15] uses (temp `sqlite_sequence`
+         *    preservation, `INSERT INTO _new_exercises SELECT ...`, `DROP TABLE`, rename,
+         *    recreate indices, restore `sqlite_sequence`).
+         * 3. [fillIdentityKeys] recomputes `identity_key` for every row under the NEW rule
+         *    (name + form + protocol, no edge), resolving any collision the fold produced.
+         *
+         * ── What is deliberately NOT done here, and why ──────────────────────────
+         * NO PAYLOAD REWRITE. [xyz.oleolegka.gachimuchi.domain.HoldSet.edgeMm] and
+         * `PortableExercise.edgeMm` are removed from their Kotlin classes in this same change,
+         * which stops this app from writing or reading `edge_mm` going forward; both JSON
+         * configs already set `ignoreUnknownKeys`, so an event payload or a backup file still
+         * carrying an `"edge_mm"` key from before this migration decodes exactly as before,
+         * minus a field that is no longer asked for — inert, not corrupted. Unlike `hold_sec` in
+         * [MIGRATION_16_17], nothing here reads that snapshot back out to compute anything, so
+         * there is no defect to backfill and no honest number this migration could write into a
+         * payload that was already complete for what it recorded.
+         *
+         * A separate Python bot is documented ([xyz.oleolegka.gachimuchi.domain.HoldSet]'s own
+         * KDoc, before this change) to read and write this same payload shape; this app's own
+         * exports diverging from what it still expects is a known, accepted consequence and is
+         * out of scope for this repository.
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val edged = ArrayList<Pair<Long, String>>()
+                db.query(
+                    "SELECT `id`, `name`, `edge_mm` FROM `exercises` WHERE `edge_mm` IS NOT NULL"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val name = c.getString(1)
+                        val edge = c.getDouble(2)
+                        edged += id to "$name ${fmtNum(edge)}mm"
+                    }
+                }
+                for ((id, name) in edged) {
+                    db.execSQL("UPDATE `exercises` SET `name` = ? WHERE `id` = ?", arrayOf<Any>(name, id))
+                }
+
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v18` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'exercises'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`protocol_work_sec` REAL, " +
+                        "`protocol_rest_sec` REAL, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`one_sided` INTEGER NOT NULL, " +
+                        "`bodyweight_share` REAL, " +
+                        "`hidden` INTEGER NOT NULL, " +
+                        "`identity_key` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`, `bodyweight_share`, `hidden`, " +
+                        "`identity_key`) " +
+                        "SELECT `id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`protocol_work_sec`, `protocol_rest_sec`, `default_rest_sec`, " +
+                        "`led_by_protocol`, `uid`, `one_sided`, `bodyweight_share`, `hidden`, '' " +
+                        "FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+
+                fillIdentityKeys(db)
+
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_uid` ON `exercises` (`uid`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_space_id_identity_key` " +
+                        "ON `exercises` (`space_id`, `identity_key`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v18`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v18`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v18`")
+            }
+        }
+
+        /**
+         * Version 18 -> 19: an exercise's protocol becomes a REFERENCE to a program in the
+         * timer's library, instead of a bare work:rest pair.
+         *
+         * ── Why ───────────────────────────────────────────────────────────────────
+         * A work:rest pair only describes the simplest cycle. A real hangboard protocol —
+         * "seven seconds work, three rest, six times, pause, switch hands, repeat" — cannot be
+         * written as two numbers, and the program library ([ProgramEntity]/[ProgramGroupEntity]/
+         * [ProgramBlockEntity], `domain/Program.kt`) already models exactly that shape. So the
+         * two protocol columns leave `exercises` and every exercise that had a filled-in
+         * protocol gets a matching MINIMAL program (one group, one block, `repeats == 1` on
+         * both) built from it and a `protocol_program_id` pointing there. See
+         * `ActivityRepository`'s find-or-create-protocol-program logic for the live-app mirror
+         * of what this migration does once, at upgrade time.
+         *
+         * ── Sequence ──────────────────────────────────────────────────────────────
+         * 1. GROUP EXERCISES BY PROTOCOL BEFORE TOUCHING THE SCHEMA, while
+         *    `protocol_work_sec`/`protocol_rest_sec` still exist. An exercise counts as having a
+         *    protocol when both are non-null and `work > 0`. Rows are grouped by the EXACT
+         *    `(work, rest)` value pair, in exercise-id order: the first exercise of a pair names
+         *    the new program, and every other exercise sharing that pair gets the SAME program's
+         *    id. Grouping by value rather than comparing content is equivalent and simpler,
+         *    because two rows with identical numbers produce structurally identical minimal
+         *    programs by construction.
+         * 2. REBUILD `exercises`: drop the two columns, add `protocol_program_id`, populate it
+         *    from the map step 1 built (null for a row with no protocol) — the standard
+         *    `_new_exercises` rebuild pattern [MIGRATION_17_18] uses.
+         * 3. RECOMPUTE `identity_key` for every row, but through [fillIdentityKeysWithProgram]
+         *    and NOT through [fillIdentityKeys] — see that function's own KDoc for why reusing
+         *    the existing helper here would be a materially worse mistake than it looks: it is
+         *    still called, unmodified, by [MIGRATION_14_15] and [MIGRATION_17_18], which run at
+         *    schema points where `protocol_program_id` does not exist yet, and teaching it about
+         *    programs would crash any multi-hop upgrade that passes through those two versions
+         *    on the way here.
+         * 4. Recreate the three indices exactly as [MIGRATION_17_18] does.
+         *
+         * ── What does NOT happen here ────────────────────────────────────────────
+         * NO EVENT PAYLOAD IS REWRITTEN. A hold set's `work_sec`/`hold_sec` snapshot
+         * ([xyz.oleolegka.gachimuchi.domain.HoldSet]) is a fact about that set at the moment it
+         * was recorded and stays exactly as it was; only `exercises` and the new `programs` rows
+         * change. That is also why the migration test's primary proof is a byte-for-byte
+         * comparison of stored event payloads before and after the upgrade — see
+         * `MigrationTest.kt`.
+         *
+         * A migration-created program is NOT marked as auto-generated in any way — no hidden
+         * flag, nothing that makes it a second-class citizen of the library. It reads exactly
+         * like a program somebody typed in by hand, because the owner wants the library to stay
+         * fully-featured and every entry in it to be a real one.
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                data class LegacyProtocol(
+                    val exerciseId: Long,
+                    val name: String,
+                    val createdAt: String,
+                    val work: Double,
+                    val rest: Double,
+                )
+
+                val protocolRows = ArrayList<LegacyProtocol>()
+                db.query(
+                    "SELECT `id`, `name`, `created_at`, `protocol_work_sec`, `protocol_rest_sec` " +
+                        "FROM `exercises` ORDER BY `id`"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val work = if (c.isNull(3)) null else c.getDouble(3)
+                        val rest = if (c.isNull(4)) null else c.getDouble(4)
+                        if (work != null && work > 0 && rest != null) {
+                            protocolRows += LegacyProtocol(
+                                exerciseId = c.getLong(0), name = c.getString(1),
+                                createdAt = c.getString(2), work = work, rest = rest,
+                            )
+                        }
+                    }
+                }
+
+                var nextPosition = 0
+                db.query("SELECT COUNT(*) FROM `programs`").use { c ->
+                    if (c.moveToFirst()) nextPosition = c.getInt(0)
+                }
+
+                // exercise id -> the new program's local row id, for step 2's UPDATE pass
+                val programIdOfExercise = HashMap<Long, Long>()
+                // the (work, rest) pair already seen -> the program id it produced, so every
+                // OTHER exercise with the identical pair gets the same program rather than a
+                // duplicate — see step 1 in the KDoc above
+                val programIdOfPair = LinkedHashMap<Pair<Double, Double>, Long>()
+
+                for (row in protocolRows) {
+                    val pair = row.work to row.rest
+                    val sharedProgramId = programIdOfPair[pair]
+                    if (sharedProgramId != null) {
+                        programIdOfExercise[row.exerciseId] = sharedProgramId
+                        continue
+                    }
+                    val uid = newUid()
+                    db.execSQL(
+                        "INSERT INTO `programs` (`space_id`, `name`, `prepare_sec`, `position`, " +
+                            "`created_at`, `exercise_id`, `category`, `uid`) VALUES (?,?,?,?,?,?,?,?)",
+                        arrayOf<Any?>(
+                            LOCAL_SPACE_ID, "${row.name} protocol", PREPARE_DEFAULT_SEC,
+                            nextPosition++, row.createdAt, row.exerciseId, "Protocols", uid,
+                        ),
+                    )
+                    val programId = lastInsertRowId(db)
+                    db.execSQL(
+                        "INSERT INTO `program_groups` (`program_id`, `name`, `position`, " +
+                            "`repeats`, `rest_between_repeats_sec`, `rest_after_sec`) " +
+                            "VALUES (?,?,?,?,?,?)",
+                        arrayOf<Any?>(programId, row.name, 0, 1, 0, 0),
+                    )
+                    val groupId = lastInsertRowId(db)
+                    db.execSQL(
+                        "INSERT INTO `program_blocks` (`group_id`, `name`, `position`, " +
+                            "`work_sec`, `rest_sec`, `repeats`) VALUES (?,?,?,?,?,?)",
+                        arrayOf<Any?>(groupId, row.name, 0, row.work.toInt(), row.rest.toInt(), 1),
+                    )
+                    programIdOfPair[pair] = programId
+                    programIdOfExercise[row.exerciseId] = programId
+                }
+
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v19` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'exercises'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_exercises` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`form` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`protocol_program_id` INTEGER, " +
+                        "`default_rest_sec` INTEGER, " +
+                        "`led_by_protocol` INTEGER, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`one_sided` INTEGER NOT NULL, " +
+                        "`bodyweight_share` REAL, " +
+                        "`hidden` INTEGER NOT NULL, " +
+                        "`identity_key` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_exercises` (`id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`default_rest_sec`, `led_by_protocol`, `uid`, `one_sided`, " +
+                        "`bodyweight_share`, `hidden`, `identity_key`) " +
+                        "SELECT `id`, `space_id`, `name`, `form`, `created_at`, " +
+                        "`default_rest_sec`, `led_by_protocol`, `uid`, `one_sided`, " +
+                        "`bodyweight_share`, `hidden`, '' FROM `exercises`"
+                )
+                db.execSQL("DROP TABLE `exercises`")
+                db.execSQL("ALTER TABLE `_new_exercises` RENAME TO `exercises`")
+
+                for ((exerciseId, programId) in programIdOfExercise) {
+                    db.execSQL(
+                        "UPDATE `exercises` SET `protocol_program_id` = ? WHERE `id` = ?",
+                        arrayOf<Any>(programId, exerciseId),
+                    )
+                }
+
+                fillIdentityKeysWithProgram(db)
+
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercises_space_id_id` " +
+                        "ON `exercises` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_uid` ON `exercises` (`uid`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_space_id_identity_key` " +
+                        "ON `exercises` (`space_id`, `identity_key`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v19`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v19`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v19`")
+            }
+        }
+
+        /**
+         * Version 19 -> 20: a program in the library can be HIDDEN, and once an exercise's
+         * protocol IS a program, that program's content freezes.
+         *
+         * ── The freeze itself is not schema ──────────────────────────────────────────
+         * "A referenced program cannot be edited by content" is enforced in
+         * [xyz.oleolegka.gachimuchi.data.ProgramRepository.save], which checks — LIVE, at
+         * every write — whether any row of `exercises` currently names this program through
+         * `protocol_program_id`. There is no column for it and nothing here computes it once
+         * and bakes it in, on the same grounds `identity_key` is recomputed by CODE rather
+         * than carried across a migration as a stored fact (see [MIGRATION_14_15]): whether a
+         * program is somebody's protocol can change on a later write (an exercise repointed to
+         * a different program), and a frozen snapshot of that answer would go stale the moment
+         * it did.
+         *
+         * ── `hidden`, additive, and why the rebuild anyway ───────────────────────────
+         * NOT NULL with false for every row that predates it — nothing in the library was
+         * hidden before there was a way to say so, on the same grounds [MIGRATION_14_15] gives
+         * for the exercise catalog's own `hidden`. SQLite refuses to add a NOT NULL column to a
+         * populated table without a DEFAULT, and a DEFAULT clause added that way would stay on
+         * the column forever, leaving an upgraded phone with `hidden INTEGER NOT NULL DEFAULT
+         * 0` where a fresh install has `hidden INTEGER NOT NULL` — invisible to Room's own
+         * identity hash and caught only by [SchemaParityTest]. So `programs` is rebuilt exactly
+         * as [MIGRATION_17_18] rebuilds `exercises`: a `_new_programs` table with the column in
+         * place, every existing row copied across with `hidden = 0`, the old table dropped, the
+         * new one renamed, indices and the `sqlite_sequence` counter restored.
+         *
+         * `program_groups` cascades from `programs` — dropping the parent WITH FOREIGN KEYS
+         * ENABLED would take the groups (and through them the blocks) with it, and Room only
+         * turns foreign keys on in `onOpen`, which runs after migrations. Off here, so the
+         * rebuild is safe for the same reason every earlier one naming this hazard is.
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TEMP TABLE `seq_before_v20` AS SELECT `name`, `seq` FROM `sqlite_sequence` " +
+                        "WHERE `name` = 'programs'"
+                )
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `_new_programs` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`space_id` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`prepare_sec` INTEGER NOT NULL, " +
+                        "`position` INTEGER NOT NULL, " +
+                        "`created_at` TEXT NOT NULL, " +
+                        "`exercise_id` INTEGER, " +
+                        "`category` TEXT NOT NULL, " +
+                        "`uid` TEXT NOT NULL, " +
+                        "`hidden` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `_new_programs` (`id`, `space_id`, `name`, `prepare_sec`, " +
+                        "`position`, `created_at`, `exercise_id`, `category`, `uid`, `hidden`) " +
+                        "SELECT `id`, `space_id`, `name`, `prepare_sec`, `position`, `created_at`, " +
+                        "`exercise_id`, `category`, `uid`, 0 FROM `programs`"
+                )
+                db.execSQL("DROP TABLE `programs`")
+                db.execSQL("ALTER TABLE `_new_programs` RENAME TO `programs`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_programs_space_id_id` " +
+                        "ON `programs` (`space_id`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_programs_uid` ON `programs` (`uid`)"
+                )
+
+                // delete-then-insert rather than INSERT OR REPLACE, for the reason given in
+                // [MIGRATION_6_7]: `sqlite_sequence` carries no unique index on `name`
+                db.execSQL(
+                    "DELETE FROM `sqlite_sequence` WHERE `name` IN (SELECT `name` FROM `seq_before_v20`)"
+                )
+                db.execSQL(
+                    "INSERT INTO `sqlite_sequence` (`name`, `seq`) SELECT `name`, `seq` FROM `seq_before_v20`"
+                )
+                db.execSQL("DROP TABLE `seq_before_v20`")
+            }
+        }
+
+        /**
+         * Version 20 -> 21: a correction becomes a whole new row instead of a patch — see
+         * domain/Amendments.kt's header for the model, and
+         * [xyz.oleolegka.gachimuchi.domain.planLegacyAmendmentMigration] for the fold this
+         * migration is a thin SQL shell around.
+         *
+         * No column changes at all: every existing row is untouched, and this only APPENDS —
+         * for every row this phone's journal currently reads as corrected, one new row carrying
+         * the folded-together result and one [xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED]
+         * superseding the original. A row nobody ever corrected, or one that is currently
+         * deleted, gets nothing written for it — see that function's own KDoc for why.
+         *
+         * The whole table is read into memory first because the plan needs to see it as one
+         * journal (a folded verdict about one row can depend on any other row); at the personal
+         * scale this schema is built for, that is nothing.
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val events = ArrayList<JournalEvent>()
+                db.query(
+                    "SELECT `id`, `ts`, `space_id`, `author_id`, `type`, `payload`, `workout_id`, " +
+                        "`uid`, `workout_uid`, `op_date`, `ts_utc`, `tz_offset_min` FROM `events`"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        events += JournalEvent(
+                            id = c.getLong(0), ts = c.getString(1),
+                            spaceId = c.getLong(2), authorId = c.getLong(3),
+                            type = c.getString(4), payload = c.getString(5),
+                            workoutId = if (c.isNull(6)) null else c.getLong(6),
+                            uid = c.getString(7),
+                            workoutUid = if (c.isNull(8)) null else c.getString(8),
+                            opDate = if (c.isNull(9)) null else c.getString(9),
+                            tsUtc = if (c.isNull(10)) null else c.getString(10),
+                            tzOffsetMin = if (c.isNull(11)) null else c.getInt(11),
+                        )
+                    }
+                }
+
+                for (row in planLegacyAmendmentMigration(events)) {
+                    db.execSQL(
+                        "INSERT INTO `events` (`ts`, `space_id`, `author_id`, `type`, `payload`, " +
+                            "`workout_id`, `uid`, `workout_uid`, `op_date`, `ts_utc`, `tz_offset_min`) " +
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        arrayOf<Any?>(
+                            row.ts, LOCAL_SPACE_ID, LOCAL_AUTHOR_ID, row.type, row.payload,
+                            row.workoutId, row.uid, row.workoutUid, opDateOfPayload(row.payload),
+                            row.tsUtc, row.tzOffsetMin,
+                        )
+                    )
+                }
+            }
+        }
+
+        /**
+         * Version 21 -> 22: a row also states WHEN THE TRAINING HAPPENED, separately from [ts]
+         * (when the ROW was written) — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.occurredTs]
+         * for the fact this exists to state and [xyz.oleolegka.gachimuchi.domain.happenedAt] for
+         * the one place every reader asks it through.
+         *
+         * ── Why every existing row is backfilled with its own `ts` ───────────────────
+         * That is exactly what this app already treated a row's position as meaning, for every
+         * row on the phone at this point — including a row [MIGRATION_20_21] just wrote a moment
+         * ago for a lineage that carried a legacy patch amendment, whose `ts` is already the
+         * FOLDED-in correction time rather than the original set's, because that migration
+         * inherited the amendment's own `ts` for the exact same reason (see its own KDoc). This
+         * step changes nothing about how anything reads relative to right after that one; it
+         * only gives a name to the fact every screen already relied on, so that a FUTURE
+         * correction can start keeping it instead of losing it to the correction's own moment.
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `occurred_ts` TEXT")
+                db.execSQL("UPDATE `events` SET `occurred_ts` = `ts`")
+            }
+        }
+
+        /**
+         * Version 22 -> 23: an exercise can point at a picture — see
+         * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.pictureId].
+         *
+         * ONE NULLABLE COLUMN, NO DEFAULT, NO BACKFILL — a plain `ALTER TABLE` is enough. There
+         * is nothing to migrate the way `bodyweight_share` or `occurred_ts` had a value to
+         * recover from the rows already there: no exercise had a picture before this column
+         * existed, so every existing row reading back "none" is the true answer, not a
+         * placeholder standing in for one that could be computed.
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `picture_id` TEXT")
+            }
+        }
+
+        /**
+         * The last row id `INSERT`ed on this connection — SQLite's own `last_insert_rowid()`,
+         * used inside [MIGRATION_18_19] to learn the autoincrement id of a row this migration
+         * just wrote with raw `execSQL`, which returns nothing.
+         */
+        private fun lastInsertRowId(db: SupportSQLiteDatabase): Long {
+            db.query("SELECT last_insert_rowid()").use { c ->
+                c.moveToFirst()
+                return c.getLong(0)
+            }
+        }
+
+        /**
+         * [fillIdentityKeys] recomputes the OLD `(name, form, work, rest)`-shaped identity, and
+         * is used only by [MIGRATION_14_15] and [MIGRATION_17_18] — both of which run at schema
+         * points BEFORE `protocol_program_id` exists (that column is only introduced four, and
+         * one, versions later, by [MIGRATION_18_19]). This is a separate function rather than a
+         * change to that one, and the separation is deliberate — read this before ever
+         * "simplifying" the two into one shared helper.
+         *
+         * ── Why not teach [fillIdentityKeys] about programs instead ─────────────────
+         * If `fillIdentityKeys` read `protocol_program_id` or resolved it against `programs.uid`,
+         * every multi-hop upgrade that passes through 14->15 or 17->18 on its way to a LATER
+         * version — which this app's own migration tests exercise deliberately, e.g. a phone
+         * that skipped every release in between — would crash with "no such column" the moment
+         * it hit either of those two steps, because the column those steps run against genuinely
+         * does not have `protocol_program_id` yet. That is a materially worse failure than the
+         * narrow "(2)"-suffix cosmetic quirk accepted for [MIGRATION_17_18]'s edge fold, where
+         * the identity's SHAPE never changed underneath `fillIdentityKeys` across the versions
+         * that call it. Here the shape itself changes, from two numbers to a program reference,
+         * which `fillIdentityKeys` cannot compute at 14->15 or 17->18 because the concept does
+         * not exist there yet.
+         *
+         * It is safe for `fillIdentityKeys` to go on computing the OLD shape even mid-chain,
+         * because whatever it writes for a row that ALSO passes through [MIGRATION_18_19] is
+         * fully overwritten here anyway — its output is provisional the moment a chain continues
+         * past it into 19. So the two functions duplicate a small amount of structure (the
+         * per-space "taken" bookkeeping, the id-ordered walk) rather than share it; that
+         * duplication is the accepted cost of not touching a helper two already-shipped,
+         * already-tested migrations depend on behaving exactly as it does today.
+         *
+         * ── What this one does ───────────────────────────────────────────────────────
+         * Queries `id`, `space_id`, `name`, `form`, `protocol_program_id` from the now-rebuilt
+         * `exercises` table, resolves each non-null `protocol_program_id` against a fresh
+         * `programs.id -> programs.uid` map (queried here rather than reused from
+         * [MIGRATION_18_19]'s own step 1 map, because a row whose protocol program was created
+         * under the OLD 14-17 lineage and never touched by step 1 still needs resolving the same
+         * way), and writes `name`/`identity_key` with the new three-argument
+         * [exerciseIdentityKey] shape — same collision-in-id-order, `taken`-set bookkeeping
+         * [fillIdentityKeys] already uses, just keyed on a program uid instead of two numbers.
+         */
+        private fun fillIdentityKeysWithProgram(db: SupportSQLiteDatabase) {
+            data class Row(val id: Long, val spaceId: Long, val name: String, val form: Int, val programId: Long?)
+
+            val uidOfProgramId = HashMap<Long, String>()
+            db.query("SELECT `id`, `uid` FROM `programs`").use { c ->
+                while (c.moveToNext()) uidOfProgramId[c.getLong(0)] = c.getString(1)
+            }
+
+            val rows = ArrayList<Row>()
+            db.query(
+                "SELECT `id`, `space_id`, `name`, `form`, `protocol_program_id` " +
+                    "FROM `exercises` ORDER BY `id`"
+            ).use { c ->
+                while (c.moveToNext()) {
+                    rows += Row(
+                        id = c.getLong(0),
+                        spaceId = c.getLong(1),
+                        name = c.getString(2),
+                        form = c.getInt(3),
+                        programId = if (c.isNull(4)) null else c.getLong(4),
+                    )
+                }
+            }
+
+            val taken = HashMap<Long, MutableSet<String>>()
+            for (row in rows) {
+                val used = taken.getOrPut(row.spaceId) { HashSet() }
+                val programUid = row.programId?.let { uidOfProgramId[it] }
+                val name = freeExerciseName(row.name, row.form, programUid, used)
+                val key = exerciseIdentityKey(name, row.form, programUid)
+                used += key
+                db.execSQL(
+                    "UPDATE `exercises` SET `name` = ?, `identity_key` = ? WHERE `id` = ?",
+                    arrayOf<Any>(name, key, row.id),
+                )
+            }
+        }
+
+        /**
+         * One `hold_set` payload with `hold_sec` filled in from its own `work_sec` snapshot, or
+         * null when there is nothing to do — `hold_sec` already stated, no protocol snapshot to
+         * copy from, or a payload that will not parse.
+         *
+         * "Already stated" means a NUMBER already there, for the reason spelled out on
+         * [withExerciseUid]: `encodeDefaults` writes `"hold_sec": null` for a build that knows
+         * the field and has nothing to put in it, and reading that key's mere presence as "done"
+         * would skip every row this migration exists for.
+         */
+        private fun withHoldSecFromProtocol(payload: String): String? {
+            val json = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(payload)
+            }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+
+            val already = (json["hold_sec"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toDoubleOrNull()
+            if (already != null) return null
+
+            val work = (json["work_sec"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toDoubleOrNull()
+            if (work == null || work <= 0) return null
+
+            return kotlinx.serialization.json.JsonObject(
+                json + ("hold_sec" to kotlinx.serialization.json.JsonPrimitive(work))
+            ).toString()
+        }
+
+        /**
          * Gives every catalog row the key its own columns say it should have, renaming the
          * second row of a colliding pair so that the unique index can be created at all.
          *
          * In id order, so that the row that has been there longest keeps its name and the later
          * one is the one that is marked. Keys are tracked per profile because the index is, and
          * because two profiles are not each other's duplicates.
+         *
+         * Reads `name`, `form`, `protocol_work_sec` and `protocol_rest_sec` ONLY — no `edge_mm`,
+         * since schema version 18 (see [MIGRATION_17_18]).
+         *
+         * ── Why this uses [legacyProtocolIdentityKey] and not [exerciseIdentityKey] ──────
+         * This function's whole point is to key every row by the rule the schema used at the
+         * time [MIGRATION_14_15] and [MIGRATION_17_18] run — a bare `(name, form, work, rest)`
+         * pair, which is what [exerciseIdentityKey] computed BEFORE schema version 19. That
+         * signature moved on ([MIGRATION_18_19] changed identity to reference a program by uid
+         * instead), so calling the shared function from here today would ask it a question
+         * about a concept — a library program — that does not exist yet at either of the two
+         * schema points this function serves. See [MIGRATION_18_19]'s own KDoc, and
+         * [fillIdentityKeysWithProgram], for the new-shaped equivalent used at THAT step only.
          */
         private fun fillIdentityKeys(db: SupportSQLiteDatabase) {
             data class Row(
@@ -1098,14 +1775,13 @@ abstract class AppDatabase : RoomDatabase() {
                 val spaceId: Long,
                 val name: String,
                 val form: Int,
-                val edge: Double?,
                 val work: Double?,
                 val rest: Double?,
             )
 
             val rows = ArrayList<Row>()
             db.query(
-                "SELECT `id`, `space_id`, `name`, `form`, `edge_mm`, `protocol_work_sec`, " +
+                "SELECT `id`, `space_id`, `name`, `form`, `protocol_work_sec`, " +
                     "`protocol_rest_sec` FROM `exercises` ORDER BY `id`"
             ).use { c ->
                 while (c.moveToNext()) {
@@ -1114,9 +1790,8 @@ abstract class AppDatabase : RoomDatabase() {
                         spaceId = c.getLong(1),
                         name = c.getString(2),
                         form = c.getInt(3),
-                        edge = if (c.isNull(4)) null else c.getDouble(4),
-                        work = if (c.isNull(5)) null else c.getDouble(5),
-                        rest = if (c.isNull(6)) null else c.getDouble(6),
+                        work = if (c.isNull(4)) null else c.getDouble(4),
+                        rest = if (c.isNull(5)) null else c.getDouble(5),
                     )
                 }
             }
@@ -1124,14 +1799,42 @@ abstract class AppDatabase : RoomDatabase() {
             val taken = HashMap<Long, MutableSet<String>>()
             for (row in rows) {
                 val used = taken.getOrPut(row.spaceId) { HashSet() }
-                val name = freeExerciseName(row.name, row.form, row.edge, row.work, row.rest, used)
-                val key = exerciseIdentityKey(name, row.form, row.edge, row.work, row.rest)
+                val name = legacyFreeExerciseName(row.name, row.form, row.work, row.rest, used)
+                val key = legacyProtocolIdentityKey(name, row.form, row.work, row.rest)
                 used += key
                 db.execSQL(
                     "UPDATE `exercises` SET `name` = ?, `identity_key` = ? WHERE `id` = ?",
                     arrayOf<Any>(name, key, row.id),
                 )
             }
+        }
+
+        /**
+         * The identity key exactly as this schema computed it BEFORE schema version 19 — a bare
+         * `(name, form, work, rest)` pair, normalized and joined the same way
+         * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity.key] used to. Used only by
+         * [fillIdentityKeys], which is what still needs this shape — see that function's KDoc.
+         */
+        private fun legacyProtocolIdentityKey(name: String, form: Int, work: Double?, rest: Double?): String {
+            val normalized = normPhrase(name) ?: name.trim().lowercase().replace("|", " ")
+            fun num(v: Double?) = v?.toString() ?: ""
+            return "$normalized|$form|${num(work)}|${num(rest)}"
+        }
+
+        /** [freeExerciseName], against [legacyProtocolIdentityKey] — see [fillIdentityKeys]. */
+        private fun legacyFreeExerciseName(
+            name: String,
+            form: Int,
+            work: Double?,
+            rest: Double?,
+            taken: Set<String>,
+        ): String {
+            if (legacyProtocolIdentityKey(name, form, work, rest) !in taken) return name
+            for (n in 2..999) {
+                val candidate = "$name ($n)"
+                if (legacyProtocolIdentityKey(candidate, form, work, rest) !in taken) return candidate
+            }
+            return "$name (${System.nanoTime()})"
         }
 
         /**
@@ -1323,6 +2026,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
+            MIGRATION_21_22, MIGRATION_22_23,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

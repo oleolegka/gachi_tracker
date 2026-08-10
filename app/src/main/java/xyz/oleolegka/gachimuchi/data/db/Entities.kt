@@ -158,26 +158,59 @@ data class EventEntity(
      * rules would silently move it.
      */
     @androidx.room.ColumnInfo(name = "tz_offset_min") val tzOffsetMin: Int? = null,
+    /**
+     * WHEN THIS ROW'S OWN TRAINING HAPPENED (schema version 22), as opposed to [ts] — the
+     * instant it was WRITTEN.
+     *
+     * ── Why the two ever disagree ────────────────────────────────────────────────
+     * They never used to: the journal was append-only in the fullest sense, so a row's position
+     * — and hence [ts] — was fixed the moment it was written, and "journal order" and "training
+     * order" were the same question. A correction breaks that (schema version 21): it is a
+     * WHOLE NEW ROW, appended at the moment of the CORRECTION, and its own [ts] is honestly
+     * that moment, not the moment of the training it corrects. A set fixed an hour after two
+     * later ones were logged would otherwise read as having happened AFTER them.
+     *
+     * ── The rule: inherited, not re-stamped ──────────────────────────────────────
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry] copies this column from the
+     * row being superseded onto its new version — so for the ORIGINAL entry it equals [ts] (it
+     * is its own training, freshly recorded), and for every correction after it it stays
+     * pinned to whatever the very first version said, however many times the row is corrected
+     * again. Read through [xyz.oleolegka.gachimuchi.domain.happenedAt], never directly, so a
+     * row from before this column existed (null) falls back to [ts] in the one place that
+     * decides it rather than at every call site.
+     *
+     * Nullable rather than backfilled with a rebuild, on the same grounds [tsUtc] is: every row
+     * this app ever wrote CAN be backfilled (see `MIGRATION_21_22`, a plain `UPDATE ... SET
+     * occurred_ts = ts`), so in practice this is null only for a merged-in row this app never
+     * touched at all.
+     */
+    @androidx.room.ColumnInfo(name = "occurred_ts") val occurredTs: String? = null,
 )
 
 /**
  * A canonical exercise (§11): statistics and records aggregate by `id` rather than by the
  * word an entry happens to carry, so "squat" and "squats" cannot end up as two histories.
  *
- * [edgeMm], [protocolWorkSec] and [protocolRestSec] are an EXTENSION over the server
- * table (which has five columns). The reason is §12-A: hangboard identity is
- * name + edge + protocol, so edge and protocol belong to the exercise, not to the set.
- * That refactor has not been done on the server yet (it is waiting for the design to
- * settle), so the schema here is DELIBERATELY ahead — when sync arrives, the server
- * will have to add these fields, otherwise identity will drift apart.
+ * [protocolProgramId] is an EXTENSION over the server table (which has five columns). The
+ * reason is §12-A: hangboard identity is name + protocol, so the protocol belongs to the
+ * exercise, not to the set. That refactor has not been done on the server yet (it is waiting
+ * for the design to settle), so the schema here is DELIBERATELY ahead — when sync arrives, the
+ * server will have to add an equivalent field, otherwise identity will drift apart.
+ *
+ * ── `edge_mm` used to be a third column here, and is gone (schema version 18) ────
+ * The hangboard edge (the hangboard lip width, in mm) was a climbing-specific attribute the
+ * owner decided this app no longer models, and the sibling switcher built on comparing it
+ * (`toHoldSibling`, `HoldSibling`, `holdSiblings`) left with it. See `MIGRATION_17_18` below
+ * for what happened to it: it is folded into the exercise NAME for every row that had one, not
+ * discarded, because it is a value the user hand-recorded.
  *
  * ── The identity is a constraint now, not a convention (schema version 15) ──────
  * §12-A was a rule written in documentation and obeyed by the readers, while the writer —
  * the one place that creates rows — looked an exercise up by NAME and handed back whatever
- * it found. Hangs on a 15 mm edge added while 20 mm hangs existed became 20 mm hangs, and
- * two histories merged for good, silently. [identityKey] closes it in the schema itself:
- * the four values that make an exercise what it is are folded into one string and carry a
- * UNIQUE index, so a second row of one identity is not something a bug can create.
+ * it found. Hangs added on a 10:5 protocol while a 7:3 "Hangs" existed became the 7:3 row,
+ * and two histories merged for good, silently. [identityKey] closes it in the schema itself:
+ * the values that make an exercise what it is are folded into one string and carry a UNIQUE
+ * index, so a second row of one identity is not something a bug can create.
  */
 @Entity(
     tableName = "exercises",
@@ -194,9 +227,34 @@ data class ExerciseEntity(
     /** Form code, the values of Python's `flow.FORM_*` (see ExerciseForm). */
     val form: Int,
     @androidx.room.ColumnInfo(name = "created_at") val createdAt: String,
-    @androidx.room.ColumnInfo(name = "edge_mm") val edgeMm: Double? = null,
-    @androidx.room.ColumnInfo(name = "protocol_work_sec") val protocolWorkSec: Double? = null,
-    @androidx.room.ColumnInfo(name = "protocol_rest_sec") val protocolRestSec: Double? = null,
+    /**
+     * The library program this exercise's protocol IS (schema version 19), or null for no
+     * protocol at all.
+     *
+     * ── What used to be here, and why it moved ───────────────────────────────────
+     * `protocol_work_sec`/`protocol_rest_sec` — a bare work:rest pair — described the simplest
+     * possible cycle and nothing past it: a real hangboard protocol ("seven seconds work, three
+     * rest, six times, pause, switch hands, repeat") cannot be written as two numbers, but the
+     * program library ([ProgramEntity]/[ProgramGroupEntity]/[ProgramBlockEntity],
+     * `domain/Program.kt`) already models exactly that shape. So an exercise's protocol is now a
+     * REFERENCE to one library program rather than a pair of columns, and the library holds the
+     * actual work/rest/repeat structure — see `ActivityRepository`'s find-or-create-protocol-
+     * program logic for how creating or editing a hold exercise's protocol gets its program into
+     * the library.
+     *
+     * ── Nullable and deliberately WITHOUT a foreign key ───────────────────────────
+     * The same reasoning [ProgramEntity.exerciseId] already gives a few lines above it in this
+     * same file, in reverse. A program is reference data that outlives the catalog row it points
+     * at; the mirror image is also true — an exercise's protocol program can be deleted from the
+     * library, or repointed to a different one when the exercise's protocol is corrected (see
+     * `ActivityRepository.editExercise`), and neither of those is a reason to touch the exercise
+     * row. `ON DELETE CASCADE` would silently strip a hangboard exercise of its identity the
+     * moment somebody tidied up the program library; `ON DELETE SET NULL` would still make
+     * deleting a program a silent edit of an unrelated table. A dangling id simply reads as "no
+     * protocol", exactly as a dangling `exercise_id` on a program reads as "no link" — the offer
+     * asks again, on this side the identity chip and the timer simply have nothing to show.
+     */
+    @androidx.room.ColumnInfo(name = "protocol_program_id") val protocolProgramId: Long? = null,
     /**
      * The rest between sets last chosen for this exercise, in seconds (schema version 5),
      * or null while nothing has been chosen yet.
@@ -234,11 +292,11 @@ data class ExerciseEntity(
      * hang, a pistol squat, a single-leg deadlift.
      *
      * ── Why the flag is here and the side is on the set ─────────────────────────
-     * Which hand a particular hang used is a fact about that hang
-     * ([xyz.oleolegka.gachimuchi.domain.HoldSet.side]). Whether the exercise is done one hand
-     * at a time is a fact about the exercise, and it has to be answerable BEFORE any set
-     * exists — the entry card has to know to ask which hand, and the timer has to know to
-     * announce the change of hands between sets. Neither can wait for a set to be logged.
+     * Which side a particular set used is a fact about that set
+     * ([xyz.oleolegka.gachimuchi.domain.LoadedSet.side]). Whether the exercise is done one
+     * limb at a time is a fact about the exercise, and it has to be answerable BEFORE any set
+     * exists — the entry card has to know to ask which side, and the timer has to know to
+     * announce the change of sides between sets. Neither can wait for a set to be logged.
      *
      * It is also what makes a MISSING side a defect rather than a shrug: on an exercise
      * marked one-sided, a set that named no hand is a hole in the data, and the reducers say
@@ -272,8 +330,8 @@ data class ExerciseEntity(
      *
      * The number is a rough share of a whole body and cannot exceed it: a value outside
      * (0, 1] is treated as absent rather than used
-     * (see [xyz.oleolegka.gachimuchi.domain.usableShare]), on the same grounds as a
-     * non-positive edge on this row.
+     * (see [xyz.oleolegka.gachimuchi.domain.usableShare]), on the same grounds a non-positive
+     * protocol on this row is treated as absent.
      */
     @androidx.room.ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
     /**
@@ -299,24 +357,67 @@ data class ExerciseEntity(
      * [xyz.oleolegka.gachimuchi.domain.ExerciseIdentity] (schema version 15).
      *
      * ── Derived state, and how it is kept from drifting ────────────────────────
-     * This is not an independent fact: it is [name], [form], [edgeMm], [protocolWorkSec] and
-     * [protocolRestSec] folded together, and a row whose key disagrees with its own columns
-     * would be invisible to the lookup that prevents duplicates. Two things hold it in place.
+     * This is not an independent fact: it is [name], [form] and the protocol program's stable
+     * `uid` folded together, and a row whose key disagrees with its own columns would be
+     * invisible to the lookup that prevents duplicates.
      *
-     * It is a CONSTRUCTOR DEFAULT computed from the parameters above it, so there is no way to
-     * build the entity without it and no call site that has to remember — every insert in the
-     * app, the backup restore included, gets a correct key for free.
+     * ── The constructor default is honest only for "no protocol" (schema version 19) ────
+     * Before this version the default was ALWAYS correct — it was a pure function of columns
+     * this very row already carried, so no call site could get it wrong even by omission. That
+     * stopped being true the moment the protocol became a REFERENCE: [protocolProgramId] is a
+     * local row number, and the identity wants the program's portable `uid`, which only a
+     * database lookup can produce — a lookup this entity, being plain data, cannot perform on
+     * itself. So the default below assumes `programUid = null`, which is correct for every row
+     * with no protocol (still the common case, and still free), and WRONG — silently, not by a
+     * refusal to compile — for a row built with [protocolProgramId] set but no explicit
+     * `identityKey`. Every call site that sets [protocolProgramId] MUST resolve its uid and pass
+     * the resulting key explicitly; see `ActivityRepository.ensureExercise`/`editExercise` for
+     * where that resolution happens live, and `MIGRATION_18_19`'s `fillIdentityKeysWithProgram`
+     * for where it happens at upgrade time. This is a real loss of the safety net the old
+     * constructor default gave, traded for a protocol that can be more than two numbers.
      *
      * And the only statement that may change an identity ([ExerciseDao.editIdentity]) writes
      * the new key in the same UPDATE as the values it was computed from. There is deliberately
-     * no other way to touch those four columns: Room's whole-entity `@Update` is gone from the
+     * no other way to touch those columns: Room's whole-entity `@Update` is gone from the
      * DAO precisely because it would let a caller rewrite the name and leave the key behind.
      *
-     * Last in the parameter list because a Kotlin default may only refer to parameters
-     * declared before it.
+     * Declared after every column its own default expression reads ([name], [form]) — a Kotlin
+     * default may only refer to parameters declared before it. [pictureId] sits after THIS one
+     * instead of nearer the columns it is conceptually closest to; see that field's own KDoc
+     * for why its position, unlike this one's, is load-bearing rather than a convenience.
      */
     @androidx.room.ColumnInfo(name = "identity_key")
-    val identityKey: String = exerciseIdentityKey(name, form, edgeMm, protocolWorkSec, protocolRestSec),
+    val identityKey: String = exerciseIdentityKey(name, form, null),
+    /**
+     * Which picture in [xyz.oleolegka.gachimuchi.data.ExercisePictureStore] shows the machine
+     * or the setup this exercise is trained on (schema version 23), or null for none.
+     *
+     * AFTER [identityKey] rather than beside the other presentation columns above it, and that
+     * placement is load-bearing, not cosmetic: `MIGRATION_22_23` is a plain
+     * `ALTER TABLE ... ADD COLUMN`, which SQLite always appends at the end of the table, and
+     * `data/SchemaParityTest` compares a migrated database against a fresh install COLUMN BY
+     * COLUMN, order included. A fresh install's column order follows this constructor's
+     * parameter order, so the two only agree if this is declared last here too — the same
+     * reason [EventEntity.occurredTs] sits at the end of that entity instead of near the
+     * columns it is conceptually closest to.
+     *
+     * ── The same arrangement [xyz.oleolegka.gachimuchi.data.GalleryStore] already uses ─────
+     * The picture itself is a file in the app's own folder, named by this id; this column is
+     * the only record that the file belongs to THIS exercise. There is no foreign key and no
+     * second index of the file, on the same grounds [protocolProgramId] gives a few lines
+     * above: the file is reference data the row points at, not something Room needs to enforce
+     * the existence of, and a dangling id would simply mean "no picture" the same way a
+     * dangling `protocol_program_id` means "no protocol".
+     *
+     * ── Why the whole picture is on disk, and only a downsampled DECODE is small ────
+     * The point of the picture is telling one gym machine apart from another with the same
+     * name at a glance, which wants real detail; nothing here writes a separate thumbnail
+     * file. Every place this is drawn small (the exercise picker) asks
+     * [xyz.oleolegka.gachimuchi.ui.celebrate.decodeScaled] for a downsampled bitmap instead of
+     * decoding the file whole — the same function the celebration overlay already uses to keep
+     * a full-size phone photo from blowing the decode heap.
+     */
+    @androidx.room.ColumnInfo(name = "picture_id") val pictureId: String? = null,
 )
 
 /**
@@ -353,8 +454,8 @@ data class ProgramEntity(
      * The catalog exercise this program trains, when it is exactly one (schema version 3).
      *
      * Nullable and deliberately WITHOUT a foreign key. A program is reference data that
-     * outlives the catalog row it points at — an exercise renamed, split by edge (§12-A) or
-     * deleted must not take a hand-written protocol down with it, which `ON DELETE CASCADE`
+     * outlives the catalog row it points at — an exercise renamed, split by protocol (§12-A)
+     * or deleted must not take a hand-written protocol down with it, which `ON DELETE CASCADE`
      * would, and `ON DELETE SET NULL` would still make deleting an exercise silently edit
      * programs. A dangling id simply reads as "no link" and the offer asks again.
      */
@@ -367,6 +468,25 @@ data class ProgramEntity(
     val category: String = "",
     /** Stable identity of this program across devices and exports — see [newUid]. */
     val uid: String = newUid(),
+    /**
+     * Whether this program is kept out of the library list (schema version 20) — the same
+     * PRESENTATION choice [ExerciseEntity.hidden] already is, made by the same argument in
+     * reverse: a program CANNOT be edited by content once an exercise's protocol IS it (see
+     * `ProgramRepository.save`'s freeze), so hiding is what "I don't want to look at this one
+     * any more" has to mean instead of deleting it.
+     *
+     * A hidden program keeps running exactly as before: it is still what
+     * [ExerciseEntity.protocolProgramId] resolves to, still what a set's protocol snapshot is
+     * taken from, still what the identity chip on the exercise's detail screen reads. Hiding
+     * touches ONE thing — whether the program is offered by
+     * [xyz.oleolegka.gachimuchi.domain.programSections] on the timer tab — the same boundary
+     * [ExerciseEntity.hidden] draws for the exercise picker.
+     *
+     * NOT NULL with false for every row that predates it, on the same grounds as
+     * [ExerciseEntity.oneSided]: nothing in the library was hidden before there was a way to
+     * say so.
+     */
+    val hidden: Boolean = false,
 )
 
 /**
@@ -456,8 +576,8 @@ data class SlotEntity(
  * ON DELETE CASCADE against `slots`, so deleting a plan cannot leave its composition behind
  * as rows nothing can reach. That is the ONLY foreign key here, and the omission of the
  * other one is the decision worth writing down: there is deliberately no key on
- * [exerciseId]. The catalog is editable and §12-A can split a hangboard exercise by edge — a
- * cascade would let deleting an exercise silently rewrite a plan, and `SET NULL` would leave
+ * [exerciseId]. The catalog is editable and §12-A can split a hangboard exercise by protocol —
+ * a cascade would let deleting an exercise silently rewrite a plan, and `SET NULL` would leave
  * a planned line pointing at nothing while claiming to be intact. A dangling id simply reads
  * as "that exercise is gone", which the editor can say out loud.
  *

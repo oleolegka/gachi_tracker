@@ -24,6 +24,7 @@ import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
 import xyz.oleolegka.gachimuchi.domain.loggingDay
+import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.setsOutsideWorkouts
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
@@ -67,7 +68,7 @@ class WorkoutFlowTest {
     fun tearDown() = db.close()
 
     private suspend fun ref(name: String, form: ExerciseForm, work: Double? = null, rest: Double? = null) =
-        repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!.toRef()
+        repo.toRef(repo.exercise(repo.ensureExercise(name, form, workSec = work, restSec = rest))!!)
 
     @Test
     fun `start, add two exercises, log sets, and the workout folds back out of the journal`() = runTest {
@@ -308,20 +309,20 @@ class WorkoutFlowTest {
         val stored = repo.exercise(bench.id)!!
         assertEquals(150, stored.defaultRestSec)
         // and it is what the next workout would be offered, ahead of anything derived
-        assertEquals(150, restHintSec(TimerSettings(), repo.allEvents(), stored.toRef()))
+        assertEquals(150, restHintSec(TimerSettings(), repo.allEvents(), repo.toRef(stored)))
     }
 
     @Test
     fun `ensureExercise refreshes the rest of an exercise it found but nothing else about it`() = runTest {
         val id = repo.ensureExercise(
-            "Hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
             defaultRestSec = 150,
         )
 
-        // the same exercise looked up again — the same four values, said in another spelling —
-        // with a new rest: the rest is a preference and moves, the identity does not
+        // the same exercise looked up again — the same values, said in another spelling — with
+        // a new rest: the rest is a preference and moves, the identity does not
         val again = repo.ensureExercise(
-            "hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0,
+            "hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
             defaultRestSec = 240,
         )
         assertEquals(id, again)
@@ -329,12 +330,11 @@ class WorkoutFlowTest {
         val stored = repo.exercise(id)!!
         assertEquals(240, stored.defaultRestSec)
         assertEquals(ExerciseForm.HOLD.code, stored.form)
-        assertEquals("Hangs 20 mm", stored.name)
-        assertEquals(20.0, stored.edgeMm!!, 1e-9)
-        assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
+        assertEquals("Hangs", stored.name)
+        assertEquals(7.0, repo.toRef(stored).workSec!!, 1e-9)
 
         // and saying nothing about the rest leaves the remembered one alone
-        repo.ensureExercise("hangs 20 mm", ExerciseForm.HOLD, edgeMm = 20.0, workSec = 7.0, restSec = 3.0)
+        repo.ensureExercise("hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
         assertEquals(240, repo.exercise(id)!!.defaultRestSec)
     }
 
@@ -348,9 +348,9 @@ class WorkoutFlowTest {
         repo.setLedByProtocol(hangs.id, false)
         val stored = repo.exercise(hangs.id)!!
         assertEquals(false, stored.ledByProtocol)
-        assertFalse(ledByProtocol(stored.toRef()))
+        assertFalse(ledByProtocol(repo.toRef(stored)))
         // the protocol itself is untouched — it is still part of the exercise's identity
-        assertEquals(7.0, stored.protocolWorkSec!!, 1e-9)
+        assertEquals(7.0, repo.toRef(stored).workSec!!, 1e-9)
     }
 
     // --- the plan a workout was started from, and the name it was started under -----------
@@ -548,5 +548,63 @@ class WorkoutFlowTest {
         val before = repo.eventCount()
         assertNull(repo.renameWorkout(9999L, "Nowhere"))
         assertEquals(before, repo.eventCount())
+    }
+
+    // --- the actual rest a floor measured, written onto the set it was the rest AFTER --------
+    //
+    // [ActivityRepository.recordActualRest] stands in for [MainViewModel.addSet] reading a
+    // rest floor and turning its elapsed wall-clock time into a number - the floor itself
+    // (domain/Floors.kt) is Android timer state and does not belong in a Room test, but what
+    // it produces (a number of seconds) and where that number lands both do.
+
+    @Test
+    fun `a floor's measured rest lands on the set before it, not on the gap between writes`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+
+        /*
+         * Standing in for MainViewModel.addSet: a floor had genuinely been counting down for
+         * 90 seconds when the next set was about to be recorded. The two repository calls
+         * below happen back to back with no real pause between them, so the gap the OLD
+         * mechanism would have derived from the two write times is a few milliseconds - nothing
+         * like 90 seconds. If this test read the wrong number, it would read close to zero.
+         */
+        repo.recordActualRest(bench.link, 90.0)
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 62.5))
+
+        // amending the first set writes a NEW row under a NEW id, so it is found by what it
+        // says rather than by the id it no longer has (domain/Amendments.kt's full-version model)
+        val first = readActivities(repo.allEvents()).first().form as StrengthSet
+        assertEquals(60.0, first.weightKg!!, 1e-9)
+        assertEquals(90.0, first.restAfterSec!!, 1e-9)
+
+        // and the session feed - what the screen actually draws - reads the same number,
+        // through the EXPLICIT rest path rather than the derived one (see [explicitRestAfter]);
+        // buildSession prefers it first and only falls back to the write-time gap otherwise
+        val sets = buildSession(repo.allEvents(), day).groups.single().sets
+        assertEquals(2, sets.size)
+        assertEquals(90.0, sets[1].restBeforeSec!!, 1e-9)
+    }
+
+    /** The first set of an exercise has no earlier set of its own to have rested after. */
+    @Test
+    fun `an exercise's first set has nothing to measure a rest against`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        assertNull(repo.recordActualRest(bench.link, 45.0))
+        assertEquals(0, repo.eventCount())
+    }
+
+    /** A floor belongs to one exercise; it must never amend a set of a different one. */
+    @Test
+    fun `a floor for one exercise never amends another exercise's set`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val squat = ref("Squat", ExerciseForm.STRENGTH)
+        repo.record(strengthSetOf(bench, day, reps = 5, weightKg = 60.0))
+
+        // a floor was running for squat, which has no set yet - there is nothing of squat's
+        // to amend, and bench's set (the only live set in the journal) must stay untouched
+        assertNull(repo.recordActualRest(squat.link, 60.0))
+        val benchSet = readActivities(repo.allEvents()).single().form as StrengthSet
+        assertNull("a floor that was never bench's must not touch bench's set", benchSet.restAfterSec)
     }
 }

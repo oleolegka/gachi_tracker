@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -38,14 +41,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import xyz.oleolegka.gachimuchi.data.ExercisePictureStore
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
+import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
-import xyz.oleolegka.gachimuchi.domain.parseNumber
+import xyz.oleolegka.gachimuchi.domain.parseProtocolSeconds
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.fmtDay
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
@@ -85,13 +94,13 @@ fun ExercisePickerSheet(
     /**
      * Creating a new catalog exercise, or NULL for a caller that only picks from what is
      * already there — the slot editor, which plans sessions out of exercises the user
-     * already trains and has no business asking §12-A identity questions (form, edge,
-     * protocol) days before the first set.
+     * already trains and has no business asking §12-A identity questions (form, protocol)
+     * days before the first set.
      *
      * Nullable rather than defaulted, so that every caller has to say which it is: a create
      * button wired to nothing is exactly the failure this is meant to make impossible.
      */
-    onCreate: ((String, ExerciseForm, Double?, Double?, Double?) -> Unit)?,
+    onCreate: ((String, ExerciseForm, Double?, Double?) -> Unit)?,
     onDismiss: () -> Unit,
     /**
      * Skip the list and open on the create form. Set when the catalog is empty: a search
@@ -99,6 +108,14 @@ fun ExercisePickerSheet(
      * action on it would be the button underneath.
      */
     startInCreate: Boolean = false,
+    /**
+     * What the sheet is doing here, which is not the same question in every caller: logging
+     * and planning both PICK something for a purpose, so "Exercise" and "Create and use" say
+     * what happens next. A caller with no next step — browsing or growing the catalog on its
+     * own — passes words that say only that: see [xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen].
+     */
+    heading: String = "Exercise",
+    createLabel: String = "Create and use",
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by rememberSaveable { mutableStateOf("") }
@@ -117,9 +134,10 @@ fun ExercisePickerSheet(
             if (creating && onCreate != null) {
                 CreateExerciseForm(
                     initialName = query,
+                    confirmLabel = createLabel,
                     onCancel = { creating = false },
-                    onCreate = { name, form, edge, work, rest ->
-                        onCreate(name, form, edge, work, rest)
+                    onCreate = { name, form, work, rest ->
+                        onCreate(name, form, work, rest)
                         creating = false
                         onDismiss()
                     },
@@ -128,6 +146,7 @@ fun ExercisePickerSheet(
                 PickExisting(
                     state = state,
                     today = today,
+                    heading = heading,
                     query = query,
                     onQuery = { query = it },
                     onPick = { id ->
@@ -145,6 +164,8 @@ fun ExercisePickerSheet(
 private fun PickExisting(
     state: UiState,
     today: LocalDate,
+    /** See [ExercisePickerSheet.heading]. */
+    heading: String,
     query: String,
     onQuery: (String) -> Unit,
     onPick: (Long) -> Unit,
@@ -171,7 +192,7 @@ private fun PickExisting(
     val catalogEmpty = visible.isEmpty()
     val searching = query.isNotBlank()
 
-    Text("Exercise", style = MaterialTheme.typography.titleMedium)
+    Text(heading, style = MaterialTheme.typography.titleMedium)
     // nothing to search through on a first run, and a search box would only invite typing
     // that can never match
     if (!catalogEmpty) {
@@ -244,70 +265,99 @@ private fun PickExisting(
         )
     }
 
+    val context = LocalContext.current
+    val pictureStore = remember(context) { ExercisePictureStore.get(context) }
+
     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
         items(items, key = { it.id }) { exercise ->
             val form = runCatching { ExerciseForm.fromCode(exercise.form) }.getOrNull()
+            val protocolBlock = exercise.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
             val used = usage[exercise.id]
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onPick(exercise.id) }
                     .heightIn(min = 56.dp)
                     .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(exercise.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    buildString {
-                        append(form?.title ?: "unknown form")
-                        /*
-                         * The edge and the protocol are on the row because they are what makes
-                         * two rows of the same NAME two exercises (§12-A). They used to be
-                         * unnecessary here for a bad reason: creating an exercise deduplicated
-                         * by name, so a second "Hangs" on another edge could not exist — it was
-                         * silently handed the first one's history. Now that it can exist, a list
-                         * showing two identical lines would put the same failure back one step
-                         * later, with the user picking whichever of the two came first.
-                         */
-                        exercise.edgeMm?.let { append(" - ${it.trimZero()} mm") }
-                        if (exercise.protocolWorkSec != null && exercise.protocolRestSec != null) {
-                            append(" - ${exercise.protocolWorkSec.trimZero()}:${exercise.protocolRestSec.trimZero()}")
-                        }
-                        if (used == null) {
-                            append(" - not logged yet")
-                        } else {
-                            append(" - ${used.count} entries, last on ")
-                            append(fmtDay(runCatching { LocalDate.parse(used.lastDate) }.getOrDefault(today)))
-                        }
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkSecondary,
-                )
+                /*
+                 * The whole point of a picture here (owner's own words): "on different machines
+                 * the same weight feels very different" — recognising the specific rack or
+                 * pulldown from last time. Absent for the common case (no picture), which is
+                 * why the row is a Row only when there is one to show and a Column otherwise
+                 * looks exactly as it always has, including its own click target and padding.
+                 */
+                exercise.pictureId?.let { pictureId ->
+                    val bitmap = rememberPicture(pictureStore.fileOf(pictureId), PICKER_THUMB_MAX_PX)
+                    bitmap?.let {
+                        Image(
+                            bitmap = it,
+                            contentDescription = null, // decoration: the name beside it already says which exercise
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
+                        )
+                    }
+                }
+                Column {
+                    Text(exercise.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        buildString {
+                            append(form?.title ?: "unknown form")
+                            /*
+                             * The protocol is on the row because it is what makes two rows of the
+                             * same NAME two exercises (§12-A). It used to be unnecessary here for a
+                             * bad reason: creating an exercise deduplicated by name, so a second
+                             * "Hangs" on another protocol could not exist — it was silently handed
+                             * the first one's history. Now that it can exist, a list showing two
+                             * identical lines would put the same failure back one step later, with
+                             * the user picking whichever of the two came first.
+                             */
+                            if (protocolBlock != null) {
+                                append(" - ${protocolBlock.workSec}:${protocolBlock.restSec}")
+                            }
+                            if (used == null) {
+                                append(" - not logged yet")
+                            } else {
+                                append(" - ${used.count} entries, last on ")
+                                append(fmtDay(runCatching { LocalDate.parse(used.lastDate) }.getOrDefault(today)))
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkSecondary,
+                    )
+                }
             }
         }
     }
 }
 
-/** "20" rather than "20.0": an edge is written the way it is spoken. */
-private fun Double.trimZero(): String =
-    if (this == toLong().toDouble()) toLong().toString() else toString()
+/**
+ * How large a decode the picker's row thumbnail asks for. Small on purpose — this is a list,
+ * not the celebration overlay — and downsampled at DECODE time by [decodeScaled], so a multi
+ * megabyte phone photo never exists as a full-size bitmap just to be shown at 44dp.
+ */
+private const val PICKER_THUMB_MAX_PX = 96
 
 /**
  * Creating an exercise. The form is asked ONCE, here, and never again (§11): it is part
- * of the exercise, not of a set. For holds the edge and the work:rest protocol are asked
- * in the same breath, because §12-A makes them part of the identity — the same hangs on a
- * 15 mm edge are a DIFFERENT exercise with its own history and its own record.
+ * of the exercise, not of a set. For holds the work:rest protocol is asked in the same
+ * breath, because §12-A makes it part of the identity — the same hangs on a different
+ * protocol are a DIFFERENT exercise with its own history and its own record.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateExerciseForm(
     initialName: String,
+    /** See [ExercisePickerSheet.createLabel]. */
+    confirmLabel: String,
     onCancel: () -> Unit,
-    onCreate: (String, ExerciseForm, Double?, Double?, Double?) -> Unit,
+    onCreate: (String, ExerciseForm, Double?, Double?) -> Unit,
 ) {
     val colors = LocalGachiColors.current
     var name by rememberSaveable { mutableStateOf(initialName) }
     var form by rememberSaveable { mutableStateOf(ExerciseForm.STRENGTH) }
-    var edge by rememberSaveable { mutableStateOf("") }
     var work by rememberSaveable { mutableStateOf("") }
     var rest by rememberSaveable { mutableStateOf("") }
 
@@ -333,17 +383,12 @@ private fun CreateExerciseForm(
 
     if (form == ExerciseForm.HOLD) {
         Text(
-            "Edge and protocol are part of the identity: hangs on another edge or another " +
-                "work:rest are a separate exercise with a separate record.",
+            "The work:rest protocol is part of the identity: hangs on another protocol are " +
+                "a separate exercise with a separate record.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkSecondary,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = edge, onValueChange = { edge = it }, modifier = Modifier.weight(1f),
-                singleLine = true, label = { Text("Edge, mm") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            )
             OutlinedTextField(
                 value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
                 singleLine = true, label = { Text("Work, s") },
@@ -368,27 +413,25 @@ private fun CreateExerciseForm(
                 val hold = form == ExerciseForm.HOLD
                 /*
                  * Every number here is "positive, or it was never filled in". A zero (or a
-                 * minus, which some keyboards offer on the decimal layout) is not a 0 mm
-                 * edge or a 0-second hang, it is an empty field with a character in it —
-                 * and the HoldSet validator rejects a non-positive edge or protocol by
-                 * throwing, which on the logging screen would surface as a crash on the Add
-                 * button rather than as a message. Stored as null, the field simply stays
-                 * unset, which is a state the whole app already handles.
+                 * minus, which some keyboards offer on the decimal layout) is not a 0-second
+                 * hang, it is an empty field with a character in it — and the HoldSet
+                 * validator rejects a non-positive protocol by throwing, which on the
+                 * logging screen would surface as a crash on the Add button rather than as
+                 * a message. Stored as null, the field simply stays unset, which is a state
+                 * the whole app already handles.
                  *
                  * The protocol is a pair or nothing at all: half of it would be rejected by
                  * the same validator on the very first set.
                  */
-                val w = if (hold) parseNumber(work)?.takeIf { it > 0 } else null
-                val r = if (hold) parseNumber(rest)?.takeIf { it > 0 } else null
+                // whole seconds only, and rounded rather than truncated: see
+                // [parseProtocolSeconds] for why the rule lives in the domain
+                val w = if (hold) parseProtocolSeconds(work) else null
+                val r = if (hold) parseProtocolSeconds(rest) else null
                 val pair = if (w != null && r != null) w to r else null
-                onCreate(
-                    name.trim(), form,
-                    if (hold) parseNumber(edge)?.takeIf { it > 0 } else null,
-                    pair?.first, pair?.second,
-                )
+                onCreate(name.trim(), form, pair?.first, pair?.second)
             },
             enabled = name.isNotBlank(),
             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-        ) { Text("Create and use") }
+        ) { Text(confirmLabel) }
     }
 }

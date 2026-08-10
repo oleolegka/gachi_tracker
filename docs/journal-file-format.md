@@ -7,8 +7,8 @@ no other one: the database sits in the app's private storage, the phone this is 
 no Google backup, and `adb backup` stopped taking app data at this target SDK. A file written
 from the Settings tab is the whole insurance policy.
 
-The format is plain JSON, indented, and meant to be readable in a text editor on the worst day.
-The code lives in
+The format is a single CSV table, meant to be opened in a spreadsheet as much as restored back
+into the app. The code lives in
 [`domain/JournalTransfer.kt`](../app/src/main/java/xyz/oleolegka/gachimuchi/domain/JournalTransfer.kt)
 (the format and the merge rules) and
 [`data/JournalBackup.kt`](../app/src/main/java/xyz/oleolegka/gachimuchi/data/JournalBackup.kt)
@@ -18,177 +18,130 @@ The interval-program file ([`program-file-format.md`](program-file-format.md)) i
 smaller thing: it exists to SEND somebody a protocol. This one exists to survive losing the
 phone, and it carries programs too.
 
-## An example
+## One file, not two
 
-```json
-{
-  "format": "gachimuchi.journal",
-  "version": 1,
-  "exported_at": "2026-08-07",
-  "device_id": "0198c2f1-6b40-7a3e-9d21-4f77c1a09b52",
-  "events": [
-    {
-      "uid": "0198c2f0-1000-7000-8000-000000000001",
-      "ts": "2026-08-07T18:41:02",
-      "type": "strength_set",
-      "payload": {
-        "exercise": "Bench press",
-        "reps": 5,
-        "weight_kg": 72.5,
-        "own_weight": false,
-        "exercise_id": 1,
-        "exercise_uid": "0198c2ef-0000-7000-8000-00000000000a",
-        "op_date": "2026-08-07",
-        "exercise_key": "bench press"
-      },
-      "workout_uid": "0198c2ef-9000-7000-8000-000000000003",
-      "author_id": 1
-    }
-  ],
-  "exercises": [
-    {
-      "uid": "0198c2ef-0000-7000-8000-00000000000a",
-      "name": "Bench press",
-      "form": 1,
-      "created_at": "2026-08-01T09:00:00",
-      "edge_mm": null,
-      "protocol_work_sec": null,
-      "protocol_rest_sec": null,
-      "default_rest_sec": 150,
-      "led_by_protocol": null
-    }
-  ],
-  "slots": [],
-  "programs": [],
-  "settings": {
-    "default_rest_sec": 120,
-    "auto_start_rest": true,
-    "adapt_rest_to_exercise": true,
-    "prepare_sec": 10,
-    "sound": true,
-    "vibrate": true,
-    "countdown_ticks": true,
-    "speak": false,
-    "default_sets": 4,
-    "timer_enabled": true,
-    "celebration_mode": 1
-  }
-}
-```
+This used to be two exports: a JSON that restored and a read-only CSV that did not. It is one
+CSV now, because a spreadsheet is a table with rows that matter for restoring (the whole
+journal, live and dead) and rows that are nicer to read (the picture right now), and the fix
+for two files is a flag on one of them, not a second file.
 
-## The envelope
+## The shape: one row per record, whatever kind of record it is
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `format` | string | yes | Always `gachimuchi.journal`. Anything else is refused by name. |
-| `version` | integer | yes | The shape of the file. Currently `1`. |
-| `exported_at` | string | no | ISO date the file was written. Decoration; never read back. |
-| `device_id` | string | no | Which installation wrote it. Decoration; never restored. |
-| `events` | array | no | The journal. |
-| `exercises` | array | no | The catalog. |
-| `slots` | array | no | The plan, each slot with what it consists of. |
-| `programs` | array | no | Interval programs. |
-| `settings` | object | no | Preferences. |
+Every row is either a **journal event** — one row of the append-only log, exactly as it is
+stored, corrections and deletions included — or a **whole reference row**: one catalog
+exercise, one plan slot (with what it consists of), one interval program, or the settings.
+Which kind a row is says in its first column, `gachimuchi_journal_v1`. That column name is
+also the format marker and the version, together — a file whose first column is not named
+`gachimuchi_journal_v<N>` was not written by this app.
 
-Every section is optional, so a backup taken before the plan had anything in it still reads.
-An entirely empty file is legal and imports nothing.
+## The columns: structural, then for the eye
+
+| Column | Kind it applies to | What it is |
+|---|---|---|
+| `gachimuchi_journal_v1` | every row | The row kind: `event`, `exercise`, `slot`, `program`, `settings`, or `meta` (one row of file-level metadata, see below). |
+| `uid` | `event` | The event's identity. For every other kind the identity is already inside `payload` (see below); this column repeats it for a human filtering the file. |
+| `event_type` | `event` | The event type, e.g. `strength_set`, `workout_started`, `entry_deleted`. |
+| `written_at` | `event` | When the row was WRITTEN, in the local time of the phone that wrote it. |
+| `tz_offset_min` | `event` | Minutes east of UTC at that moment. Written from schema version 2 of this file. **A restore reads the offset from here rather than from the phone doing the restoring** - without it, a journal exported abroad and restored at home silently takes on the offset of home. A file that lacks the column altogether (generation v1) still loads, and falls back to the restoring device's zone, which is the old behaviour and the old loss. |
+| `happened_at` | `event` | When the row's own training HAPPENED, if that is known and different from when it was written — see "Two times" below. |
+| `workout_uid` | `event` | The workout this row was recorded during, by identity. |
+| `author_id` | `event` | Mirrors the local author column. |
+| `payload` | every row | **The whole record, carried through untouched.** For an event, its own JSON payload text, exactly as stored. For every other kind, the whole row — every field — as one compact JSON object. |
+
+Everything after `payload` is **derived**: `current_version`, then `name`, `date`, `workout`,
+`exercise`, `form`, `side`, and the value columns a spreadsheet would want to filter or sum
+(`weight_kg`, `reps`, `hold_sec`, and so on). They exist so a person can read a row without
+decoding its `payload` — a resolved exercise name in place of a uid, a form's numbers laid out
+as their own columns.
+
+**A restore reads only the structural columns above and `payload`, and never a derived one.**
+That is the rule the whole format is built around, and it is what lets a derived column be
+renamed, added to or reordered freely in any later change without a restore silently changing
+behaviour — the exact opposite of the design this replaces, where the catalog was exported
+column by column and a column added to the entity and forgotten in the exporter came back as
+its default, silently, on every future backup. It happened twice in one day. That is why the
+catalog, the plan and the programs are one JSON object per row here rather than columns at
+all: there is then nothing left to forget.
+
+## `current_version`: the flag in place of a second file
+
+`true` for a row that is what the app currently says: an event still live once every deletion
+and correction is applied, or any row of a kind the app does not keep old versions of at all
+(the catalog, the plan, the programs and the settings are edited or deleted in place — there is
+no old version sitting in the database for them to begin with, so they are always `true`).
+`false` for an event a deletion or a correction has superseded.
+
+Filtering the file on `current_version = true` reproduces what the app shows right now.
+Filtering on nothing at all is the whole history, corrections and deletions included — which is
+what a restore reads.
+
+## Two times: written, and happened
+
+`written_at` is the honest write time. `happened_at` is when the row's own training happened,
+which is not always the same moment: a correction (see below) writes a whole new row at the
+moment of the CORRECTION, but inherits `happened_at` from the row it replaces, so a set fixed a
+week later does not jump to the end of that week's log. A row from before this distinction
+existed carries no `happened_at` at all.
 
 ## An event, and the payload that is not opened
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `uid` | string | yes | The identity of the row. Unique within the file. This is what a re-import matches on. |
-| `ts` | string | yes | When the row was written (not the day it belongs to — that is inside the payload). |
-| `type` | string | yes | The event type, e.g. `strength_set`, `workout_started`, `set_cancel`. |
-| `payload` | any | yes | **Carried through untouched.** |
-| `workout_uid` | string | no | The workout this row was recorded during, by identity. |
-| `author_id` | integer | no | Mirrors the local author column. Defaults to `1`. |
-
 **The payload is opaque on purpose, and this is the central decision of the format.** Nothing
 in the exporter or the importer knows what a strength set contains. Forms grow fields — a
-warm-up flag, which hand, the body weight at the time — and if this file listed them, every
-new field would need a change here, a version bump, and a chance for somebody to forget one
-and quietly drop it out of the only copy of the history that exists.
+warm-up flag, which hand, the body weight at the time — and if this file listed them as
+columns, every new field would need a change here and a chance for somebody to forget one and
+quietly drop it out of the only copy of the history that exists.
 
 What that costs, plainly: a payload cannot be validated on the way in, so a corrupt payload is
 exported and restored corrupt. For a backup that is the right way round — its job is to
-reproduce what was there, not to improve on it. A payload that is not JSON at all is carried
-as a JSON string and restored verbatim rather than being dropped.
+reproduce what was there, not to improve on it.
 
 Local row numbers (`id`, `workout_id`, `space_id`) are **not** in the file. They count how
 many rows one phone has written and mean nothing on another. Every link the app reads is
 already a uid.
 
-## An exercise
+## A reference row: the catalog, the plan, the programs, the settings
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `uid` | string | yes | Identity. |
-| `name` | string | yes | Must not be blank. |
-| `form` | integer | yes | 1 strength, 2 holds, 3 cardio, 4 duration, 5 check-in, 6 body weight. An unknown code is refused. |
-| `created_at` | string | yes | When the row was made. |
-| `edge_mm` | number | no | Hangboard edge; part of identity (§12-A). |
-| `protocol_work_sec` / `protocol_rest_sec` | number | no | The work:rest protocol; part of identity. |
-| `default_rest_sec` | integer | no | The rest last chosen for this exercise. |
-| `led_by_protocol` | boolean | no | Run sets by the protocol, or just count the rest. `null` means "decide from whether a protocol exists". |
-| `one_sided` | boolean | no | A set is done one side at a time. |
-| `bodyweight_share` | number | no | How much of the body weight this exercise actually lifts. |
-| `hidden` | boolean | no | Kept out of the pickers. Not part of the identity — a hidden row and a shown one still merge. |
+Each of these travels as ONE JSON object in its `payload` cell — an exercise, a plan slot
+(carrying what it consists of, nested), a program (carrying its groups and blocks, nested), or
+the settings. Nothing about them is spread across columns, for the reason above.
 
-The stored `identity_key` is **not** in the file: it is the four defining values folded into
-one string, and it is recomputed on the way in. A key carried in a file could disagree with
-the columns it claims to summarise.
+An exercise's fields: `uid`, `name`, `form` (1 strength, 2 holds, 3 cardio, 4 duration, 5
+check-in, 6 body weight — an unknown code is refused), `created_at`, `protocol_program_uid` (the
+library program this exercise's protocol is, by uid), `default_rest_sec`, `led_by_protocol`,
+`one_sided`, `bodyweight_share`, `hidden`. The stored `identity_key` is **not** among them: it
+is `name` + `form` + protocol folded into one string, and it is recomputed on the way in rather
+than trusted from a file, which could disagree with the values it claims to summarise.
 
-The catalog, the plan and the programs are carried **column by column**, unlike an event
-payload. That is a standing obligation on whoever adds a column: a column added to `exercises`
-and not added here does not survive a restore, silently — the file loads, the exercise comes
-back, and one thing about it is quietly the default.
+A plan slot: `uid`, `name`, `at_time`, `repeat_rule` (`none`, `daily` or `weekly`), `anchor_date`,
+`created_at`, and `exercises` — the composition, each one `{ uid, exercise_uid, rest_sec }`. A
+line whose exercise is no longer in the catalog carries `exercise_uid: null` and is skipped on
+import, counted in the report.
 
-## A plan slot
+A program: the same shape as a program in the program file (`groups` of `blocks`), plus a
+`uid` (so a second restore does not add a fourth copy of "Tabata 20:10"), an `exercise_uid`,
+and a `position`.
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `uid` | string | yes | Identity. |
-| `name` | string | yes | The name of the session. |
-| `at_time` | string | no | `HH:MM`, or absent for "some time that day". |
-| `repeat_rule` | string | yes | `none`, `daily` or `weekly`. Anything else is refused. |
-| `anchor_date` | string | yes | The day the series is counted from. |
-| `created_at` | string | yes | |
-| `exercises` | array | no | What the session consists of, in order. |
-
-A planned line is `{ "uid": …, "exercise_uid": …, "rest_sec": … }`. The exercise is named by
-uid even though the database still stores that one link as a row number — it is translated on
-the way out and back on the way in. A line whose exercise is no longer in the catalog is
-written with `exercise_uid: null` and is skipped on import, counted in the report.
-
-## A program
-
-Same shape as a program in the program file (`groups` of `blocks`; see that page), plus three
-things: a `uid`, so a second restore does not add a fourth copy of "Tabata 20:10"; an
-`exercise_uid`, because a link said in identities does travel; and a `position`, so the timer
-tab reads the way it was arranged. The same bounds are applied as in the program file — a
-program that expands to nothing, or to more steps than can be run, is refused with the rest of
-the file.
-
-## Settings
-
-The timer's nine switches, whether the timer has been switched on at all, and the celebration
-mode. Not history, and cheap to set again — but "which of these did I have on" is exactly the
-question nobody can answer on the day the phone is replaced. Every field is optional and
-defaults to the app's own default, so a file written before a setting existed still reads.
-
-Restoring **applies** the settings over what is on the phone. That is the one part of an
+Settings: the timer's nine switches, whether the timer has been switched on at all, and the
+celebration mode. Restoring **applies** them over what is on the phone — the one part of an
 import that overwrites something, and it is in the report.
+
+## The `meta` row
+
+One row, always present, `payload` carrying `exported_at` and `device_id` — when the file was
+written and which installation wrote it. Decoration: neither is ever restored. A restored copy
+is a new installation and mints its own device id.
 
 ## What is refused, and why
 
 A file is taken whole or turned away with a sentence. A half-restored journal is a history
 with holes in it that nobody can spot, on a device with nothing to compare against.
 
-- **Not JSON, truncated, or missing `format`/`version`.** Refused as unreadable.
-- **A different `format` string.** Named in the message.
-- **A `version` higher than this build understands.** Refused with both numbers: a future
-  shape is recognised rather than half-read into a journal with silently missing rows.
+- **Not CSV, empty, or the first column is not `gachimuchi_journal_v<N>`.** Refused as
+  unreadable — this format cannot open a foreign file to name what it actually is; it can only
+  say this does not look like one of its own.
+- **A version higher than this build understands.** Refused with both numbers.
+- **A row not the width of the header.** The file is truncated or was edited by something that
+  does not speak CSV.
 - **A row with no uid, or two rows sharing one.** Identity is what the merge stands on. Two
   rows with one uid make "have I got this already" unanswerable, and a file like that would
   keep adding rows on every import.
@@ -197,8 +150,8 @@ with holes in it that nobody can spot, on a device with nothing to compare again
 - **A plan slot with no name, an unknown repeat rule, or no starting date.**
 - **A program that cannot be run** — the same checks the program file applies.
 
-Unknown keys are ignored, so a v1 file written by a later build that added an optional field
-still loads.
+`ignoreUnknownKeys` is set on the JSON inside `payload`, so a v1 file written by a later build
+that added an optional field to a reference row still loads.
 
 ## Reading it back into a database that is not empty
 
@@ -206,12 +159,15 @@ Import **appends**. Nothing stored is edited or deleted; rows the phone already 
 exactly as they are. That is what makes importing the same file twice safe, which is the
 situation this is built for — somebody who is not sure whether they already restored.
 
-- **Events** merge by `uid`. A second import of one file adds nothing at all.
-- **The catalog** merges by `uid` first, then by identity: name (normalized) + form + edge +
-  work:rest protocol. The name alone is not enough — §12-A makes "Hangs 20 mm 7:3" and
-  "Hangs 15 mm 7:3" two exercises. The form is in the identity for the mirror-image reason: a
-  "Plank" logged as a duration and a "Plank" logged as strength write different payload shapes,
-  and welding them produces one history half the readers cannot read.
+- **Events** merge by `uid`, EVERY one in the file — live and superseded alike, so the history
+  a `current_version = false` row records is not lost by restoring. A second import of one file
+  adds nothing at all.
+- **The catalog** merges by `uid` first, then by identity: name (normalized) + form +
+  work:rest protocol. The name alone is not enough — a hangboard exercise's protocol is part of
+  what it IS, so "Hangs" at 7:3 and "Hangs" at 10:5 are two exercises. The form is in the
+  identity for the mirror-image reason: a "Plank" logged as a duration and a "Plank" logged as
+  strength write different payload shapes, and welding them produces one history half the
+  readers cannot read.
 - **Slots and programs** merge by `uid`. A program arriving under a name already taken by a
   different program is marked — `Tabata 20:10 (imported)` — never merged over.
 - **The report** counts what was added, what was already here, and what did not fit, and is
@@ -228,28 +184,24 @@ has been using.
 The sets arriving in that same file name the exercise by the FILE's key, inside payloads this
 format refuses to rewrite. They land in the journal and are visible in the history and the
 daily feed, but they do **not** appear under that exercise's own records and charts. The
-import says so in its report. Fixing it properly means letting a catalog row carry more than
-one key, which is a schema change and a separate piece of work.
-
-A restore onto an empty phone, and a re-import of a file this phone wrote, never reach this
-case.
+import says so in its report.
 
 ### The other seam: a very old set reversal
 
 A `set_cancel` written before schema version 9 names the set it reverses by **row number**,
 inside its payload, and this format does not open payloads. Restored into an empty database in
-file order the numbers land back where they were (a uid sorts by the moment it was minted, the
-journal is append-only and has no gaps, so the rows are renumbered identically). Merged into a
-database that already holds training, such a reversal can name an unrelated row and hide a set
-that was never cancelled. Every reversal this app has written since version 9 carries the uid
-as well and is unaffected.
+file order the numbers land back where they were — which is why the `event` rows travel in
+JOURNAL order and are not sorted by the day trained the way the derived columns might suggest
+reading them. Merged into a database that already holds training, such a reversal can name an
+unrelated row. Every reversal this app has written since schema version 9 carries the uid as
+well and is unaffected.
 
 ## What this file does not save
 
-- **The celebration pictures.** They are image files in the app's storage; only the mode is in
-  here. A restored phone shows nothing until pictures are added again.
-- **The device id.** A restored copy is a new installation and mints its own; the file only
-  records which installation wrote it.
+- **The celebration pictures, or any picture attached to an exercise.** They are image files in
+  the app's storage; a CSV cell is not where a picture goes.
+- **The device id as an identity.** A restored copy is a new installation and mints its own;
+  the `meta` row only records which installation wrote the file.
 - **The unfinished timer run and the offer waiting to be written down.** They live in
   preferences, are meaningful for minutes, and are meaningless on another phone.
 - **Anything that was never in the database** — a set done but not logged is not in the file

@@ -24,6 +24,7 @@ import xyz.oleolegka.gachimuchi.domain.Cardio
 import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
 import xyz.oleolegka.gachimuchi.domain.formatNumber
@@ -39,19 +40,19 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * Correcting or removing ONE entry that is already in the journal.
  *
  * ── Why an entry can be corrected at all, in an append-only journal ─────────────
- * It is not edited in place. Confirming here appends an amendment naming this event, and
- * `domain/Amendments.kt` folds the pair into what every reader sees; deleting appends a
- * deletion. The original row stays exactly as it was written, which is the whole point of the
- * journal — this dialog changes what the journal SAYS, never what it recorded.
+ * It is not edited in place. Confirming here writes a whole NEW row and marks this one
+ * superseded — see `domain/Amendments.kt` for the model — and deleting appends a deletion. The
+ * original row stays exactly as it was written, which is the whole point of the journal — this
+ * dialog changes what the journal SAYS is current, never what it recorded.
  *
  * ── What is deliberately not on this dialog: the exercise ──────────────────────
- * There is no way to move this entry to another exercise, and that is a rule rather than an
- * omission. An exercise's history is the set of entries that always were its own; a set that
- * can walk from one exercise to another turns every record and every chart into a statement
- * about wherever the sets happen to be pointing today. The repository REFUSES such a patch by
- * throwing (see [xyz.oleolegka.gachimuchi.domain.AMENDMENT_PROTECTED_KEYS]), so the honest
- * thing is to never offer it — a control that throws when pressed is worse than no control.
- * Moving a set is a deletion and a new entry, and the line at the bottom says so.
+ * There is no way to move this entry to another exercise, and that is a UI rule rather than a
+ * refusal enforced underneath it: an exercise's history is the set of entries that always were
+ * its own, and a set that can walk from one exercise to another turns every record and every
+ * chart into a statement about wherever the sets happen to be pointing today. The candidate
+ * this dialog builds always keeps [entry]'s own exercise (see `amended` below), so the honest
+ * thing is to never offer a control for it — moving a set is a deletion and a new entry, and
+ * the line at the bottom says so.
  *
  * ── The button is enabled only when what it would write is legal ───────────────
  * The candidate form is BUILT on every keystroke, inside `runCatching`, and the confirm button
@@ -91,7 +92,9 @@ fun EntryEditorDialog(
     var km by remember(entry) { mutableStateOf(initialKm(entry)) }
     var pace by remember(entry) { mutableStateOf(initialPace(entry)) }
     var warmup by remember(entry) { mutableStateOf(initialWarmup(entry)) }
-    var side by remember(entry) { mutableStateOf((entry as? HoldSet)?.sideOf) }
+    var incomplete by remember(entry) { mutableStateOf(initialIncomplete(entry)) }
+    var side by remember(entry) { mutableStateOf((entry as? LoadedSet)?.sideOf) }
+    var holdSeconds by remember(entry) { mutableStateOf(initialHoldSec(entry)) }
 
     /*
      * The whole validation story in one expression: build what would be written, and let the
@@ -99,7 +102,7 @@ fun EntryEditorDialog(
      * is exactly the question the confirm button needs answered.
      */
     val candidate = runCatching {
-        amended(entry, day, weight, reps, minutes, km, pace, warmup, side)
+        amended(entry, day, weight, reps, minutes, km, pace, warmup, incomplete, side, holdSeconds)
     }.getOrNull()
 
     AlertDialog(
@@ -131,7 +134,13 @@ fun EntryEditorDialog(
                             steps = listOf(1.0),
                             decimal = false,
                         )
+                        // shown on the same condition as HoldSet's own chooser below: the
+                        // catalog flag, or an entry that already names a side
+                        if (oneSided || entry.sideOf != null) {
+                            SideChipsRow(side) { side = it }
+                        }
                         WarmupToggle(warmup) { warmup = !warmup }
+                        IncompleteToggle(incomplete) { incomplete = !incomplete }
                     }
 
                     is HoldSet -> {
@@ -148,19 +157,19 @@ fun EntryEditorDialog(
                             steps = listOf(1.0),
                             decimal = false,
                         )
+                        // the length of one hold — see [HoldSet.holdSec] and the note on the
+                        // same field in ui/screens/LogScreen.kt's HoldEntry
+                        StepperField(
+                            label = "Hold time, s",
+                            value = holdSeconds,
+                            onValueChange = { holdSeconds = it },
+                            steps = listOf(1.0, 5.0),
+                        )
                         if (oneSided || entry.sideOf != null) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                HoldSide.entries.forEach { option ->
-                                    FilterChip(
-                                        selected = side == option,
-                                        onClick = { side = if (side == option) null else option },
-                                        label = { Text(option.label()) },
-                                        modifier = Modifier.heightIn(min = 40.dp),
-                                    )
-                                }
-                            }
+                            SideChipsRow(side) { side = it }
                         }
                         WarmupToggle(warmup) { warmup = !warmup }
+                        IncompleteToggle(incomplete) { incomplete = !incomplete }
                     }
 
                     is Cardio -> {
@@ -257,6 +266,42 @@ private fun WarmupToggle(selected: Boolean, onToggle: () -> Unit) {
     )
 }
 
+/**
+ * The "not completed" toggle of the editor — the same fact
+ * [xyz.oleolegka.gachimuchi.ui.screens.IncompleteChip] sets when recording, and the mark shown
+ * back on this same entry by ui/components/EntryLines.kt's "Not completed" badge. Corrected
+ * here for the set that was not marked at the time — a person remembers a set was a struggle
+ * after the fact more often than not.
+ */
+@Composable
+private fun IncompleteToggle(selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text("Not completed") },
+        modifier = Modifier.heightIn(min = 40.dp),
+    )
+}
+
+/**
+ * The left/right chooser, shared by every [LoadedSet] branch — tapping the chosen one again
+ * clears it rather than doing nothing, so a mis-tap is undone the same way it was made, the
+ * same rule ui/screens/LogScreen.kt's own chip row follows.
+ */
+@Composable
+private fun SideChipsRow(selected: HoldSide?, onSelect: (HoldSide?) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HoldSide.entries.forEach { option ->
+            FilterChip(
+                selected = selected == option,
+                onClick = { onSelect(if (selected == option) null else option) },
+                label = { Text(option.label()) },
+                modifier = Modifier.heightIn(min = 40.dp),
+            )
+        }
+    }
+}
+
 // --- the drafts, and the form they add up to ------------------------------------------------
 //
 // Prefilled from the entry as it currently reads (corrections already folded in), so opening
@@ -264,15 +309,25 @@ private fun WarmupToggle(selected: Boolean, onToggle: () -> Unit) {
 // the values that were not touched.
 
 private fun initialWeight(entry: ActivityForm): String = when (entry) {
-    is StrengthSet -> (if (entry.ownWeight) entry.addedKg else entry.weightKg)?.let(::formatNumber).orEmpty()
-    is HoldSet -> entry.addedKg?.let(::formatNumber).orEmpty()
+    // outward one branch — only a loaded set has a weight field at all; which field it reads
+    // (added weight vs the implement's own) still depends on the concrete form
+    is LoadedSet -> when (entry) {
+        is StrengthSet -> (if (entry.ownWeight) entry.addedKg else entry.weightKg)?.let(::formatNumber).orEmpty()
+        is HoldSet -> entry.addedKg?.let(::formatNumber).orEmpty()
+    }
+
     is Bodyweight -> formatNumber(entry.weightKg)
     else -> ""
 }
 
 private fun initialReps(entry: ActivityForm): String = when (entry) {
-    is StrengthSet -> entry.reps.toString()
-    is HoldSet -> entry.reps?.toString().orEmpty()
+    // reps is not one of LoadedSet's shared members (StrengthSet's is non-null, HoldSet's is
+    // nullable), so the concrete type still decides how to read it
+    is LoadedSet -> when (entry) {
+        is StrengthSet -> entry.reps.toString()
+        is HoldSet -> entry.reps?.toString().orEmpty()
+    }
+
     else -> ""
 }
 
@@ -289,17 +344,25 @@ private fun initialPace(entry: ActivityForm): String =
     (entry as? Cardio)?.paceSecPerKm?.let(::formatPace).orEmpty()
 
 private fun initialWarmup(entry: ActivityForm): Boolean = when (entry) {
-    is StrengthSet -> entry.warmup
-    is HoldSet -> entry.warmup
+    is LoadedSet -> entry.warmup
     else -> false
 }
+
+private fun initialIncomplete(entry: ActivityForm): Boolean = when (entry) {
+    is LoadedSet -> entry.incomplete
+    else -> false
+}
+
+/** The length of one hold, or blank for anything else — [HoldSet] is the only form that has one. */
+private fun initialHoldSec(entry: ActivityForm): String =
+    (entry as? HoldSet)?.holdSec?.let(::formatNumber).orEmpty()
 
 /**
  * The entry as the drafts would have it.
  *
  * A `copy` of the original rather than a fresh form, so everything nobody edited survives
- * untouched: the exercise link, the edge and protocol snapshot of a hang, the body weight
- * recorded at the time, the rest that was measured after the set. Building a new form from the
+ * untouched: the exercise link, the protocol snapshot of a hang, the body weight recorded
+ * at the time, the rest that was measured after the set. Building a new form from the
  * visible fields would silently drop all of it — and the body-weight snapshot in particular is
  * unrecoverable, since it is what somebody weighed on a day now in the past.
  *
@@ -315,7 +378,9 @@ private fun amended(
     km: String,
     pace: String,
     warmup: Boolean,
+    incomplete: Boolean,
     side: HoldSide?,
+    holdSeconds: String = "",
 ): ActivityForm {
     val weightValue = parseNumber(weight)
     val repsValue = parseCount(reps)
@@ -325,19 +390,21 @@ private fun amended(
             // sign survives, because a negative added weight is assistance and not a typo
             entry.copy(
                 addedKg = weightValue?.takeIf { it != 0.0 }, reps = repsValue ?: entry.reps,
-                warmup = warmup, opDate = day,
+                warmup = warmup, incomplete = incomplete, side = side?.code, opDate = day,
             )
         } else {
             entry.copy(
                 weightKg = weightValue?.takeIf { it > 0 }, reps = repsValue ?: entry.reps,
-                warmup = warmup, opDate = day,
+                warmup = warmup, incomplete = incomplete, side = side?.code, opDate = day,
             )
         }
 
         is HoldSet -> entry.copy(
             addedKg = weightValue?.takeIf { it != 0.0 },
             reps = repsValue?.takeIf { it > 0 },
+            holdSec = parseNumber(holdSeconds)?.takeIf { it > 0 },
             warmup = warmup,
+            incomplete = incomplete,
             side = side?.code,
             opDate = day,
         )
