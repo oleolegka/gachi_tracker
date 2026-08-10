@@ -35,7 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 
 /**
- * Correcting a catalog exercise, and taking one out of the pickers.
+ * Correcting a catalog exercise, taking one out of the pickers, or removing one for good.
  *
  * ── Why this exists at all ──────────────────────────────────────────────────────
  * A name typed into the entry card became a catalog row and then could never be touched
@@ -59,6 +59,13 @@ class ExerciseEditor internal constructor(
     val edit: (ExerciseEntity) -> Unit,
     /** Hides it from the pickers, or brings it back. */
     val toggleHidden: (ExerciseEntity) -> Unit,
+    /**
+     * Removes it from everywhere — the catalog and its own history — see
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.deleteExercise]. The caller is the one
+     * that knows how many entries are about to go and confirms with the person before this is
+     * reached; there is no confirmation in here to keep in step with a second one.
+     */
+    val delete: (ExerciseEntity) -> Unit,
 )
 
 @Composable
@@ -129,6 +136,9 @@ fun rememberExerciseEditor(): ExerciseEditor {
             edit = { editing = it },
             toggleHidden = { exercise ->
                 scope.launch { repo.setHidden(exercise.id, !exercise.hidden) }
+            },
+            delete = { exercise ->
+                scope.launch { repo.deleteExercise(exercise) }
             },
         )
     }
