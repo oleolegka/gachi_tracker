@@ -804,8 +804,9 @@ fun activityHeatmap(
  * The two forms that are made of SETS. A run, a stretch and a weigh-in are training and are
  * not sets, so they have nothing to contribute to a count of sets.
  *
- * The same pair [startsRest] names, and for the same underlying reason — a set is the unit
- * that is performed, rested after, and counted.
+ * NOT the same pair [startsRest] names any more (§13.9 added a stretch's own form, DURATION,
+ * to that one): a duration entry now gets a rest between reps of it, and still is not itself
+ * counted as a "set" here — the two questions were always free to part ways, and now they do.
  */
 private val SET_TYPES: List<String> = listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET)
 

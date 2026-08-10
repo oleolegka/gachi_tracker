@@ -228,6 +228,31 @@ class Journal {
         return newVersion.id
     }
 
+    /**
+     * Renames a workout the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.renameWorkout]
+     * writes it: a whole new `workout_started` row carrying the target's own day and slot —
+     * [name] is the only thing that changes — plus the deletion that supersedes the old one.
+     * Returns the new version's id; every set recorded before the rename still resolves to it
+     * through [xyz.oleolegka.gachimuchi.domain.JournalView.canonicalUid], the SAME id or the old
+     * one both being valid ways for a screen to ask for this workout afterwards.
+     */
+    fun renameWorkout(workoutId: Long, name: String?, at: String = "09:05"): Long {
+        val target = rows.first { it.id == workoutId }
+        val started = payloadJson.decodeFromString<WorkoutStarted>(target.payload)
+        val newVersion = JournalEvent(
+            nextId++, "${started.opDate}T$at:00", 1, 1, TYPE_WORKOUT_STARTED,
+            payloadJson.encodeToString(started.copy(name = name)),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        rows += newVersion
+        add(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            newVersion.ts,
+        )
+        return newVersion.id
+    }
+
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */
     fun weighIn(day: String, kg: Double = 74.2, at: String = "07:30", workoutId: Long? = null): Long {
         val form = bodyweightOf(day, kg)

@@ -395,13 +395,22 @@ data class Workout(
      */
     val entriesWithoutExercise: List<ActivityEvent>,
     /**
+     * The id of the live [TYPE_WORKOUT_FINISHED] event that closed this workout, or null for
+     * one still going — the same "the mark and the way to undo it are one field" choice
+     * [WorkoutExercise.finishedEventId] makes for a single card, and for the same reason: a
+     * screen offering to undo the finish already needs this id to name the deletion, and a
+     * second `finished: Boolean` beside it would only be a fact that could disagree.
+     */
+    val finishedEventId: Long? = null,
+) {
+    /**
      * Somebody said this workout was over — by the button, or by starting the next one.
      *
      * A STATUS AND NOT A LOCK: a finished workout can still be opened and written into, and
      * doing so does not re-open it. See [TYPE_WORKOUT_FINISHED].
      */
-    val finished: Boolean = false,
-) {
+    val finished: Boolean get() = finishedEventId != null
+
     /**
      * The plan's local row number, for the screens that still navigate the plan by one.
      *
@@ -464,6 +473,36 @@ data class Workout(
      */
     fun isBackdated(today: String): Boolean = opDate < today
 }
+
+/**
+ * One exercise staged into a workout that has not been started yet — see §13.1, "the start
+ * event is created lazily", and [xyz.oleolegka.gachimuchi.ui.MainViewModel]'s draft state.
+ *
+ * The same two facts [WorkoutExercise] carries for a card already in a real workout — which
+ * exercise, and the rest chosen for it — because that is all a card can say before it exists:
+ * no sets, no "added" row, nothing a card in a real workout also has to have written for it.
+ */
+data class DraftCard(val exerciseId: Long, val restSec: Int, val side: HoldSide? = null)
+
+/**
+ * [cards] shaped as a [Workout], so the screen that draws one can draw the other without
+ * knowing the difference — see [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen].
+ *
+ * [id]/[uid] are sentinels: nothing about a draft is a row yet, and nothing downstream reads
+ * them off a [Workout] built here — the actions a screen is handed close over the real id once
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.promoteDraft] has written one, never this one.
+ */
+fun draftWorkout(opDate: String, name: String?, cards: List<DraftCard>, linkOf: (Long) -> ExerciseLink): Workout =
+    Workout(
+        id = 0L,
+        uid = "",
+        ts = "",
+        opDate = opDate,
+        slot = null,
+        name = name,
+        exercises = cards.map { WorkoutExercise(linkOf(it.exerciseId), it.restSec, emptyList(), side = it.side) },
+        entriesWithoutExercise = emptyList(),
+    )
 
 /**
  * What a journal row says about the workout it was recorded during, or null for a row
@@ -699,7 +738,13 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      * bottom of a list the user has just arranged.
      */
     val firstRow = HashMap<String, Long>()
-    var finished = false
+    /**
+     * The live "workout finished" event, by id — overwritten on every one seen rather than
+     * just flagged, the same "last one wins" rule [cardFinished] follows for a single card:
+     * a workout finished, reopened and finished again carries the LAST such event, which is
+     * the one [unfinishWorkoutExercise]'s whole-workout twin has to name to undo it.
+     */
+    var finishedRowId: Long? = null
     var order: WorkoutOrder? = null
     var orderRowId = 0L
 
@@ -717,7 +762,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         if (row.type == TYPE_WORKOUT_FINISHED) {
             // sets recorded AFTER this one are still folded in below: finishing is a status,
             // not a lock, and the forgotten set typed up afterwards belongs here
-            finished = true
+            finishedRowId = row.id
             continue
         }
         val stated = row.workoutOrderOrNull()
@@ -786,7 +831,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         name = started?.name?.takeIf { it.isNotBlank() },
         exercises = ordered.groupedByCardStatus(),
         entriesWithoutExercise = unkeyed,
-        finished = finished,
+        finishedEventId = finishedRowId,
     )
 }
 

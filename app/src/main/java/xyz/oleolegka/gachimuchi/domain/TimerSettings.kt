@@ -14,6 +14,15 @@ import kotlin.math.roundToInt
 const val MIN_STEP_SEC = 1
 const val MAX_STEP_SEC = 60 * 60
 
+/**
+ * How long the REST BETWEEN SETS may be typed as, one full day — its own ceiling, separate
+ * from [MAX_STEP_SEC]. That one bounds a protocol step and the prepare countdown, both of
+ * which stay an hour: raising it whole would give the prepare countdown a day-long step for
+ * no reason anybody asked for. A rest is a different kind of number — a deload, a long gap
+ * between exercises typed up after the fact — and it is the one field this bound is for.
+ */
+const val MAX_REST_INPUT_SEC = 24 * 60 * 60
+
 /** The one-tap durations offered next to the rest timer. */
 val REST_PRESETS_SEC = listOf(60, 90, 120, 180)
 
@@ -124,13 +133,33 @@ fun restSourceLabel(settings: TimerSettings, events: List<JournalEvent>, exercis
     }
 
 /**
- * Whether recording this form should start a rest floor for its exercise.
+ * Exercise KINDS whose sets are followed by a rest — the ONE rule behind both overloads of
+ * [startsRest] below, so that "should this exercise offer a rest" is answered the same way
+ * whether it is asked of a set just recorded or of a card that has not taken one yet.
  *
- * Only the two set-based forms. A body weight reading, a check-in and a finished cardio
- * session are not followed by another set, and a countdown after them is noise that trains
- * you to ignore the timer.
+ * Strength and holds, unsurprisingly, and DURATION alongside them — a held stretch between
+ * sides, a hangboard repeater timed by hand, is still "one set, then a pause, then the next".
+ * NOT body weight (a reading, never followed by another set of itself — the defect this set
+ * excludes: a "set a rest" button that used to appear on a weigh-in card too, reported as
+ * confusing the moment the two were told apart on screen), a check-in, or cardio (its own
+ * pace is the number that matters, not a pause after it).
  */
-fun startsRest(form: ActivityForm): Boolean = form is StrengthSet || form is HoldSet
+private val RESTING_FORMS = setOf(ExerciseForm.STRENGTH, ExerciseForm.HOLD, ExerciseForm.DURATION)
+
+/**
+ * Whether recording this form should start a rest floor for its exercise — see
+ * [RESTING_FORMS]. Read off the event type rather than a hand-paired `is StrengthSet, is
+ * HoldSet ->` list, so this and the exercise-kind overload below can share the one set of
+ * forms instead of each keeping its own copy of it.
+ */
+fun startsRest(form: ActivityForm): Boolean =
+    ExerciseForm.entries.firstOrNull { it.eventType == form.type } in RESTING_FORMS
+
+/**
+ * The same question, asked of an exercise's KIND before any set of it exists — what decides
+ * whether a card offers "set a rest" at all. See [RESTING_FORMS].
+ */
+fun startsRest(exerciseForm: ExerciseForm): Boolean = exerciseForm in RESTING_FORMS
 
 /** "2:05", the shape a countdown is read in. Hours appear only if there are any. */
 fun formatClock(totalSec: Int): String {
@@ -147,3 +176,60 @@ fun formatClock(totalSec: Int): String {
 
 /** Rounds a millisecond remainder UP to whole seconds, the way a countdown must display it. */
 fun ceilSeconds(ms: Long): Int = ((ms + 999) / 1000).toInt().coerceAtLeast(0)
+
+// --- typing a length of time (§13.9) -----------------------------------------------------
+//
+// One field for every "how long" this app asks: the rest picked in the slot editor, the rest
+// asked mid-workout, and a duration entry. Each used to invent its own way in — a ladder of
+// preset buttons with no way past it, bare seconds nobody reads as a length of time, and a
+// MINUTES field that could only reach a whole number of seconds through a decimal point
+// ("0.5" for thirty seconds). ui/components/TimeField.kt is the one control; these two
+// functions are the read and the write of what it shows.
+//
+// ── Typed RIGHT TO LEFT, unlike the clock-of-day field next to it ───────────────
+// domain/Schedule.kt's `formatTimeDigits` types a TIME OF DAY left to right (the hour first,
+// because "7" alone is a complete answer — seven o'clock) and that is wrong here: "30" typed
+// for a REST is thirty seconds, not thirty minutes waiting for a pair of digits that may never
+// come, and forcing a leading zero for anything under a minute ("030" for thirty seconds)
+// would be a worse field than the bare-seconds one this replaces. So a new digit is always the
+// ones of SECONDS, and everything already typed shifts left — the same convention a stopwatch
+// or a calculator's cents entry uses, and the only one where "type the number of seconds you
+// want" (today's whole habit) keeps working unchanged.
+
+/**
+ * [text] as typed so far -> the canonical "M:SS" it should show, digit by digit as a numeric
+ * keypad delivers them (no colon key on one, so this places it). Non-digits are dropped, so
+ * pasting "1:30" also works.
+ *
+ * The rightmost two digits are always seconds; whatever is left of them is minutes, unbounded
+ * — a rest can run past a hundred minutes without the field running out of room the way a
+ * fixed HH:MM one would.
+ */
+fun formatDurationDigits(text: String): String {
+    val digits = text.filter { it.isDigit() }
+    if (digits.isEmpty()) return ""
+    val secDigits = digits.takeLast(2).padStart(2, '0')
+    val minDigits = digits.dropLast(2)
+    return "${minDigits.ifEmpty { "0" }}:$secDigits"
+}
+
+/**
+ * The typed "M:SS" as whole seconds, or null when it is not a length of time — an empty
+ * field, or SECONDS past 59, which [formatDurationDigits] never itself produces but a pasted
+ * value can. There is no carrying a typo into the minutes: "1:75" is refused rather than read
+ * as 1:75 rolled over to 2:15, the same refusal [parseSlotTime] makes for an hour past 23.
+ */
+fun parseDurationText(text: String): Int? {
+    val digits = text.filter { it.isDigit() }
+    if (digits.isEmpty()) return null
+    val sec = digits.takeLast(2).toInt()
+    if (sec > 59) return null
+    val min = digits.dropLast(2).ifEmpty { "0" }.toIntOrNull() ?: return null
+    return min * 60 + sec
+}
+
+/** Whole seconds -> the same "M:SS" shape [formatDurationDigits] types towards — what a bump button writes. */
+fun formatDurationSec(totalSec: Int): String {
+    val safe = totalSec.coerceAtLeast(0)
+    return "${safe / 60}:${(safe % 60).toString().padStart(2, '0')}"
+}

@@ -9,8 +9,10 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performTextReplacement
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -55,7 +57,7 @@ import java.time.LocalDate
  * that the dialog fits a phone: this file has nothing to say about the editor's layout at
  * 411 dp, and neither does any other test. That belongs on the list in [ScreenTest].
  */
-@Config(sdk = [34], qualifiers = "w600dp-h960dp-xhdpi")
+@Config(sdk = [34], qualifiers = "w600dp-h2400dp-xhdpi")
 class SlotEditorTest : ScreenTest() {
 
     private val day = LocalDate.parse("2026-08-07")
@@ -91,7 +93,26 @@ class SlotEditorTest : ScreenTest() {
      * field that ignored its input.
      */
     private fun type(label: String, text: String) {
+        /*
+         * Matched by "can be typed into", not by text alone. A filled Material field puts its
+         * label in a node of its OWN, next to the field, and a plain text match lands on that
+         * label - which has no focus to request, so the input fails with a message about
+         * RequestFocus rather than about the field. Asking for a node that has a set-text
+         * action can only ever find the field.
+         */
         compose.onNodeWithText(label).performTextInput(text)
+        settle()
+    }
+
+    /**
+     * Types into a [TimeField], which unlike an ordinary field carries its label in a Text of
+     * its OWN above the box. Matching by that label would land on the Text, which has no focus
+     * to give; the field is addressed by the accessible name it was given for exactly this
+     * reason (see TimeField).
+     */
+    private fun typeTime(label: String, text: String) {
+        compose.onNode(hasSetTextAction() and hasContentDescription(label))
+            .performTextInput(text)
         settle()
     }
 
@@ -102,12 +123,16 @@ class SlotEditorTest : ScreenTest() {
      * A node in the dialog's own scrolling body, brought into view first.
      *
      * The body scrolls (it is a `Column` with `verticalScroll`), so its lower half — the
-     * exercises, the problem line, the delete button — is present in the tree and outside
-     * the window. Tapping something outside the window fails, and asserting it is
-     * "displayed" fails for a reason that has nothing to do with the editor.
+     * exercises, the problem line, the delete button — used to sit outside the window.
+     *
+     * THIS NO LONGER SCROLLS TO IT, and that is not a style choice. `performScrollTo` is an
+     * animation, and this suite freezes the animation clock on purpose (see ScreenTest): a
+     * scroll that can never finish makes the test HANG rather than fail, and it takes the whole
+     * run down with it - which is exactly what it did the first time a text field was typed
+     * into here. The window is tall enough to hold the editor instead, so nothing has to move.
      */
     private fun inBody(text: String, substring: Boolean = false) =
-        compose.onNodeWithText(text, substring = substring).performScrollTo()
+        compose.onNodeWithText(text, substring = substring)
 
     /**
      * The "add an exercise" button, matched loosely because its label is padded with spaces
@@ -117,7 +142,7 @@ class SlotEditorTest : ScreenTest() {
     private fun addExerciseButton() = inBody("Add an exercise", substring = true)
 
     private fun bodyIcon(description: String) =
-        compose.onNodeWithContentDescription(description).performScrollTo()
+        compose.onNodeWithContentDescription(description)
 
     // --- the time, typed without a colon --------------------------------------------------
 
@@ -338,6 +363,69 @@ class SlotEditorTest : ScreenTest() {
 
         settle()
         assertEquals(listOf(1L), saved?.exercises?.map { it.exerciseId })
+    }
+
+    // --- the rest, typed as mm:ss (§13.9) -------------------------------------------------
+    //
+    // It used to be six chips capped at 4:00 — "not able to choose anything above 4:00" was
+    // the complaint that started this. These are the regression for the field that replaced
+    // them: xyz.oleolegka.gachimuchi.ui.components.TimeField, shared with the rest dialog
+    // inside a live workout.
+
+    @Test
+    fun `a rest already chosen is shown as mm colon ss, not on a chip`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        inBody("2:30").assertExists()
+        inBody("Usual").assertExists()
+    }
+
+    /** THE regression: five minutes is past every preset chip this row used to offer. */
+    @Test
+    fun `a rest past the old four-minute ceiling can be typed and saved`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = null)))
+        )
+
+        typeTime("Rest, mm:ss", "500")
+        inBody("5:00").assertExists()
+
+        compose.onNodeWithText("Save").performClick()
+        settle()
+        assertEquals(listOf(300), saved?.exercises?.map { it.restSec })
+    }
+
+    @Test
+    fun `Usual clears whatever was typed`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        inBody("Usual").performClick()
+        settle()
+
+        inBody("2:30").assertDoesNotExist()
+        compose.onNodeWithText("Save").performClick()
+        settle()
+        assertEquals(listOf<Int?>(null), saved?.exercises?.map { it.restSec })
+    }
+
+    @Test
+    fun `the bump adds to whatever the field already holds`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        compose.onNodeWithText("+30s").performClick()
+        settle()
+
+        inBody("3:00").assertExists()
     }
 
     // --- the picker, which has to come up ABOVE the dialog -------------------------------------

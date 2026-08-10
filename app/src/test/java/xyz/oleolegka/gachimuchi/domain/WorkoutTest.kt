@@ -146,13 +146,25 @@ class WorkoutTest {
     @Test
     fun `finishing closes it, and nothing else is open afterwards`() {
         val start = started(today)
-        val events = listOf(start, finished(start.id))
+        val done = finished(start.id)
+        val events = listOf(start, done)
 
         assertNull(openWorkoutRow(events)?.id)
         // it is not gone, it is over: still findable, still complete
         assertEquals(1, workoutsOn(events, today).size)
-        assertTrue(buildWorkout(events, start.id)!!.finished)
+        val workout = buildWorkout(events, start.id)!!
+        assertTrue(workout.finished)
+        // the id of the event that closed it, the same "the mark IS the way to undo it" model
+        // WorkoutExercise.finishedEventId already carries for a single card
+        assertEquals(done.id, workout.finishedEventId)
     }
+
+    /*
+     * NOT covered here: undo. Un-finishing deletes the finish event, and this file's
+     * hand-built rows are not run through the amendment funnel's own regression suite — see
+     * ActivityRepository.unfinishWorkout and the screen tests that exercise the button. Stating
+     * the gap beats a test that quietly checks something easier.
+     */
 
     /**
      * THE regression this pins: correcting a workout writes a whole new start row (a rename or

@@ -56,7 +56,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
-import xyz.oleolegka.gachimuchi.domain.MAX_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.RestFloor
@@ -68,14 +68,16 @@ import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.cardKey
 import xyz.oleolegka.gachimuchi.domain.ceilSeconds
 import xyz.oleolegka.gachimuchi.domain.formatClock
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.lastTimeOf
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
-import xyz.oleolegka.gachimuchi.domain.parseCount
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
+import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.components.CardRadius
@@ -89,6 +91,7 @@ import xyz.oleolegka.gachimuchi.ui.components.moved
 import xyz.oleolegka.gachimuchi.ui.components.rememberReorderState
 import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
+import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
@@ -198,7 +201,12 @@ data class WorkoutLogActions(
      * added is still training that happened. So "remove this exercise" is a removal of the
      * whole block or it is nothing, and the confirmation says which sets are going.
      */
-    val removeExercise: (eventIds: List<Long>) -> Unit,
+    /**
+     * [exerciseId]/[side] name the card even when [eventIds] is empty — a card staged into a
+     * draft that has not been written yet has nothing to delete, and this is how a caller
+     * knows which staged card to drop, and which rest bar (if any) to take down with it.
+     */
+    val removeExercise: (eventIds: List<Long>, exerciseId: Long?, side: HoldSide?) -> Unit,
 
     /**
      * State the order the exercises of this workout are to be done in, WHOLE.
@@ -265,6 +273,12 @@ data class WorkoutLogActions(
      */
     val unfinishExercise: (eventId: Long) -> Unit,
 
+    /**
+     * Undo [finish] for the whole workout — the same reversal [unfinishExercise] is for one
+     * card, named by the id of the "workout finished" event itself.
+     */
+    val unfinishWorkout: (eventId: Long) -> Unit,
+
     /** Go back to the set already running. It has never stopped; this only shows it again. */
     val openConductor: () -> Unit,
 
@@ -276,7 +290,14 @@ data class WorkoutLogActions(
 @Composable
 fun WorkoutLogScreen(
     state: UiState,
-    workoutId: Long,
+    /**
+     * The workout being logged, or null while it is still a draft — see §13.1. A draft has no
+     * row in the journal yet, so this screen has nothing to fold [state.events] against; it
+     * draws [draftWorkout] instead, and every action closes over the draft rather than an id.
+     */
+    workoutId: Long?,
+    /** The draft this screen shows when [workoutId] is null — see [draftWorkout]. */
+    draftWorkout: Workout? = null,
     settings: TimerSettings,
     /** Every rest the app is counting, of which at most one belongs to each card. */
     floors: List<RestFloor>,
@@ -313,7 +334,11 @@ fun WorkoutLogScreen(
     nowMs: Long = rememberTickingNow(active = floors.isNotEmpty()),
 ) {
     val colors = LocalGachiColors.current
-    val workout = remember(state.events, workoutId) { buildWorkout(state.events, workoutId) }
+    /** No start event written yet — see [workoutId]'s own KDoc. */
+    val draftMode = workoutId == null
+    val workout = remember(state.events, workoutId, draftWorkout) {
+        workoutId?.let { buildWorkout(state.events, it) } ?: draftWorkout
+    }
 
     if (workout == null) {
         // a wipe, a reseed, a workout that was never in this journal: say so rather than
@@ -487,9 +512,20 @@ fun WorkoutLogScreen(
                      * working. It is simply pressed once at the end of a session, and every
                      * control the thumb can reach without aiming is reserved for the moves
                      * made twenty times an hour.
+                     *
+                     * THE SAME SLOT DOES THREE THINGS, one at a time, never more than one on
+                     * screen at once: draft, finish, and undo the finish. A draft has nothing
+                     * to finish yet — this IS the explicit "start workout" §13.1 asks for — and
+                     * a finished workout is a status and not a lock, so the way back is right
+                     * where the way there was.
                      */
-                    TextButton(onClick = actions.finish, enabled = !workout.finished) {
-                        Text(if (workout.finished) "Finished" else "Finish")
+                    when {
+                        draftMode -> TextButton(onClick = actions.finish) { Text("Start workout") }
+                        workout.finished -> TextButton(
+                            onClick = { workout.finishedEventId?.let(actions.unfinishWorkout) },
+                        ) { Text("Reopen") }
+
+                        else -> TextButton(onClick = actions.finish) { Text("Finish") }
                     }
                 },
             )
@@ -592,7 +628,11 @@ fun WorkoutLogScreen(
                             }
                         }
                     },
-                    onRest = id?.let { e ->
+                    // the same rule the auto-started rest already follows (§13.9) — a weigh-in
+                    // is not followed by another set of itself, and the button offering to
+                    // time a pause after one was the remaining trace of "brother mistook the
+                    // scales for an exercise"
+                    onRest = id?.takeIf { ref != null && startsRest(ref.form) }?.let { e ->
                         {
                             askingRestFor = e
                             askingRestSide = exercise.side?.code
@@ -626,7 +666,10 @@ fun WorkoutLogScreen(
                     onMoveUp = if (index == 0) null else ({ moveExercise(index, index - 1) }),
                     onMoveDown = if (index == shown.lastIndex) null else ({ moveExercise(index, index + 1) }),
                     finished = exercise.finished,
-                    onFinish = if (exercise.finished || ref == null) {
+                    // a card of a draft cannot be finished — the workout it would belong to
+                    // does not exist yet, and offering the button would ask a question the
+                    // journal has no row to answer
+                    onFinish = if (draftMode || exercise.finished || ref == null) {
                         null
                     } else {
                         { actions.finishExercise(ref.link, exercise.side) }
@@ -762,7 +805,13 @@ fun WorkoutLogScreen(
                 onConfirm = {
                     removingKey = null
                     actions.removeExercise(
-                        exercise.addedEventIds + exercise.sets.map { it.id }
+                        // every row the card owns — the "added" rows, the sets, AND the "card
+                        // finished" row when there is one, or a removed finished card comes
+                        // back as an empty ghost with nothing left to clear it (§14.1)
+                        exercise.addedEventIds + exercise.sets.map { it.id } +
+                            listOfNotNull(exercise.finishedEventId),
+                        exercise.exerciseId,
+                        exercise.side,
                     )
                 },
                 onDismiss = { removingKey = null },
@@ -1146,8 +1195,10 @@ private fun RestDialog(
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    var draft by remember(exerciseName, initialSec) { mutableStateOf(initialSec.toString()) }
-    val seconds = parseCount(draft)?.takeIf { it in MIN_STEP_SEC..MAX_STEP_SEC }
+    // seeded from a whole number of seconds (the rest this card already has, or the catalog's
+    // remembered answer) and typed as mm:ss from there — see ui/components/TimeField.kt (§13.9)
+    var draft by remember(exerciseName, initialSec) { mutableStateOf(formatDurationSec(initialSec)) }
+    val seconds = parseDurationText(draft)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1159,21 +1210,13 @@ private fun RestDialog(
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                StepperField(
-                    label = "Rest, seconds",
-                    value = draft,
-                    onValueChange = { draft = it },
-                    steps = listOf(15.0, 30.0),
-                    decimal = false,
-                )
                 /*
-                 * The chosen rest, said the way a person reads a rest, and said LOUDLY.
-                 *
-                 * The field above holds bare seconds because that is what the steppers add
-                 * to, and "90" is not a length of time anyone recognises at a glance. This
-                 * line used to be the small grey afterthought under it, which put the only
-                 * legible form of the answer in the smallest type on the screen — reported
-                 * from the phone as "hard to tell what is even selected" (2026-08-08).
+                 * Said LOUDLY as well as typed: the field holds "5:00" already, which reads
+                 * fine on its own, but the confirmation line stays because a number that big
+                 * benefits from being said twice, once in the smaller field and once where it
+                 * cannot be missed — reported from the phone as "hard to tell what is even
+                 * selected" (2026-08-08), before mm:ss entry existed to make the field itself
+                 * legible at all.
                  */
                 Text(
                     seconds?.let(::formatClock) ?: "--:--",
@@ -1186,9 +1229,16 @@ private fun RestDialog(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                 )
+                TimeField(
+                    label = "Rest, mm:ss",
+                    value = draft,
+                    onValueChange = { draft = it },
+                    bumpsSec = listOf(10, 30),
+                    isError = draft.isNotBlank() && seconds == null,
+                )
                 if (seconds == null) {
                     Text(
-                        "A rest is between 1 second and an hour.",
+                        "A rest is between 1 second and a day.",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.inkSecondary,
                         modifier = Modifier.fillMaxWidth(),
@@ -1288,7 +1338,8 @@ private fun QuickEntrySheet(
     state: UiState,
     exercise: ExerciseRef,
     opDate: String,
-    workoutId: Long,
+    /** The workout this sheet is raised for, or null while it is still a draft (§13.1). */
+    workoutId: Long?,
     /** The card this sheet was raised from already answered which side — see [HoldEntry]. */
     fixedSide: HoldSide? = null,
     onAddSet: (ActivityForm) -> Unit,

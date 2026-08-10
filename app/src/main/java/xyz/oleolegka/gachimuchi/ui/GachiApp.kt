@@ -29,6 +29,7 @@ import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.draftWorkout
 import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
 import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
@@ -116,6 +117,9 @@ fun GachiApp(viewModel: MainViewModel) {
     // what matured while a protocol-led set had the rests muted. Already spoken by the time
     // it gets here; the screen is where it gets written down
     val floorSummary by viewModel.floorSummary.collectAsStateWithLifecycle()
+    // the workout being sketched before it has actually begun (§13.1) — null whenever there
+    // is none, which is most of the time
+    val draft by viewModel.draft.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     /*
@@ -230,16 +234,16 @@ fun GachiApp(viewModel: MainViewModel) {
         loggingWorkoutId = workoutId
     }
     /*
-     * Starting a workout, from a plan or off-plan. When it comes from a plan its exercises
-     * are already in it by the time the screen opens — the copy happens inside
-     * [MainViewModel.startWorkout], between the start event and this navigation, so there is
-     * no frame on which the workout looks empty.
+     * "Starting" a workout, from a plan or off-plan — WITHOUT starting it (§13.1). This opens
+     * a DRAFT: its exercises are staged the same way [MainViewModel.startWorkout] used to copy
+     * them, but nothing is written to the journal, so the plan card behind it stays exactly
+     * what it was. The real start event lands only once the screen's own "Start workout" is
+     * pressed or a set is recorded — see [MainViewModel.promoteDraft].
      */
     val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?, String?) -> Unit> {
         day, slotId, name ->
-        viewModel.startWorkout(day, slotId, name) { id ->
-            openLoggingNow(day.toString(), id)
-        }
+        viewModel.beginDraft(day, slotId, name)
+        openLoggingNow(day.toString(), null)
     }
 
     // the day comes from the WORKOUT, never from any screen's idea of today (see [loggingDay])
@@ -296,6 +300,8 @@ fun GachiApp(viewModel: MainViewModel) {
             // the set keeps running, keeps speaking, and the card leads back to it
             BackStep.CloseConductor -> conductorOpen = false
             BackStep.CloseLogging -> {
+                // a no-op when there was none — see [MainViewModel.discardDraft]
+                viewModel.discardDraft()
                 loggingDate = null
                 loggingWorkoutId = null
             }
@@ -429,58 +435,118 @@ fun GachiApp(viewModel: MainViewModel) {
          * still [LogScreen], because there is no workout there to draw the cards of and the
          * old screen answers that case exactly.
          */
-        loggingOn != null && loggingWorkout != null -> {
+        loggingOn != null && (loggingWorkout != null || draft != null) -> {
             val workoutBeingLogged = loggingWorkout
             /*
              * Built once per workout rather than per recomposition: the screen holds a rest
              * bar that redraws four times a second, and fresh lambdas on every frame would
              * make every card in it recompose along with the bar.
+             *
+             * Keyed by [workoutBeingLogged] alone, not by the draft's own content: every draft
+             * action below asks the ViewModel fresh rather than closing over a staged card
+             * list, so the block does not have to be rebuilt on every add — only the ONE
+             * transition that matters, draft to real, changes this key at all.
              */
             val workoutActions = remember(workoutBeingLogged) {
-                WorkoutLogActions(
-                    addExercise = { exerciseId, restSec, side ->
-                        viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec, side)
-                    },
-                    createExercise = { name, form, work, rest, then ->
-                        viewModel.createExercise(name, form, work, rest, then)
-                    },
+                if (workoutBeingLogged != null) {
+                    WorkoutLogActions(
+                        addExercise = { exerciseId, restSec, side ->
+                            viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec, side)
+                        },
+                        createExercise = { name, form, work, rest, then ->
+                            viewModel.createExercise(name, form, work, rest, then)
+                        },
+                        /*
+                         * INTO THIS WORKOUT, named rather than looked up. The screen is drawing
+                         * a particular workout and that is the one a set typed on it belongs to
+                         * — which is not the same as "the open one" the moment a FINISHED
+                         * workout is opened to add the set forgotten in the changing room (§13).
+                         */
+                        addSet = { form ->
+                            viewModel.addSet(form, intoWorkoutId = workoutBeingLogged)
+                        },
+                        undoSet = viewModel::undoSet,
+                        // rows and all: the "added" events, every set, and the "finished" row
+                        // when there is one; the id and side are also what dismisses this
+                        // card's own rest bar, if it has one running (§13.5)
+                        removeExercise = { eventIds, exerciseId, side ->
+                            viewModel.deleteEntries(eventIds)
+                            if (exerciseId != null) viewModel.dismissFloor(exerciseId, side)
+                        },
+                        // the whole order, one row per drop -- see TYPE_WORKOUT_ORDER_SET
+                        reorderExercises = { order ->
+                            viewModel.setWorkoutExerciseOrder(workoutBeingLogged, order)
+                        },
+                        finish = { viewModel.finishWorkout(workoutBeingLogged) },
+                        // one CARD done, not the workout: `finish` above closes the whole session
+                        finishExercise = { exercise, side ->
+                            viewModel.finishWorkoutExercise(workoutBeingLogged, exercise, side)
+                        },
+                        unfinishExercise = viewModel::unfinishWorkoutExercise,
+                        unfinishWorkout = viewModel::unfinishWorkout,
+                        startProtocolSet = { exercise, addedKg, side ->
+                            viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                            conductorOpen = true
+                        },
+                        openConductor = { conductorOpen = true },
+                        close = {
+                            loggingDate = null
+                            loggingWorkoutId = null
+                        },
+                    )
+                } else {
                     /*
-                     * INTO THIS WORKOUT, named rather than looked up. The screen is drawing a
-                     * particular workout and that is the one a set typed on it belongs to —
-                     * which is not the same as "the open one" the moment a FINISHED workout is
-                     * opened to add the set forgotten in the changing room (§13).
+                     * A DRAFT: every write below stages a local card instead of touching the
+                     * journal, except the two that ARE the explicit "start workout" §13.1 asks
+                     * for — the button, and the first set — both of which promote first and
+                     * then behave exactly like the branch above, on the workout that promotion
+                     * just created.
                      */
-                    addSet = { form ->
-                        viewModel.addSet(form, intoWorkoutId = workoutBeingLogged)
-                    },
-                    undoSet = viewModel::undoSet,
-                    // rows and all: the "added" events and every set of the exercise, so a
-                    // block taken out of the workout does not come straight back on its sets
-                    removeExercise = viewModel::deleteEntries,
-                    // the whole order, one row per drop -- see TYPE_WORKOUT_ORDER_SET
-                    reorderExercises = { order ->
-                        viewModel.setWorkoutExerciseOrder(workoutBeingLogged, order)
-                    },
-                    finish = { viewModel.finishWorkout(workoutBeingLogged) },
-                    // one CARD done, not the workout: `finish` above closes the whole session
-                    finishExercise = { exercise, side ->
-                        viewModel.finishWorkoutExercise(workoutBeingLogged, exercise, side)
-                    },
-                    unfinishExercise = viewModel::unfinishWorkoutExercise,
-                    startProtocolSet = { exercise, addedKg, side ->
-                        viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
-                        conductorOpen = true
-                    },
-                    openConductor = { conductorOpen = true },
-                    close = {
-                        loggingDate = null
-                        loggingWorkoutId = null
-                    },
-                )
+                    WorkoutLogActions(
+                        addExercise = { exerciseId, restSec, side ->
+                            viewModel.updateDraftCard(exerciseId, restSec, side)
+                        },
+                        createExercise = { name, form, work, rest, then ->
+                            viewModel.createExercise(name, form, work, rest, then)
+                        },
+                        addSet = { form ->
+                            viewModel.promoteDraft { id ->
+                                loggingWorkoutId = id
+                                viewModel.addSet(form, intoWorkoutId = id)
+                            }
+                        },
+                        undoSet = {}, // nothing recorded yet for a draft to undo
+                        removeExercise = { _, exerciseId, side ->
+                            if (exerciseId != null) viewModel.removeDraftCard(exerciseId, side)
+                        },
+                        reorderExercises = { order -> viewModel.reorderDraftCards(order) },
+                        // THE explicit button — see this screen's own top bar for the label
+                        finish = { viewModel.promoteDraft { id -> loggingWorkoutId = id } },
+                        finishExercise = { _, _ -> }, // no card of a draft can be finished
+                        unfinishExercise = {},
+                        unfinishWorkout = {},
+                        startProtocolSet = { exercise, addedKg, side ->
+                            viewModel.promoteDraft { id ->
+                                loggingWorkoutId = id
+                                viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                                conductorOpen = true
+                            }
+                        },
+                        openConductor = { conductorOpen = true },
+                        // leaving a draft leaves nothing behind: it was never written
+                        close = {
+                            viewModel.discardDraft()
+                            loggingDate = null
+                        },
+                    )
+                }
             }
             WorkoutLogScreen(
                 state = state,
                 workoutId = workoutBeingLogged,
+                draftWorkout = draft?.let { d ->
+                    draftWorkout(d.day.toString(), d.name, d.cards) { id -> state.linkOf(id) }
+                },
                 settings = timerSettings,
                 floors = restFloors,
                 actions = workoutActions,
@@ -530,6 +596,8 @@ fun GachiApp(viewModel: MainViewModel) {
             // both append rather than rewrite; domain/Amendments.kt folds them for every reader
             onAmendEntry = viewModel::amendEntry,
             onDeleteEntry = viewModel::deleteEntry,
+            onRenameWorkout = viewModel::renameWorkout,
+            onUnfinishWorkout = viewModel::unfinishWorkout,
         )
 
         /*
