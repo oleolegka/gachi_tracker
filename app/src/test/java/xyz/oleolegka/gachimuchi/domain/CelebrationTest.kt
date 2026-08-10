@@ -85,7 +85,7 @@ class CelebrationTest {
     }
 
     @Test
-    fun `sets are celebrated, weigh-ins and ticks are not`() {
+    fun `sets and check-ins are celebrated, a weigh-in is not`() {
         val strength = StrengthSet(exercise = "Squat", reps = 5, weightKg = 100.0, opDate = "2026-08-06")
         val hold = HoldSet(activity = "Hang", holdSec = 10.0, opDate = "2026-08-06")
         val weighIn = Bodyweight(weightKg = 80.0, opDate = "2026-08-06")
@@ -93,7 +93,7 @@ class CelebrationTest {
 
         assertTrue(celebratedByPicture(strength))
         assertTrue(celebratedByPicture(hold))
-        assertFalse(celebratedByPicture(weighIn))
-        assertFalse(celebratedByPicture(tick))
+        assertTrue("a check-in is a card finished, same as a set", celebratedByPicture(tick))
+        assertFalse("stepping on the scales is not a card finished", celebratedByPicture(weighIn))
     }
 }

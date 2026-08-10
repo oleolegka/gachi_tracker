@@ -411,7 +411,17 @@ data class Workout(
      */
     val slotId: Long? get() = slot?.id
 
-    val setCount: Int = exercises.sumOf { it.sets.size } + entriesWithoutExercise.size
+    /**
+     * How many SETS this workout holds — the count "N exercises, M sets" is built from.
+     *
+     * A body-weight entry recorded into a workout lands in [entriesWithoutExercise] (it names
+     * no exercise) but is not a set: stepping on the scales is not a rep of anything, and a
+     * workout that held nothing else must not read "1 set" over it. Every other kind of loose
+     * entry a workout can hold IS a set — that is what "recorded with no exercise" has meant
+     * since before body weight existed as a form — so only [Bodyweight] is filtered out here.
+     */
+    val setCount: Int = exercises.sumOf { it.sets.size } +
+        entriesWithoutExercise.count { it.form !is Bodyweight }
 
     /**
      * When the training stopped: the write time of the LAST row recorded into it, or the

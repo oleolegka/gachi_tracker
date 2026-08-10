@@ -527,7 +527,7 @@ class WorkoutTest {
     }
 
     @Test
-    fun `a weigh-in recorded during a workout is kept rather than dropped for having no exercise`() {
+    fun `a weigh-in recorded during a workout is kept but does not count as a set`() {
         val start = started(today)
         val weigh = bodyweightOf(today, weightKg = 74.2)
             .let { row(it.type, it.toPayload(), "${today}T09:05:00", start.id) }
@@ -535,8 +535,24 @@ class WorkoutTest {
 
         val workout = buildWorkout(events, start.id)!!
         assertEquals(1, workout.exercises.size)
+        // kept rather than dropped, so a card is still drawn for it
         assertEquals(1, workout.entriesWithoutExercise.size)
-        assertEquals(2, workout.setCount)
+        // but not counted: stepping on the scales is not a rep, and the one real set here
+        // must not be reported as two
+        assertEquals(1, workout.setCount)
+    }
+
+    @Test
+    fun `a workout holding only a weigh-in has no sets at all`() {
+        val start = started(today)
+        val weigh = bodyweightOf(today, weightKg = 74.2)
+            .let { row(it.type, it.toPayload(), "${today}T09:05:00", start.id) }
+        val events = listOf(start, weigh)
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(0, workout.exercises.size)
+        assertEquals(1, workout.entriesWithoutExercise.size)
+        assertEquals(0, workout.setCount)
     }
 
     @Test
