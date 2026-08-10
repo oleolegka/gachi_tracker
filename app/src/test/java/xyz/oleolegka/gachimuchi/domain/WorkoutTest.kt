@@ -80,6 +80,31 @@ class WorkoutTest {
     ) = strengthSetOf(exercise, opDate, reps = reps, weightKg = weightKg)
         .let { row(it.type, it.toPayload(), ts, workoutId) }
 
+    /**
+     * A full-version correction of a workout's own start row (a rename or a date fix), written
+     * the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry] writes one today: a
+     * whole new start row inheriting [target]'s happened-at time, plus the marker that
+     * supersedes it — see domain/Amendments.kt's header.
+     */
+    private fun correctedStart(
+        target: JournalEvent,
+        opDate: String,
+        name: String?,
+        writtenTs: String,
+    ): Pair<JournalEvent, JournalEvent> {
+        val newVersion = JournalEvent(
+            nextId++, writtenTs, 1, 1, TYPE_WORKOUT_STARTED,
+            payloadJson.encodeToString(WorkoutStarted(opDate, name = name)),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        val marker = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            writtenTs,
+        )
+        return newVersion to marker
+    }
+
     private val bench = ExerciseRef(1, "Bench press", ExerciseForm.STRENGTH)
     private val squat = ExerciseRef(2, "Squat", ExerciseForm.STRENGTH)
     private val hangs = ExerciseRef(3, "Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
@@ -127,6 +152,52 @@ class WorkoutTest {
         // it is not gone, it is over: still findable, still complete
         assertEquals(1, workoutsOn(events, today).size)
         assertTrue(buildWorkout(events, start.id)!!.finished)
+    }
+
+    /**
+     * THE regression this pins: correcting a workout writes a whole new start row (a rename or
+     * a date fix), appended at the END of the journal whenever the correction happens to be
+     * made — which can be long after that workout was finished, and long after a genuinely
+     * later workout was started. Reading "the last start ROW" as "the workout started last"
+     * would then either hide the workout actually open right now (if the corrected one had
+     * been finished) or hijack it (if it had not) — see [openWorkoutRow]'s own KDoc.
+     */
+    @Test
+    fun `correcting an old, already-finished workout does not hide the one genuinely open now`() {
+        val old = started("2026-07-01", ts = "2026-07-01T09:00:00")
+        val oldDone = finished(old.id, ts = "2026-07-01T10:00:00")
+        // nobody pressed finish on this one - it is genuinely still open
+        val current = started(today, ts = "${today}T09:00:00")
+
+        // days later: a typo in the OLD, long-finished workout's name is fixed
+        val (fixedOld, marker) = correctedStart(
+            old, opDate = "2026-07-01", name = "Fingerboard", writtenTs = "${today}T15:00:00",
+        )
+        val events = listOf(old, oldDone, current, fixedOld, marker)
+
+        assertEquals(
+            "the workout genuinely open right now must not vanish because an unrelated, " +
+                "already-finished workout was corrected after it was started",
+            current.id,
+            openWorkoutRow(events)?.id,
+        )
+    }
+
+    /**
+     * The mirror case: correcting an old, STILL-OPEN workout (one nobody ever finished) must
+     * not make it read as "started last" ahead of a genuinely later one either.
+     */
+    @Test
+    fun `correcting an old, still-open workout does not make it look like the current one`() {
+        val old = started("2026-07-01", ts = "2026-07-01T09:00:00") // never finished
+        val current = started(today, ts = "${today}T09:00:00")      // started later, also open
+
+        val (fixedOld, marker) = correctedStart(
+            old, opDate = "2026-07-01", name = "Fingerboard", writtenTs = "${today}T15:00:00",
+        )
+        val events = listOf(old, current, fixedOld, marker)
+
+        assertEquals(current.id, openWorkoutRow(events)?.id)
     }
 
     /**
@@ -181,6 +252,38 @@ class WorkoutTest {
     fun `an empty workout ends when it started`() {
         val start = started(today, ts = "${today}T18:00:00")
         assertEquals("${today}T18:00:00", buildWorkout(listOf(start), start.id)!!.endTs)
+    }
+
+    /**
+     * THE regression this pins: correcting the EARLIER of two sets writes a new row with
+     * TODAY's id and TODAY's ts, which used to win the "largest id" contest [endTs] picked its
+     * answer by — reading a typo fixed a week later as the moment a long-finished workout
+     * actually ended.
+     */
+    @Test
+    fun `correcting the earlier of two sets does not move the workout's end time`() {
+        val start = started(today, ts = "${today}T18:00:00")
+        val early = set(bench, today, workoutId = start.id, ts = "${today}T18:20:00")
+        val late = set(squat, today, workoutId = start.id, ts = "${today}T19:10:00")
+
+        // a typo in the earlier set, fixed a week later
+        val fixed = JournalEvent(
+            nextId++, "2026-08-14T12:00:00", 1, 1, TYPE_STRENGTH_SET,
+            strengthSetOf(bench, today, reps = 8, weightKg = 60.0).toPayload(),
+            workoutId = start.id, occurredTs = early.happenedAt,
+        )
+        val marker = row(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = early.uid, successorUid = fixed.uid)),
+            fixed.ts,
+        )
+
+        val workout = buildWorkout(listOf(start, early, late, fixed, marker), start.id)!!
+        assertEquals(
+            "the last set actually done was at 19:10 - fixing a typo a week later must not move it",
+            "${today}T19:10:00",
+            workout.endTs,
+        )
     }
 
     @Test

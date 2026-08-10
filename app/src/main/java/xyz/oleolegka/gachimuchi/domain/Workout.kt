@@ -424,7 +424,7 @@ data class Workout(
         entriesWithoutExercise.count { it.form !is Bodyweight }
 
     /**
-     * When the training stopped: the write time of the LAST row recorded into it, or the
+     * When the training stopped: when the LAST set recorded into it actually happened, or the
      * workout's own start when it recorded nothing.
      *
      * ── Derived, because a stamped moment would be wrong from the second it was written ──
@@ -435,13 +435,22 @@ data class Workout(
      * is folded out of the sets instead, so adding one moves the end and no correction is
      * needed anywhere.
      *
-     * The largest id and not the latest timestamp, because ids increase with WRITING order
-     * and that is what "the last thing recorded" means. For a workout typed up after the fact
-     * the two are the same question anyway; for one where the phone's clock moved they are
-     * not, and journal order is the reading that cannot be argued with.
+     * ── By [happenedAt], not by id or write time ─────────────────────────────────────
+     * This used to be the write time of whichever set carried the largest id — sound while the
+     * only way a row could join a workout was to be trained into it there and then, so "written
+     * last" and "trained last" were the same fact. A correction breaks that the same way it
+     * breaks [openWorkoutRow]: fixing a typo in a set from three weeks ago writes a new row,
+     * with today's id and today's ts, into a workout that ended three weeks ago — and the old
+     * id-based rule would read the fix itself as the moment training stopped, showing "finished
+     * [today]" on a session nobody has touched since. [happenedAt] is inherited across the
+     * correction, so the identified set's OWN happened-at time is shown rather than the
+     * correction's write time, and an unrelated typo fix can no longer move a workout's end.
+     * The id tie-break keeps the previous behaviour for two ORIGINAL sets in the same second,
+     * where [happenedAt] cannot tell them apart.
      */
     val endTs: String =
-        (exercises.flatMap { it.sets } + entriesWithoutExercise).maxByOrNull { it.id }?.ts ?: ts
+        (exercises.flatMap { it.sets } + entriesWithoutExercise)
+            .maxWithOrNull(compareBy({ it.happenedAt }, { it.id }))?.happenedAt ?: ts
 
     /** Nothing has been added and nothing recorded — the state right after "start". */
     val isEmpty: Boolean get() = exercises.isEmpty() && entriesWithoutExercise.isEmpty()
@@ -564,6 +573,20 @@ private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
  * workout would file today's sets into last week's session — a worse answer than "nothing is
  * open", which at least leaves the set unattached and visible on its day.
  *
+ * ── "Last" is by [happenedAt], not by row id ─────────────────────────────────────
+ * It did not used to need saying: the only way a [TYPE_WORKOUT_STARTED] row was ever written
+ * was by pressing "start", so the newest ROW and the workout started most recently were the
+ * same fact. That stopped being true the moment a workout could be corrected (renaming one, or
+ * fixing its date, writes a brand new start row — domain/Amendments.kt's header): the newest
+ * ROW can now be a typo fixed today in a workout from last month, appended after every start
+ * this app has genuinely written since. Reading such a correction as "the last workout
+ * started" would either hijack today's still-open session (its sets misfiled into last
+ * month's) or, if the corrected workout was already finished, make openWorkoutRow answer null
+ * while a real one sits open earlier in the journal — the exact failure this function exists
+ * to avoid, now caused by the very rule meant to avoid it. [happenedAt] is inherited across a
+ * correction, so the corrected row stays exactly where it always was in training time, and an
+ * unrelated correction can no longer change which workout this answers with.
+ *
  * ── The two consequences, stated rather than hidden ─────────────────────────────
  *  - A workout NOBODY FINISHED stays open indefinitely. Sets logged days later with no
  *    workout started land in it, and its end time ([Workout.endTs]) follows them. Midnight
@@ -588,7 +611,11 @@ fun openWorkoutRow(events: List<JournalEvent>): JournalEvent? {
     // other, so deleting one re-opens the workout it closed — which is the only way back from
     // a button pressed by mistake, and there is no separate "re-open" event for it.
     val journal = liveEvents(events)
-    return workoutStarts(journal).lastOrNull()?.first?.takeIf { !isFinished(journal, it) }
+    // happenedAt first, then id (journal order) for a same-second tie — see this function's
+    // own KDoc for why the raw journal order this used to pick .lastOrNull() by is no longer
+    // safe once a correction can rewrite a workout's own start row
+    val last = workoutStarts(journal).maxWithOrNull(compareBy({ it.first.happenedAt }, { it.first.id }))?.first
+    return last?.takeIf { !isFinished(journal, it) }
 }
 
 /**
