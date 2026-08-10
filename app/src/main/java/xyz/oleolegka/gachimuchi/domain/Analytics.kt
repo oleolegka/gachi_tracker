@@ -692,6 +692,45 @@ fun activitiesByDay(
     return out
 }
 
+/**
+ * How many DISTINCT JOURNAL INSTANCES land on each day of the range: a whole WORKOUT counts
+ * once however many exercises it holds, and entries of one exercise logged with no workout
+ * around them count as one instance too. These are the same units domain/DayCards.kt turns
+ * into RUNNING/DONE/SINGLE cards — the calendar's dots (domain/Schedule.kt's `calendarDots`)
+ * are one per instance, which [activitiesByDay] above is NOT: that one counts EXERCISES for
+ * the heatmap, and a single gym session touching three of them is three activities there and
+ * one instance here. Neither is more correct than the other; they answer different questions
+ * and are kept as two functions rather than one with a flag, for the reason every reducer in
+ * this file gives for not sharing a fold across two meanings.
+ *
+ * Built a day at a time through [workoutsOn] and [setsOutsideWorkouts] rather than by
+ * re-deriving their dangling-reference and grouping rules here: a workout ref pointing at a
+ * start event this journal no longer has is exactly the case [setsOutsideWorkouts] already
+ * has to get right, and a second implementation of that call is a second answer waiting to
+ * disagree with the first.
+ *
+ * Days with nothing recorded are absent from the map rather than mapped to zero, the same
+ * convention [activitiesByDay] uses.
+ */
+fun journalInstanceCounts(
+    events: List<JournalEvent>,
+    dateFrom: String,
+    dateTo: String,
+): Map<String, Int> {
+    val out = LinkedHashMap<String, Int>()
+    var day = LocalDate.parse(dateFrom)
+    val to = LocalDate.parse(dateTo)
+    while (!day.isAfter(to)) {
+        val iso = day.toString()
+        val looseInstances = setsOutsideWorkouts(events, iso)
+            .mapTo(HashSet()) { it.form.exerciseLink()?.key ?: "name:${it.key ?: it.type}" }
+        val count = workoutsOn(events, iso).size + looseInstances.size
+        if (count > 0) out[iso] = count
+        day = day.plusDays(1)
+    }
+    return out
+}
+
 /** One cell: the day, how many activities it holds and its intensity level (0 = nothing). */
 data class HeatmapDay(val opDate: String, val count: Int, val level: Int)
 

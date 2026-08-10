@@ -2,6 +2,7 @@ package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -92,12 +93,73 @@ class CalendarScreenTest : ScreenTest() {
         compose.onNodeWithText(fmtMonth(today)).assertIsDisplayed()
         compose.onNodeWithText("MON").assertIsDisplayed()
         compose.onNodeWithText("SUN").assertIsDisplayed()
-        // the two things the cells encode are named in words, because neither is legible
-        // as colour alone
+        // the cell carries no verdict any more (§12-B rework) — only the dots do, and the
+        // legend names their three colours in words, because none of them is legible as
+        // colour alone
         compose.onNodeWithText("done").assertIsDisplayed()
         compose.onNodeWithText("missed").assertIsDisplayed()
         compose.onNodeWithText("planned").assertIsDisplayed()
-        compose.onNodeWithText("dots = activities").assertIsDisplayed()
+        compose.onNodeWithText("A dot is a whole session or entry. Up to six a day; +N is the rest.")
+            .assertIsDisplayed()
+    }
+
+    // --- the dots (§12-B rework, 2026-08-10) ------------------------------------------------
+    //
+    // A dot has nothing visible to query a colour by, so each one carries a day-qualified
+    // content description (see ui/screens/CalendarScreen.kt's DotRow) — "$day dot: done" and
+    // so on. That is what every test below reads.
+
+    @Test
+    fun `two sessions on one day with different outcomes give two dots of different colour`() {
+        // the case a single per-day wash could never answer: one slot done, the other missed.
+        // Three days back so both windows are certainly closed by the real clock either way
+        val day = today.minusDays(3)
+        val journal = Journal()
+        val workout = journal.startWorkout(day.toString(), at = "08:05")
+        journal.addExercise(workout, day.toString(), bench, restSec = 150)
+        journal.strengthSet(bench, day.toString(), at = "08:10", workoutId = workout)
+        journal.finishWorkout(workout, day.toString(), at = "08:20")
+
+        calendar(
+            slots = listOf(
+                slot(1, "Gym", "08:00", day.toString()),      // closed by the 08:10 set
+                slot(2, "Hangboard", "20:00", day.toString()), // nothing recorded near it
+            ),
+            journal = journal,
+        )
+
+        compose.onNodeWithContentDescription("$day dot: done").assertExists()
+        compose.onNodeWithContentDescription("$day dot: missed").assertExists()
+    }
+
+    @Test
+    fun `a seventh activity on one day is counted, not dropped silently`() {
+        // seven distinct exercises logged outside any workout is seven instances -- the old
+        // rule threw away everything past three dots without saying so; this one counts it
+        val day = today.minusDays(2)
+        val journal = Journal()
+        (1..7).forEach { id -> journal.strengthSet(exerciseRef(id.toLong(), "Exercise $id"), day.toString(), at = "0$id:00") }
+
+        calendar(journal = journal)
+
+        // the day cell is clickable, which merges every descendant's semantics into ONE
+        // node by default (its content description becomes a list of all seven strings) --
+        // querying by COUNT needs the raw, unmerged tree to see the dots as separate nodes
+        compose.onAllNodesWithContentDescription("$day dot: done", useUnmergedTree = true).assertCountEquals(6)
+        compose.onNodeWithContentDescription("$day: 1 more", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun `a planned dot still exists on today's cell, whose selected fill is the same blue`() {
+        // today is selected by default, and its fill is `accent` -- numerically the same
+        // blue a PLANNED dot draws. An UNTIMED plan stays PLANNED for the whole day whatever
+        // the real clock says right now, which is what keeps this test independent of when
+        // it happens to run. What this cannot show is the ring actually being drawn on top --
+        // nothing here is rasterised (see ScreenTest) -- only that the dot itself is still in
+        // the tree rather than having been left out to avoid the collision
+        calendar(slots = listOf(slot(1, "Walk", null, today.toString())))
+
+        compose.onNodeWithContentDescription("$today dot: planned").assertExists()
     }
 
     @Test
