@@ -212,6 +212,37 @@ class JournalCsvTest {
         assertEquals("B", data[1].split(",")[col("exercise")])
     }
 
+    /**
+     * THE regression this pins: within one day, rows used to be ordered by row id — a stand-in
+     * for "written in this order" that a correction breaks, since it writes a whole new row at
+     * the end of the journal (domain/Amendments.kt) whenever the fix happens to be made.
+     */
+    @Test
+    fun `a set corrected long after the fact keeps its place among that day's rows`() {
+        val first = ev(
+            StrengthSet(exercise = "A", reps = 1, weightKg = 1.0, opDate = "2026-08-06"),
+            ts = "2026-08-06T09:00:00",
+        )
+        val second = ev(
+            StrengthSet(exercise = "B", reps = 1, weightKg = 1.0, opDate = "2026-08-06"),
+            ts = "2026-08-06T09:05:00",
+        )
+        // a typo in the FIRST set, fixed a week later
+        val fixed = JournalEvent(
+            nextId++, "2026-08-13T12:00:00", 1, 1, TYPE_STRENGTH_SET,
+            StrengthSet(exercise = "A", reps = 3, weightKg = 1.0, opDate = "2026-08-06").toPayload(),
+            occurredTs = first.ts,
+        )
+        val marker = JournalEvent(
+            nextId++, fixed.ts, 1, 1, TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = first.uid, successorUid = fixed.uid)),
+        )
+
+        val data = lines(listOf(first, second, fixed, marker)).drop(1)
+        assertEquals("A", data[0].split(",")[col("exercise")])
+        assertEquals("B", data[1].split(",")[col("exercise")])
+    }
+
     @Test
     fun `a name with a comma and a quote is quoted and escaped, not corrupted`() {
         val set = ev(StrengthSet(exercise = "Row, \"strict\"", reps = 5, weightKg = 40.0, opDate = "2026-08-06"))

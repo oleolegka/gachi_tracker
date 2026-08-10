@@ -80,8 +80,13 @@ fun journalCsv(events: List<JournalEvent>, catalog: List<CatalogRow>): String {
     val nameById = catalog.associate { it.id to it.name }
     val workoutLabel = workoutLabeller(events)
 
+    // opDate first (the day trained, not the day written — the test right below this file's
+    // own name says so), then happenedAt within the day so a set corrected long after the fact
+    // still lands where it was actually done and not at the end of the day's rows just
+    // because its correction has the newest id; id is the final tie-break for two original
+    // sets the clock cannot tell apart.
     val rows = readActivities(events)
-        .sortedWith(compareBy({ it.opDate }, { it.id }))
+        .sortedWith(compareBy({ it.opDate }, { it.happenedAt }, { it.id }))
         .map { csvRow(it, nameByUid, nameById, workoutLabel) }
 
     val out = StringBuilder(UTF8_BOM)
