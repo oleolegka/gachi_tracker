@@ -118,7 +118,6 @@ fun rememberExerciseEditor(): ExerciseEditor {
             pictureStore = pictureStore,
             onDismiss = { editing = null },
             onSave = { name, oneSided, share ->
-                editing = null
                 scope.launch {
                     val result = repo.editExercise(exercise.id, name)
                     /*
@@ -129,12 +128,21 @@ fun rememberExerciseEditor(): ExerciseEditor {
                      * They go AFTER the identity edit and only when it took. A refused edit
                      * tells the user the exercise "was left as it was", and that sentence has
                      * to be true of the whole dialog and not only of the name.
+                     *
+                     * The dialog itself closes here too, and only here - not the instant Save
+                     * is tapped. Closing on tap used to say "saved" before the write was even
+                     * attempted, so a name refused as taken looked identical to one that went
+                     * through: the dialog was already gone, the flags had silently not been
+                     * written, and the "Not saved" alert that followed talked about the name
+                     * alone. Staying open on every other outcome keeps the toggles exactly as
+                     * typed - on screen, not yet true - until they are.
                      */
                     if (result is ExerciseEdit.Saved) {
                         if (oneSided != exercise.oneSided) repo.setOneSided(exercise.id, oneSided)
                         if (share != exercise.bodyweightShare) {
                             repo.setBodyweightShare(exercise.id, share)
                         }
+                        editing = null
                     }
                     message = when (result) {
                         is ExerciseEdit.Saved -> null
