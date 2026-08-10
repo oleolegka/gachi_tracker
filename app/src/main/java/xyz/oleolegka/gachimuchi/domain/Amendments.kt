@@ -1,5 +1,7 @@
 package xyz.oleolegka.gachimuchi.domain
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
@@ -63,6 +65,15 @@ import kotlinx.serialization.json.JsonObject
  * A cycle (two deletions naming each other) cannot be written by this app and would have to be
  * merged in. It is broken by treating the events in it as ALIVE, which is the answer that
  * loses no data.
+ *
+ * ── [TYPE_EXERCISE_DELETED] is a fifth step, and it is a CASCADE rather than a target ───
+ * Every other control event names one row. This one names an EXERCISE, and the fold applies it
+ * to every row that names the same exercise in its own payload — a set, a "this is part of that
+ * workout now" row, a "this card is done" row — as if each of them had been given its own
+ * [TYPE_ENTRY_DELETED]. One event, the whole exercise's history gone from here on; delete the
+ * deletion (the ordinary way, naming ITS uid) and the whole history is back. See
+ * [TYPE_EXERCISE_DELETED]'s own KDoc in domain/Forms.kt for why this lives here and not as a
+ * second boolean beside [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.hidden].
  */
 
 /** What the journal says about one event NOW, once every correction has been applied. */
@@ -111,7 +122,8 @@ class JournalView internal constructor(private val states: Map<String, EntryStat
 }
 
 /** The kinds of event that speak about another event rather than about training. */
-private val CONTROL_TYPES = setOf(TYPE_SET_CANCEL, TYPE_ENTRY_DELETED, TYPE_ENTRY_AMENDED)
+private val CONTROL_TYPES =
+    setOf(TYPE_SET_CANCEL, TYPE_ENTRY_DELETED, TYPE_ENTRY_AMENDED, TYPE_EXERCISE_DELETED)
 
 /**
  * Whether this row is a correction or a deletion rather than something that happened.
@@ -137,6 +149,9 @@ fun journalView(events: List<JournalEvent>): JournalView {
 
     val deletionsOf = HashMap<String, MutableList<JournalEvent>>()
     val amendmentsOf = HashMap<String, MutableList<Pair<JournalEvent, Map<String, JsonElement>>>>()
+    // TYPE_EXERCISE_DELETED rows, kept aside rather than folded into deletionsOf: they do not
+    // name an EVENT's uid, they name an EXERCISE's — see the cascade below.
+    val exerciseDeletions = ArrayList<Pair<JournalEvent, ExerciseLink>>()
 
     for (row in controls) {
         when (row.type) {
@@ -160,6 +175,11 @@ fun journalView(events: List<JournalEvent>): JournalView {
                     amendmentsOf.getOrPut(payload.targetUid) { mutableListOf() } += row to payload.allowedFields
                 }
             }
+
+            TYPE_EXERCISE_DELETED -> {
+                val payload = runCatching { payloadJson.decodeFromString<ExerciseDeleted>(row.payload) }.getOrNull()
+                if (payload != null) exerciseDeletions += row to payload.link()
+            }
         }
     }
 
@@ -182,12 +202,38 @@ fun journalView(events: List<JournalEvent>): JournalView {
         return answer
     }
 
+    /*
+     * Exercises currently deleted, as the LIVE ones only — an exercise_deleted row is an event
+     * like any other, and [isDead] already knows how to ask whether IT has itself been deleted
+     * (by a TYPE_ENTRY_DELETED naming its own uid), with no special case needed here for that.
+     */
+    val deadExercises = exerciseDeletions.filter { (row, _) -> !isDead(row.uid) }.map { it.second }
+
     val byUid = events.associateBy { it.uid }
     val states = HashMap<String, EntryState>()
 
-    for (uid in deletionsOf.keys + amendmentsOf.keys) {
+    /*
+     * THE CASCADE: every row whose OWN exercise reference names a dead exercise — a set, a
+     * "this is part of that workout now" row, a "this card is done" row — is folded dead here
+     * too, from the single exercise_deleted event rather than one deletion written per row.
+     *
+     * Read GENERICALLY off the payload ([rawExerciseLink]) rather than through a typed form on
+     * a `when` of every event type: the two field names are the same on every shape that names
+     * an exercise at all (see [AMENDMENT_PROTECTED_KEYS], which is what keeps them from ever
+     * meaning something else), so reading them once here is what lets this cascade cover a form
+     * this file has never heard of, the same way [mergePayload] does not need to know one either.
+     */
+    val deadFromExercise: Set<String> = if (deadExercises.isEmpty()) {
+        emptySet()
+    } else {
+        events.asSequence()
+            .filter { row -> row.rawExerciseLink()?.let { link -> deadExercises.any { it.matches(link) } } == true }
+            .mapTo(HashSet()) { it.uid }
+    }
+
+    for (uid in deletionsOf.keys + amendmentsOf.keys + deadFromExercise) {
         val row = byUid[uid] ?: continue // names an event this journal does not hold: inert
-        val deleted = isDead(uid)
+        val deleted = isDead(uid) || uid in deadFromExercise
         /*
          * The corrections are folded EVEN FOR A DELETED ENTRY, rather than skipped as a saving.
          * The two facts are independent: "is it there" and "what does it say". A reader asking
@@ -213,6 +259,33 @@ fun journalView(events: List<JournalEvent>): JournalView {
     }
     return JournalView(states)
 }
+
+/**
+ * What [row]'s own payload says about the exercise it belongs to, read directly rather than
+ * through one of the six typed forms — see the cascade in [journalView] for why: decoding into
+ * a class that carries only the two fields every such payload agrees on
+ * ([AMENDMENT_PROTECTED_KEYS] is where that agreement is enforced on write) works for a set, an
+ * "added" row and a "finished" row alike, with `ignoreUnknownKeys` doing the rest.
+ *
+ * Null for a row that names no exercise at all (body weight, and every service event that is
+ * not about one particular exercise) and for a payload that will not even parse — the same
+ * "skip, do not throw" rule [formFromEventOrNull] follows.
+ */
+private fun JournalEvent.rawExerciseLink(): ExerciseLink? {
+    val fields = runCatching { payloadJson.decodeFromString<RawExerciseFields>(payload) }.getOrNull() ?: return null
+    return if (fields.exerciseUid == null && fields.exerciseId == null) {
+        null
+    } else {
+        ExerciseLink(fields.exerciseUid, fields.exerciseId)
+    }
+}
+
+/** The two keys [rawExerciseLink] reads off an arbitrary payload — see its own KDoc. */
+@Serializable
+private data class RawExerciseFields(
+    @SerialName("exercise_id") val exerciseId: Long? = null,
+    @SerialName("exercise_uid") val exerciseUid: String? = null,
+)
 
 /**
  * The original payload with each patch laid over it in turn, or null when the original is not

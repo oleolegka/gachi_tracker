@@ -168,6 +168,31 @@ fun deletedEventUids(events: List<JournalEvent>): Set<String> {
 }
 
 /**
+ * Exercises the journal currently says are DELETED (see [TYPE_EXERCISE_DELETED]) — the catalog
+ * rows a screen listing exercises must not offer, on top of and independent from
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.hidden].
+ *
+ * A second, independent fold of the same journal rather than a value handed out of
+ * [journalView]'s own cascade — the same trade [deletedEventUids] already makes, for the same
+ * reason: [JournalView] answers about ROWS, and folding it a second time to ask about exercises
+ * is cheaper than a second return channel out of the one funnel, at the size of journal this app
+ * ever holds.
+ *
+ * Returned as [ExerciseLink]s and not bare uids because a caller compares them against a
+ * catalog row that may itself carry only a number — a merged journal, or one written before
+ * schema version 10 — and [ExerciseLink.matches] is the one place that comparison is allowed to
+ * happen.
+ */
+fun deletedExerciseLinks(events: List<JournalEvent>): List<ExerciseLink> {
+    val view = journalView(events)
+    return events.asSequence()
+        .filter { it.type == TYPE_EXERCISE_DELETED && view.isAlive(it) }
+        .mapNotNull { row -> runCatching { payloadJson.decodeFromString<ExerciseDeleted>(row.payload) }.getOrNull() }
+        .map { it.link() }
+        .toList()
+}
+
+/**
  * Domain events from the journal, in journal order, WITH EVERY CORRECTION APPLIED.
  *
  * The filters are combined with AND: [types] (all of [ACTIVITY_TYPES] by default), the
