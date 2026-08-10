@@ -540,11 +540,22 @@ fun WorkoutLogScreen(
             }
         },
         bottomBar = {
+            /*
+             * Scaffold does NOT give the bottom bar slot any window insets of its own — it only
+             * measures whatever this composes and uses that height as the content's bottom
+             * padding (see the Material3 Scaffold source: `bottom = bottomBarHeight ?: insets`
+             * only falls back to insets when there is no bottom bar at all). So the system
+             * navigation bar has to be accounted for HERE, once, or the button sits under it on
+             * three-button navigation — [navigationBarsPadding] reads the real inset (small on
+             * gesture nav, larger on three-button nav) rather than a guessed constant, which is
+             * what keeps gesture nav exactly as it already was.
+             */
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                 Button(
                     onClick = { picking = true },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .navigationBarsPadding()
                         .padding(horizontal = 15.dp, vertical = 10.dp)
                         .heightIn(min = 52.dp),
                 ) {
