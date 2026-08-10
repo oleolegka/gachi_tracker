@@ -56,12 +56,16 @@ import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.SlotProblem
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatTime
 import xyz.oleolegka.gachimuchi.domain.formatTimeDigits
 import xyz.oleolegka.gachimuchi.domain.isBackdated
 import xyz.oleolegka.gachimuchi.domain.newSlotDraft
 import xyz.oleolegka.gachimuchi.domain.nextOccurrence
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseMinuteOfDay
 import xyz.oleolegka.gachimuchi.domain.parseSlotTime
 import xyz.oleolegka.gachimuchi.domain.problem
@@ -74,7 +78,6 @@ import xyz.oleolegka.gachimuchi.domain.withExerciseMoved
 import xyz.oleolegka.gachimuchi.domain.withExerciseRemoved
 import xyz.oleolegka.gachimuchi.domain.withExerciseRest
 import xyz.oleolegka.gachimuchi.ui.UiState
-import xyz.oleolegka.gachimuchi.ui.fmtRest
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
@@ -501,7 +504,16 @@ private fun PlannedExercisesSection(
     }
 }
 
-/** One planned exercise: where it sits, what it is, and how long the pauses in it are. */
+/**
+ * One planned exercise: where it sits, what it is, and how long the pauses in it are.
+ *
+ * ── The rest, typed rather than picked off a ladder ──────────────────────────
+ * It used to be six chips capped at 4:00 — "not able to choose anything above 4:00" was the
+ * complaint that started §13.9. Now it is [TimeField], the same free mm:ss entry the live
+ * workout's own rest dialog uses, with "Usual" kept as the one preset worth a tap: it is not
+ * a length of time at all, it is "ask [xyz.oleolegka.gachimuchi.domain.restHintSec] instead",
+ * and typing a number into the field could never mean that.
+ */
 @Composable
 private fun PlannedExerciseRow(
     position: Int,
@@ -514,6 +526,10 @@ private fun PlannedExerciseRow(
     onRest: (Int?) -> Unit,
 ) {
     val colors = LocalGachiColors.current
+    // re-derived whenever the COMMITTED rest changes for any reason — "Usual" tapped, a fresh
+    // slot opened, an exercise moved to this row by a reorder — but left alone the rest of the
+    // time, so a keystroke that does not yet parse (a lone "1") is not erased by its own write
+    var restText by remember(restSec) { mutableStateOf(restSec?.let(::formatDurationSec) ?: "") }
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -550,37 +566,30 @@ private fun PlannedExerciseRow(
                 )
             }
         }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Rest", fontSize = 12.sp, color = colors.inkMuted)
-            SiblingChip(
-                text = "Usual",
-                selected = restSec == null,
-                accent = colors.accent,
-                onClick = { onRest(null) },
-            )
-            REST_CHOICES.forEach { seconds ->
-                SiblingChip(
-                    text = fmtRest(seconds.toDouble()),
-                    selected = restSec == seconds,
-                    accent = colors.accent,
-                    onClick = { onRest(seconds) },
-                )
-            }
-        }
+        SiblingChip(
+            text = "Usual",
+            selected = restSec == null,
+            accent = colors.accent,
+            onClick = { restText = ""; onRest(null) },
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        TimeField(
+            label = "Rest, mm:ss",
+            value = restText,
+            onValueChange = { text ->
+                restText = text
+                // committed only once it is a real rest — MIN_STEP_SEC excludes zero, which
+                // restHintSec would otherwise read back as "nothing chosen" (§13.9's ceiling
+                // is MAX_REST_INPUT_SEC, an exercise's own, not MAX_STEP_SEC's hour)
+                parseDurationText(text)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }?.let(onRest)
+            },
+            bumpsSec = listOf(10, 30),
+            isError = restText.isNotBlank() &&
+                parseDurationText(restText)?.let { it !in MIN_STEP_SEC..MAX_REST_INPUT_SEC } ?: true,
+            modifier = Modifier.padding(top = 2.dp),
+        )
     }
 }
-
-/**
- * Rests offered as one tap. Chips rather than a number field for the reason the quick times
- * above are chips: the phone's numeric keyboard over a dialog is three interactions to say
- * something that has five plausible answers. A rest outside this set is a thing to set on
- * the day, on the timer, where it is actually being counted.
- */
-private val REST_CHOICES = listOf(60, 90, 120, 150, 180, 240)
 
 /**
  * A day picked by stepping, not by a calendar popup: the calendar is already on screen

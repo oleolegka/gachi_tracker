@@ -51,6 +51,7 @@ import xyz.oleolegka.gachimuchi.domain.bodyweightOf
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.cardioOf
 import xyz.oleolegka.gachimuchi.domain.durationOf
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.formatPace
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
@@ -60,12 +61,14 @@ import xyz.oleolegka.gachimuchi.domain.lastDuration
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.lastStrengthSet
 import xyz.oleolegka.gachimuchi.domain.parseCount
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.parsePace
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.tickOf
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
+import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerBar
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
@@ -840,13 +843,16 @@ internal fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, 
 @Composable
 internal fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
     val last = remember(state.events, exercise.id) { lastDuration(state.events, exercise.link) }
-    var minutes by remember(exercise.id, last) {
-        mutableStateOf(last?.durationSec?.let { formatNumber(it / 60.0) } ?: "")
+    // mm:ss, free entry — it used to be a MINUTES field reaching a whole number of seconds
+    // only through a decimal point ("0.5" for thirty seconds), the owner's own word for it
+    // was "шиза" (§13.9)
+    var duration by remember(exercise.id, last) {
+        mutableStateOf(last?.durationSec?.let(::formatDurationSec) ?: "")
     }
-    val seconds = parseNumber(minutes)?.takeIf { it > 0 }?.let { (it * 60).toInt() }
+    val seconds = parseDurationText(duration)?.takeIf { it > 0 }
     val untouched = last != null && seconds == last.durationSec
 
-    StepperField(label = "Minutes", value = minutes, onValueChange = { minutes = it }, steps = listOf(1.0, 5.0))
+    TimeField(label = "Duration, mm:ss", value = duration, onValueChange = { duration = it }, bumpsSec = listOf(10))
     SubmitButton(
         repeat = untouched,
         enabled = seconds != null && seconds > 0,

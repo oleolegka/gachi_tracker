@@ -95,9 +95,9 @@ fun pickPicture(
  * run or a stretch is filed as its own total rather than a set, and nobody has asked for a
  * picture on those yet. That is a narrower question than this one and is not decided here.
  *
- * This deliberately does not reuse [startsRest], which today covers only [StrengthSet] and
- * [HoldSet]: that one answers "does a rest begin now" — a check-in has nothing to rest
- * between — and the two questions are free to part ways.
+ * This deliberately does not reuse [startsRest] (which also covers [Duration], §13.9): that
+ * one answers "does a rest begin now" — a check-in has nothing to rest between — and the two
+ * questions are free to part ways.
  */
 fun celebratedByPicture(form: ActivityForm): Boolean =
     form is StrengthSet || form is HoldSet || form is Tick

@@ -56,7 +56,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
-import xyz.oleolegka.gachimuchi.domain.MAX_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.RestFloor
@@ -68,14 +68,16 @@ import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.cardKey
 import xyz.oleolegka.gachimuchi.domain.ceilSeconds
 import xyz.oleolegka.gachimuchi.domain.formatClock
+import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.lastTimeOf
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
-import xyz.oleolegka.gachimuchi.domain.parseCount
+import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
+import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.components.CardRadius
@@ -89,6 +91,7 @@ import xyz.oleolegka.gachimuchi.ui.components.moved
 import xyz.oleolegka.gachimuchi.ui.components.rememberReorderState
 import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
+import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
@@ -625,7 +628,11 @@ fun WorkoutLogScreen(
                             }
                         }
                     },
-                    onRest = id?.let { e ->
+                    // the same rule the auto-started rest already follows (§13.9) — a weigh-in
+                    // is not followed by another set of itself, and the button offering to
+                    // time a pause after one was the remaining trace of "brother mistook the
+                    // scales for an exercise"
+                    onRest = id?.takeIf { ref != null && startsRest(ref.form) }?.let { e ->
                         {
                             askingRestFor = e
                             askingRestSide = exercise.side?.code
@@ -1188,8 +1195,10 @@ private fun RestDialog(
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    var draft by remember(exerciseName, initialSec) { mutableStateOf(initialSec.toString()) }
-    val seconds = parseCount(draft)?.takeIf { it in MIN_STEP_SEC..MAX_STEP_SEC }
+    // seeded from a whole number of seconds (the rest this card already has, or the catalog's
+    // remembered answer) and typed as mm:ss from there — see ui/components/TimeField.kt (§13.9)
+    var draft by remember(exerciseName, initialSec) { mutableStateOf(formatDurationSec(initialSec)) }
+    val seconds = parseDurationText(draft)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1201,21 +1210,13 @@ private fun RestDialog(
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                StepperField(
-                    label = "Rest, seconds",
-                    value = draft,
-                    onValueChange = { draft = it },
-                    steps = listOf(15.0, 30.0),
-                    decimal = false,
-                )
                 /*
-                 * The chosen rest, said the way a person reads a rest, and said LOUDLY.
-                 *
-                 * The field above holds bare seconds because that is what the steppers add
-                 * to, and "90" is not a length of time anyone recognises at a glance. This
-                 * line used to be the small grey afterthought under it, which put the only
-                 * legible form of the answer in the smallest type on the screen — reported
-                 * from the phone as "hard to tell what is even selected" (2026-08-08).
+                 * Said LOUDLY as well as typed: the field holds "5:00" already, which reads
+                 * fine on its own, but the confirmation line stays because a number that big
+                 * benefits from being said twice, once in the smaller field and once where it
+                 * cannot be missed — reported from the phone as "hard to tell what is even
+                 * selected" (2026-08-08), before mm:ss entry existed to make the field itself
+                 * legible at all.
                  */
                 Text(
                     seconds?.let(::formatClock) ?: "--:--",
@@ -1228,9 +1229,16 @@ private fun RestDialog(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                 )
+                TimeField(
+                    label = "Rest, mm:ss",
+                    value = draft,
+                    onValueChange = { draft = it },
+                    bumpsSec = listOf(10, 30),
+                    isError = draft.isNotBlank() && seconds == null,
+                )
                 if (seconds == null) {
                     Text(
-                        "A rest is between 1 second and an hour.",
+                        "A rest is between 1 second and a day.",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.inkSecondary,
                         modifier = Modifier.fillMaxWidth(),

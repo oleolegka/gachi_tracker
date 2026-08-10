@@ -180,7 +180,7 @@ class TimerSettingsTest {
     // --- which entries pull up a timer -------------------------------------------------
 
     @Test
-    fun `only set based forms start a rest`() {
+    fun `strength, holds and duration start a rest - a reading, a check-in and cardio do not`() {
         assertTrue(startsRest(strengthSetOf(bench, day, reps = 5, weightKg = 60.0)))
         assertTrue(
             startsRest(
@@ -190,9 +190,28 @@ class TimerSettingsTest {
                 )
             )
         )
+        // §13.9: a held stretch is still "one set, then a pause, then the next"
+        assertTrue(
+            startsRest(durationOf(ExerciseRef(6, "Plank", ExerciseForm.DURATION), day, durationSec = 60))
+        )
         assertFalse(startsRest(bodyweightOf(day, weightKg = 74.0)))
         assertFalse(startsRest(tickOf(ExerciseRef(4, "Stretching", ExerciseForm.TICK), day)))
         assertFalse(startsRest(cardioOf(ExerciseRef(5, "Run", ExerciseForm.CARDIO), day, distanceM = 5000.0)))
+    }
+
+    /**
+     * The same rule, asked BEFORE any set exists — what decides whether a workout card offers
+     * "set a rest" at all. A weigh-in's card used to offer it unconditionally, which is the
+     * remaining trace of "brother mistook the scales for an exercise" (§13.9).
+     */
+    @Test
+    fun `the exercise-kind overload agrees with the form-instance one`() {
+        assertTrue(startsRest(ExerciseForm.STRENGTH))
+        assertTrue(startsRest(ExerciseForm.HOLD))
+        assertTrue(startsRest(ExerciseForm.DURATION))
+        assertFalse(startsRest(ExerciseForm.BODYWEIGHT))
+        assertFalse(startsRest(ExerciseForm.TICK))
+        assertFalse(startsRest(ExerciseForm.CARDIO))
     }
 
     // --- reading the clock -------------------------------------------------------------
@@ -214,5 +233,45 @@ class TimerSettingsTest {
         assertEquals(3, ceilSeconds(3_000))
         assertEquals(1, ceilSeconds(1))
         assertEquals(0, ceilSeconds(0))
+    }
+
+    // --- typing a length of time (§13.9) ------------------------------------------------
+
+    @Test
+    fun `digits shift in from the right, seconds first - a stopwatch, not a clock`() {
+        assertEquals("", formatDurationDigits(""))
+        // "30" typed is thirty seconds, the common short rest, with no leading zero needed
+        assertEquals("0:30", formatDurationDigits("30"))
+        assertEquals("0:03", formatDurationDigits("3"))
+        // the third digit pushes the first two into the minutes
+        assertEquals("1:30", formatDurationDigits("130"))
+        assertEquals("12:34", formatDurationDigits("1234"))
+        // a pasted "1:30" reads the same as the digits alone: the colon carries no meaning
+        assertEquals("1:30", formatDurationDigits("1:30"))
+    }
+
+    @Test
+    fun `the typed text reads back as whole seconds, minutes unbounded`() {
+        assertNull(parseDurationText(""))
+        assertEquals(3, parseDurationText("0:03"))
+        assertEquals(30, parseDurationText("0:30"))
+        assertEquals(90, parseDurationText("1:30"))
+        // a day's worth of rest, MAX_REST_INPUT_SEC's own ceiling — parsing itself refuses
+        // nothing this large; a caller decides whether it is IN RANGE
+        assertEquals(MAX_REST_INPUT_SEC, parseDurationText("1440:00"))
+    }
+
+    /** "The whole minute or nothing" — [parseSlotTime]'s own rule, for the same reason here. */
+    @Test
+    fun `seconds past 59 are refused rather than carried into the minutes`() {
+        assertNull(parseDurationText("0:99"))
+        assertNull(parseDurationText("1:60"))
+    }
+
+    @Test
+    fun `a bump button writes the same shape typing reaches`() {
+        assertEquals("0:30", formatDurationSec(30))
+        assertEquals("1:30", formatDurationSec(90))
+        assertEquals(90, parseDurationText(formatDurationSec(90)))
     }
 }

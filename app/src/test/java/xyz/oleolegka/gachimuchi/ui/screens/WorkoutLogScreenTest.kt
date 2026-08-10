@@ -623,9 +623,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Rest between sets").assertExists()
-        // the catalog remembers 90 s for this one, so agreeing costs exactly one tap
-        compose.onNodeWithText("90").assertExists()
-        compose.onNodeWithText("1:30").assertExists()
+        // the catalog remembers 90 s for this one, so agreeing costs exactly one tap — typed
+        // as mm:ss now, not bare seconds (§13.9)
+        compose.onNodeWithText("Rest, mm:ss").assertExists()
+        compose.onAllNodesWithText("1:30").assertCountEquals(2)
 
         compose.onNodeWithText("Add to workout").performClick()
         assertEquals(listOf(Triple(2L, 90, null)), added)
@@ -644,7 +645,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Save").assertExists()
-        compose.onNodeWithText("150").assertExists()
+        compose.onAllNodesWithText("2:30").assertCountEquals(2)
         assertTrue(
             "the dialog must name the exercise whose rest is being changed",
             compose.onAllNodesWithText("Bench press").fetchSemanticsNodes().size >= 2,

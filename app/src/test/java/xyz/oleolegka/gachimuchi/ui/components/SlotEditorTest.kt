@@ -340,6 +340,69 @@ class SlotEditorTest : ScreenTest() {
         assertEquals(listOf(1L), saved?.exercises?.map { it.exerciseId })
     }
 
+    // --- the rest, typed as mm:ss (§13.9) -------------------------------------------------
+    //
+    // It used to be six chips capped at 4:00 — "not able to choose anything above 4:00" was
+    // the complaint that started this. These are the regression for the field that replaced
+    // them: xyz.oleolegka.gachimuchi.ui.components.TimeField, shared with the rest dialog
+    // inside a live workout.
+
+    @Test
+    fun `a rest already chosen is shown as mm colon ss, not on a chip`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        inBody("2:30").assertExists()
+        inBody("Usual").assertExists()
+    }
+
+    /** THE regression: five minutes is past every preset chip this row used to offer. */
+    @Test
+    fun `a rest past the old four-minute ceiling can be typed and saved`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = null)))
+        )
+
+        type("Rest, mm:ss", "500")
+        inBody("5:00").assertExists()
+
+        compose.onNodeWithText("Save").performClick()
+        settle()
+        assertEquals(listOf(300), saved?.exercises?.map { it.restSec })
+    }
+
+    @Test
+    fun `Usual clears whatever was typed`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        inBody("Usual").performClick()
+        settle()
+
+        inBody("2:30").assertDoesNotExist()
+        compose.onNodeWithText("Save").performClick()
+        settle()
+        assertEquals(listOf<Int?>(null), saved?.exercises?.map { it.restSec })
+    }
+
+    @Test
+    fun `the bump adds to whatever the field already holds`() {
+        editor(
+            initial = slot(7, "Gym", "18:00", day.toString())
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+        )
+
+        compose.onNodeWithText("+30s").performClick()
+        settle()
+
+        inBody("3:00").assertExists()
+    }
+
     // --- the picker, which has to come up ABOVE the dialog -------------------------------------
 
     /**
