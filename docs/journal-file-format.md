@@ -41,7 +41,8 @@ also the format marker and the version, together — a file whose first column i
 | `gachimuchi_journal_v1` | every row | The row kind: `event`, `exercise`, `slot`, `program`, `settings`, or `meta` (one row of file-level metadata, see below). |
 | `uid` | `event` | The event's identity. For every other kind the identity is already inside `payload` (see below); this column repeats it for a human filtering the file. |
 | `event_type` | `event` | The event type, e.g. `strength_set`, `workout_started`, `entry_deleted`. |
-| `written_at` | `event` | When the row was WRITTEN. |
+| `written_at` | `event` | When the row was WRITTEN, in the local time of the phone that wrote it. |
+| `tz_offset_min` | `event` | Minutes east of UTC at that moment. Written from schema version 2 of this file. **A restore reads the offset from here rather than from the phone doing the restoring** - without it, a journal exported abroad and restored at home silently takes on the offset of home. A file that lacks the column altogether (generation v1) still loads, and falls back to the restoring device's zone, which is the old behaviour and the old loss. |
 | `happened_at` | `event` | When the row's own training HAPPENED, if that is known and different from when it was written — see "Two times" below. |
 | `workout_uid` | `event` | The workout this row was recorded during, by identity. |
 | `author_id` | `event` | Mirrors the local author column. |
