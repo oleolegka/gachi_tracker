@@ -179,7 +179,7 @@ fun RunLogDialog(
             chosen?.let { target ->
                 TextButton(
                     enabled = live > 0,
-                    onClick = { onLog(target, sets, parseNumber(weight)?.takeIf { it > 0 }) },
+                    onClick = { onLog(target, sets, parseNumber(weight)?.takeIf { it != 0.0 }) },
                 ) { Text(if (live == 1) "Log 1 set" else "Log $live sets") }
             }
         },
