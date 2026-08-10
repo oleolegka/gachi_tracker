@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -38,8 +41,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import xyz.oleolegka.gachimuchi.data.ExercisePictureStore
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
 import xyz.oleolegka.gachimuchi.domain.firstBlock
@@ -47,6 +54,7 @@ import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
 import xyz.oleolegka.gachimuchi.domain.parseProtocolSeconds
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.fmtDay
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
@@ -257,48 +265,80 @@ private fun PickExisting(
         )
     }
 
+    val context = LocalContext.current
+    val pictureStore = remember(context) { ExercisePictureStore.get(context) }
+
     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
         items(items, key = { it.id }) { exercise ->
             val form = runCatching { ExerciseForm.fromCode(exercise.form) }.getOrNull()
             val protocolBlock = exercise.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
             val used = usage[exercise.id]
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onPick(exercise.id) }
                     .heightIn(min = 56.dp)
                     .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(exercise.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    buildString {
-                        append(form?.title ?: "unknown form")
-                        /*
-                         * The protocol is on the row because it is what makes two rows of the
-                         * same NAME two exercises (§12-A). It used to be unnecessary here for a
-                         * bad reason: creating an exercise deduplicated by name, so a second
-                         * "Hangs" on another protocol could not exist — it was silently handed
-                         * the first one's history. Now that it can exist, a list showing two
-                         * identical lines would put the same failure back one step later, with
-                         * the user picking whichever of the two came first.
-                         */
-                        if (protocolBlock != null) {
-                            append(" - ${protocolBlock.workSec}:${protocolBlock.restSec}")
-                        }
-                        if (used == null) {
-                            append(" - not logged yet")
-                        } else {
-                            append(" - ${used.count} entries, last on ")
-                            append(fmtDay(runCatching { LocalDate.parse(used.lastDate) }.getOrDefault(today)))
-                        }
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkSecondary,
-                )
+                /*
+                 * The whole point of a picture here (owner's own words): "on different machines
+                 * the same weight feels very different" — recognising the specific rack or
+                 * pulldown from last time. Absent for the common case (no picture), which is
+                 * why the row is a Row only when there is one to show and a Column otherwise
+                 * looks exactly as it always has, including its own click target and padding.
+                 */
+                exercise.pictureId?.let { pictureId ->
+                    val bitmap = rememberPicture(pictureStore.fileOf(pictureId), PICKER_THUMB_MAX_PX)
+                    bitmap?.let {
+                        Image(
+                            bitmap = it,
+                            contentDescription = null, // decoration: the name beside it already says which exercise
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
+                        )
+                    }
+                }
+                Column {
+                    Text(exercise.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        buildString {
+                            append(form?.title ?: "unknown form")
+                            /*
+                             * The protocol is on the row because it is what makes two rows of the
+                             * same NAME two exercises (§12-A). It used to be unnecessary here for a
+                             * bad reason: creating an exercise deduplicated by name, so a second
+                             * "Hangs" on another protocol could not exist — it was silently handed
+                             * the first one's history. Now that it can exist, a list showing two
+                             * identical lines would put the same failure back one step later, with
+                             * the user picking whichever of the two came first.
+                             */
+                            if (protocolBlock != null) {
+                                append(" - ${protocolBlock.workSec}:${protocolBlock.restSec}")
+                            }
+                            if (used == null) {
+                                append(" - not logged yet")
+                            } else {
+                                append(" - ${used.count} entries, last on ")
+                                append(fmtDay(runCatching { LocalDate.parse(used.lastDate) }.getOrDefault(today)))
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkSecondary,
+                    )
+                }
             }
         }
     }
 }
+
+/**
+ * How large a decode the picker's row thumbnail asks for. Small on purpose — this is a list,
+ * not the celebration overlay — and downsampled at DECODE time by [decodeScaled], so a multi
+ * megabyte phone photo never exists as a full-size bitmap just to be shown at 44dp.
+ */
+private const val PICKER_THUMB_MAX_PX = 96
 
 /**
  * Creating an exercise. The form is asked ONCE, here, and never again (§11): it is part
