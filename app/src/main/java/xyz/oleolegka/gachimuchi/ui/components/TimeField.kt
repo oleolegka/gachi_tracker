@@ -12,6 +12,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -79,7 +81,21 @@ fun TimeField(
                 // reformatted on every keystroke, not read back from the field's own cursor:
                 // see the class KDoc for why a new digit is always the ones of seconds
                 onValueChange = { onValueChange(formatDurationDigits(it)) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    /*
+                     * The label is drawn as a Text ABOVE this field rather than passed to it,
+                     * so without this the field has no accessible name at all: a screen reader
+                     * announces an unnamed edit box, and nothing can address it by what it is.
+                     * Naming it here fixes both.
+                     */
+                    .then(
+                        if (label != null) {
+                            Modifier.semantics { contentDescription = label }
+                        } else {
+                            Modifier
+                        }
+                    ),
                 singleLine = true,
                 isError = isError,
                 textStyle = TextStyle(fontSize = 18.sp, textAlign = TextAlign.Center),
