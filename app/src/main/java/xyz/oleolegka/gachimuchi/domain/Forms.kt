@@ -216,22 +216,24 @@ enum class ExerciseForm(val code: Int, val eventType: String, val title: String)
  * ── Why this is worth a field of its own ────────────────────────────────────────
  * A climber on a fingerboard hangs one arm at a time, and the ASYMMETRY is the thing the
  * work is for: the weaker hand is what the session is about, and the number that matters is
- * how far apart the two are. Folding both hands into one history answers the wrong question
- * — it reports the better hand and hides the gap that the training exists to close.
+ * how far apart the two are. The same is true off the fingerboard — a one-arm row, a pistol
+ * squat, a single-leg deadlift — and folding both sides into one history answers the wrong
+ * question everywhere it happens: it reports the stronger side and hides the gap that the
+ * training exists to close.
  *
- * So a record is per (exercise, side): the left hand has its own best added weight and the
- * right hand has its own, and neither can take the other's.
+ * So a record is per (exercise, side): the left side has its own best and the right side has
+ * its own, and neither can take the other's — see [LoadedSet.sideOf].
  *
  * ── The side is on the SET, the one-sidedness is on the EXERCISE ────────────────
- * Which hand this particular hang was done with is a fact about the hang. Whether the
- * exercise is done one hand at a time is a fact about the exercise, and it has to be knowable
- * BEFORE a set exists — see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
+ * Which side this particular set was done with is a fact about the set. Whether the exercise
+ * is done one limb at a time is a fact about the exercise, and it has to be knowable BEFORE a
+ * set exists — see [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
  *
  * The codes are the strings stored in the payload; nothing else may be stored there. A value
- * that is neither is a corrupt row and is refused by [HoldSet], which costs that row (the
- * readers skip what will not parse — see [formFromEventOrNull]). That is deliberate: quietly
- * accepting an unknown side would file it with the sets that named no side at all, which is
- * the one answer that is certainly wrong.
+ * that is neither is a corrupt row and is refused by both forms that carry it
+ * ([LoadedSet.side]), which costs that row (the readers skip what will not parse — see
+ * [formFromEventOrNull]). That is deliberate: quietly accepting an unknown side would file it
+ * with the sets that named no side at all, which is the one answer that is certainly wrong.
  */
 enum class HoldSide(val code: String) {
     LEFT("left"),
@@ -297,6 +299,17 @@ private fun requireNonZeroOrNull(name: String, v: Double?): Double? {
 private fun requireKey(name: String, raw: String): String =
     normPhrase(raw) ?: throw IllegalArgumentException("$name: name is empty after normalization ($raw)")
 
+/**
+ * Validates [LoadedSet.side]: one of [HoldSide]'s codes, or null. Shared by every form that
+ * carries the field, so the two cannot drift into accepting different strings.
+ */
+private fun requireSideOrNull(side: String?): String? {
+    require(side == null || HoldSide.fromCode(side) != null) {
+        "side: expected one of ${HoldSide.entries.joinToString { it.code }} or null, got $side"
+    }
+    return side
+}
+
 /** Common interface of all forms: event type plus the activity date. */
 sealed interface ActivityForm {
     val type: String
@@ -337,6 +350,25 @@ sealed interface LoadedSet : ActivityForm {
     val bodyweightKg: Double?
     val warmup: Boolean
     val restAfterSec: Double?
+
+    /**
+     * Which side of the body this set was done with — one of [HoldSide]'s codes, or null for
+     * two-limbed work, or for a set that failed to say. See [HoldSide] for why this exists.
+     *
+     * USED TO LIVE ON [HoldSet] ALONE, because every one-sided exercise this app tracked
+     * started life on a fingerboard. That was never a decision that a pistol squat or a
+     * one-arm row do not have a side — nobody had asked the question yet. The mechanism this
+     * leans on (two workout cards, a rest floor per card, a record per side) was already
+     * general; only the field was narrower than it needed to be.
+     *
+     * A String rather than the enum because the payload is the stored format and it stays
+     * readable by anything that does not know this app's Kotlin; [sideOf] is how the domain
+     * asks the question.
+     */
+    val side: String?
+
+    /** The side as the domain compares it; null both for "both sides" and for "not said". */
+    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
 }
 
 /**
@@ -409,6 +441,11 @@ data class StrengthSet(
      * working set — which is what it was, since there was no way to say otherwise.
      */
     @SerialName("warmup") override val warmup: Boolean = false,
+    /**
+     * Which side this set was done with, for an exercise trained one limb at a time — a
+     * pistol squat, a one-arm row, a single-leg deadlift. See [LoadedSet.side].
+     */
+    @SerialName("side") override val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") override val restAfterSec: Double? = null,
@@ -423,6 +460,7 @@ data class StrengthSet(
         requirePosOrNull("weight_kg", weightKg)
         requirePosOrNull("bodyweight_kg", bodyweightKg)
         requireNonZeroOrNull("added_kg", addedKg)
+        requireSideOrNull(side)
         requireIsoDate(opDate)
         require(!(weightKg != null && ownWeight)) {
             "weight_kg and own_weight are incompatible: either an implement or your own body weight"
@@ -478,19 +516,14 @@ data class HoldSet(
     /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
     @SerialName("warmup") override val warmup: Boolean = false,
     /**
-     * Which hand (or foot) this set was done with — one of [HoldSide]'s codes, or null for a
-     * set done with both.
+     * Which hand (or foot) this set was done with — see [LoadedSet.side].
      *
      * Null is the ordinary answer for two-handed work and the ordinary answer for every set
      * written before this field existed. On an exercise marked one-sided it is neither: it is
      * a set that failed to say which hand it was, and the reducers report that rather than
      * guessing (see [xyz.oleolegka.gachimuchi.domain.holdRecord]).
-     *
-     * A String rather than the enum because the payload is the stored format and it stays
-     * readable by anything that does not know this app's Kotlin; [sideOf] is how the domain
-     * asks the question.
      */
-    @SerialName("side") val side: String? = null,
+    @SerialName("side") override val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("rest_after_sec") override val restAfterSec: Double? = null,
@@ -500,13 +533,8 @@ data class HoldSet(
     override val type: String get() = TYPE_HOLD_SET
     override val key: String get() = activityKey
 
-    /** The side as the domain compares it; null both for "both hands" and for "not said". */
-    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
-
     init {
-        require(side == null || HoldSide.fromCode(side) != null) {
-            "side: expected one of ${HoldSide.entries.joinToString { it.code }} or null, got $side"
-        }
+        requireSideOrNull(side)
         reps?.let { requirePos("reps", it) }
         requirePosOrNull("hold_sec", holdSec)
         requirePosOrNull("work_sec", workSec)

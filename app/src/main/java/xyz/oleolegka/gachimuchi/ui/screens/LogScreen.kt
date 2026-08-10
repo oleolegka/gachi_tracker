@@ -470,8 +470,68 @@ private fun WarmupChip(selected: Boolean, onToggle: () -> Unit) {
     )
 }
 
+/**
+ * Whether an entry card owes an answer for which side a set was — shared by every form that
+ * carries [LoadedSet.side], so [StrengthEntry] and [HoldEntry] settle the question the same
+ * way. Only a one-sided exercise owes an answer, and only when the card itself did not already
+ * say which one — on any other exercise, or with a fixed side, there is nothing left to ask.
+ */
+private fun sideMissingOf(oneSided: Boolean, fixedSide: HoldSide?, side: HoldSide?): Boolean =
+    oneSided && fixedSide == null && side == null
+
+/**
+ * The side chip row and the line explaining a disabled button — shared by every entry form
+ * that can carry a [LoadedSet.side]. See [HoldEntry]'s own KDoc for [fixedSide]: non-null, the
+ * card that raised this form already answered the question and this draws nothing at all.
+ */
 @Composable
-internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+private fun SideChooser(
+    oneSided: Boolean,
+    fixedSide: HoldSide?,
+    side: HoldSide?,
+    onSideChange: (HoldSide?) -> Unit,
+    sideMissing: Boolean,
+) {
+    if (!oneSided || fixedSide != null) return
+    val colors = LocalGachiColors.current
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HoldSide.entries.forEach { option ->
+            FilterChip(
+                selected = side == option,
+                // tapping the chosen one again clears it rather than doing nothing, so a
+                // mis-tap is undone the same way it was made
+                onClick = { onSideChange(if (side == option) null else option) },
+                label = { Text(option.label()) },
+                modifier = Modifier.heightIn(min = 40.dp),
+            )
+        }
+    }
+    if (sideMissing) {
+        Text(
+            "Say which side. This one is trained a limb at a time, and each side keeps " +
+                "its own record - a set that names neither belongs to neither.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkSecondary,
+        )
+    }
+}
+
+/**
+ * Strength sets: weight x reps and — on an exercise trained one limb at a time — which side.
+ *
+ * The side question is asked the same way [HoldEntry] asks it ([SideChooser], [sideMissingOf],
+ * [fixedSide]): the mechanism (two workout cards, per-side rest, per-side records) never
+ * depended on the exercise's form, only the field carrying the answer did — see
+ * [xyz.oleolegka.gachimuchi.domain.LoadedSet.side].
+ */
+@Composable
+internal fun StrengthEntry(
+    state: UiState,
+    exercise: ExerciseRef,
+    opDate: String,
+    onAddSet: (ActivityForm) -> Unit,
+    fixedSide: HoldSide? = null,
+) {
     val last = remember(state.events, exercise.id) { lastStrengthSet(state.events, exercise.link) }
     val prefillWeight = if (last?.ownWeight == true) last.addedKg else last?.weightKg
 
@@ -479,6 +539,10 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var ownWeight by remember(exercise.id, last) { mutableStateOf(last?.ownWeight ?: false) }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
+    // NOT prefilled from the last set, on the same grounds [HoldEntry] leaves its own side
+    // blank: one-sided work alternates, so last time's side is the wrong answer about as
+    // often as it is right, and the failure would be silent.
+    var side by remember(exercise.id, last, fixedSide) { mutableStateOf(fixedSide) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
@@ -490,7 +554,9 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
      * reads "Repeat set" and still costs one tap.
      */
     val untouched = last != null && weightValue == prefillWeight &&
-        repsValue == last.reps && ownWeight == last.ownWeight && warmup == last.warmup
+        repsValue == last.reps && ownWeight == last.ownWeight && warmup == last.warmup &&
+        side == last.sideOf
+    val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     StepperField(
         label = if (ownWeight) "Added weight, kg (empty means body weight only)" else "Weight, kg",
@@ -514,12 +580,16 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
         )
         WarmupChip(warmup) { warmup = !warmup }
     }
-    SubmitButton(repeat = untouched, enabled = repsValue != null && repsValue > 0) {
+    SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
+    SubmitButton(
+        repeat = untouched,
+        enabled = !sideMissing && repsValue != null && repsValue > 0,
+    ) {
         onAddSet(
             strengthSetOf(
                 exercise = exercise, opDate = opDate, reps = repsValue!!,
                 weightKg = weightValue, ownWeight = ownWeight, addedKg = weightValue,
-                warmup = warmup,
+                warmup = warmup, side = side,
             )
         )
     }
@@ -552,6 +622,9 @@ internal fun StrengthEntry(state: UiState, exercise: ExerciseRef, opDate: String
  * and the card that was tapped is itself the answer — asking again with a chip row here would
  * be the same question twice on the one screen used mid-set. So a non-null [fixedSide] hides the
  * chips and writes that side, unconditionally, with nothing left for [sideMissing] to catch.
+ *
+ * [StrengthEntry] asks the same question the same way, for the same reason — this is the
+ * older of the two only because a hangboard is where the app's one-sided training started.
  */
 @Composable
 internal fun HoldEntry(
@@ -561,7 +634,6 @@ internal fun HoldEntry(
     onAddSet: (ActivityForm) -> Unit,
     fixedSide: HoldSide? = null,
 ) {
-    val colors = LocalGachiColors.current
     val last = remember(state.events, exercise.id) { lastHoldSet(state.events, exercise.link) }
     var weight by remember(exercise.id, last) { mutableStateOf(last?.addedKg?.let(::formatNumber) ?: "") }
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
@@ -574,9 +646,7 @@ internal fun HoldEntry(
     val holdSecValue = parseNumber(holdSeconds)
     val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
         holdSecValue == last.holdSec && warmup == last.warmup && side == last.sideOf
-    // only a one-sided exercise owes an answer, and only when the card itself did not already
-    // say which one — on any other one, or with a fixed side, there is nothing left to ask
-    val sideMissing = exercise.oneSided && fixedSide == null && side == null
+    val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     StepperField(
         label = "Added weight, kg",
@@ -604,28 +674,7 @@ internal fun HoldEntry(
         onValueChange = { holdSeconds = it },
         steps = listOf(1.0, 5.0),
     )
-    if (exercise.oneSided && fixedSide == null) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HoldSide.entries.forEach { option ->
-                FilterChip(
-                    selected = side == option,
-                    // tapping the chosen one again clears it rather than doing nothing, so a
-                    // mis-tap is undone the same way it was made
-                    onClick = { side = if (side == option) null else option },
-                    label = { Text(option.label()) },
-                    modifier = Modifier.heightIn(min = 40.dp),
-                )
-            }
-        }
-        if (sideMissing) {
-            Text(
-                "Say which side. This one is trained a limb at a time, and each side keeps " +
-                    "its own record - a set that names neither belongs to neither.",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkSecondary,
-            )
-        }
-    }
+    SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
     WarmupChip(warmup) { warmup = !warmup }
     SubmitButton(
         repeat = untouched,

@@ -110,19 +110,25 @@ fun strengthSetOf(
     addedKg: Double? = null,
     /** Ramp-up rather than working weight — see [StrengthSet.warmup]. */
     warmup: Boolean = false,
+    /**
+     * Which side this was, for an exercise trained one limb at a time ([ExerciseRef.oneSided])
+     * — a pistol squat, a one-arm row. See [holdSetOf]'s own [HoldSide] parameter for why this
+     * is not validated against the flag here either.
+     */
+    side: HoldSide? = null,
 ): StrengthSet = if (ownWeight) {
     StrengthSet(
         exercise = exercise.name, reps = reps, ownWeight = true,
         // zero is "nothing was added", which the payload says by leaving the field out; the
         // sign is KEPT, because a negative one is assistance and not a mistyped positive
         addedKg = addedKg?.takeIf { it != 0.0 }, exerciseId = exercise.id,
-        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup,
+        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup, side = side?.code,
     )
 } else {
     StrengthSet(
         exercise = exercise.name, reps = reps, weightKg = weightKg?.takeIf { it > 0 },
         exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
-        warmup = warmup,
+        warmup = warmup, side = side?.code,
     )
 }
 
@@ -423,7 +429,7 @@ private fun recordAt(all: List<ActivityEvent>, target: ActivityEvent): RecordHit
         is LoadedSet -> when (form) {
             is StrengthSet ->
                 evaluateStrengthRecord(
-                    priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup,
+                    priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup, form.sideOf,
                 )
 
             is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)

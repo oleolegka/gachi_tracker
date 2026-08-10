@@ -505,6 +505,15 @@ class WorkoutTest {
     ) = holdSetOf(exercise, opDate, reps = 5, side = side)
         .let { row(it.type, it.toPayload(), ts, workoutId) }
 
+    private fun strengthSet(
+        exercise: ExerciseRef,
+        opDate: String,
+        workoutId: Long? = null,
+        ts: String = "${opDate}T09:10:00",
+        side: HoldSide? = null,
+    ) = strengthSetOf(exercise, opDate, reps = 5, weightKg = 60.0, side = side)
+        .let { row(it.type, it.toPayload(), ts, workoutId) }
+
     /**
      * The owner's decision (workspace/tasks): one exercise in the catalog, added to a workout as
      * TWO "exercise added" rows — one per [HoldSide] — is TWO cards, not one that folds into a
@@ -541,6 +550,31 @@ class WorkoutTest {
         val left = workout.exercises.single { it.side == HoldSide.LEFT }
         val right = workout.exercises.single { it.side == HoldSide.RIGHT }
         assertTrue("the untouched hand stays empty", left.isEmpty)
+        assertEquals(1, right.sets.size)
+        assertEquals(1, workout.setCount)
+    }
+
+    /**
+     * The same bucketing, for a [StrengthSet] instead of a [HoldSet] — a pistol squat rather
+     * than a hang. Before [LoadedSet] carried [LoadedSet.side], a strength set's side was
+     * always read as null regardless of which card it was logged from, so it fell into
+     * neither the left nor the right bucket and landed on a THIRD, sideless one instead.
+     */
+    @Test
+    fun `a strength set is filed under the card of its own side too`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 180, side = HoldSide.LEFT),
+            added(start.id, bench.id, restSec = 180, side = HoldSide.RIGHT),
+            strengthSet(bench, today, workoutId = start.id, ts = "${today}T09:10:00", side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals("no third, sideless card was created", 2, workout.exercises.size)
+        val left = workout.exercises.single { it.side == HoldSide.LEFT }
+        val right = workout.exercises.single { it.side == HoldSide.RIGHT }
+        assertTrue("the untouched leg stays empty", left.isEmpty)
         assertEquals(1, right.sets.size)
         assertEquals(1, workout.setCount)
     }

@@ -264,10 +264,10 @@ class MainViewModel(
              * Which CARD this set belongs to, for an exercise trained one limb at a time — the
              * left hand's rest and the right hand's are two floors, not one, so the exercise id
              * alone no longer names the countdown a set closes out or the one it starts. Only a
-             * [HoldSet] ever carries a side; every other form floors by exercise id alone, side
-             * always null, exactly as before this existed.
+             * [LoadedSet] ever carries a side; every other form floors by exercise id alone,
+             * side always null, exactly as before this existed.
              */
-            val side = (form as? HoldSet)?.sideOf
+            val side = (form as? LoadedSet)?.sideOf
             if (live && timer.enabled.value && startsRest(form) && exerciseId != null) {
                 timer.floors.floors.value.firstOrNull { it.exerciseId == exerciseId && it.side == side?.code }
                     ?.actualRestSec(System.currentTimeMillis())
@@ -434,7 +434,10 @@ class MainViewModel(
             // function applies still depends on the concrete form, so that stays nested
             is LoadedSet -> when (form) {
                 is StrengthSet ->
-                    evaluateStrengthRecord(strengthSetsOfExercise(events, exercise), form.weightKg, form.reps)
+                    evaluateStrengthRecord(
+                        strengthSetsOfExercise(events, exercise), form.weightKg, form.reps,
+                        side = form.sideOf,
+                    )
 
                 is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)
             }

@@ -92,7 +92,7 @@ fun EntryEditorDialog(
     var km by remember(entry) { mutableStateOf(initialKm(entry)) }
     var pace by remember(entry) { mutableStateOf(initialPace(entry)) }
     var warmup by remember(entry) { mutableStateOf(initialWarmup(entry)) }
-    var side by remember(entry) { mutableStateOf((entry as? HoldSet)?.sideOf) }
+    var side by remember(entry) { mutableStateOf((entry as? LoadedSet)?.sideOf) }
     var holdSeconds by remember(entry) { mutableStateOf(initialHoldSec(entry)) }
 
     /*
@@ -133,6 +133,11 @@ fun EntryEditorDialog(
                             steps = listOf(1.0),
                             decimal = false,
                         )
+                        // shown on the same condition as HoldSet's own chooser below: the
+                        // catalog flag, or an entry that already names a side
+                        if (oneSided || entry.sideOf != null) {
+                            SideChipsRow(side) { side = it }
+                        }
                         WarmupToggle(warmup) { warmup = !warmup }
                     }
 
@@ -159,16 +164,7 @@ fun EntryEditorDialog(
                             steps = listOf(1.0, 5.0),
                         )
                         if (oneSided || entry.sideOf != null) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                HoldSide.entries.forEach { option ->
-                                    FilterChip(
-                                        selected = side == option,
-                                        onClick = { side = if (side == option) null else option },
-                                        label = { Text(option.label()) },
-                                        modifier = Modifier.heightIn(min = 40.dp),
-                                    )
-                                }
-                            }
+                            SideChipsRow(side) { side = it }
                         }
                         WarmupToggle(warmup) { warmup = !warmup }
                     }
@@ -267,6 +263,25 @@ private fun WarmupToggle(selected: Boolean, onToggle: () -> Unit) {
     )
 }
 
+/**
+ * The left/right chooser, shared by every [LoadedSet] branch — tapping the chosen one again
+ * clears it rather than doing nothing, so a mis-tap is undone the same way it was made, the
+ * same rule ui/screens/LogScreen.kt's own chip row follows.
+ */
+@Composable
+private fun SideChipsRow(selected: HoldSide?, onSelect: (HoldSide?) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HoldSide.entries.forEach { option ->
+            FilterChip(
+                selected = selected == option,
+                onClick = { onSelect(if (selected == option) null else option) },
+                label = { Text(option.label()) },
+                modifier = Modifier.heightIn(min = 40.dp),
+            )
+        }
+    }
+}
+
 // --- the drafts, and the form they add up to ------------------------------------------------
 //
 // Prefilled from the entry as it currently reads (corrections already folded in), so opening
@@ -349,12 +364,12 @@ private fun amended(
             // sign survives, because a negative added weight is assistance and not a typo
             entry.copy(
                 addedKg = weightValue?.takeIf { it != 0.0 }, reps = repsValue ?: entry.reps,
-                warmup = warmup, opDate = day,
+                warmup = warmup, side = side?.code, opDate = day,
             )
         } else {
             entry.copy(
                 weightKg = weightValue?.takeIf { it > 0 }, reps = repsValue ?: entry.reps,
-                warmup = warmup, opDate = day,
+                warmup = warmup, side = side?.code, opDate = day,
             )
         }
 

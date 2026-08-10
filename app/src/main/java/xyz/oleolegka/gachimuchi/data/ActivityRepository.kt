@@ -19,7 +19,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseDeleted
 import xyz.oleolegka.gachimuchi.domain.TYPE_EXERCISE_DELETED
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
-import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.journalView
@@ -242,7 +242,7 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun recordActualRest(exercise: ExerciseLink, actualRestSec: Double, side: HoldSide? = null): Long? {
         val target = readActivities(allEvents(), listOf(TYPE_STRENGTH_SET, TYPE_HOLD_SET))
             .lastOrNull {
-                it.form.exerciseLink()?.matches(exercise) == true && (it.form as? HoldSet)?.sideOf == side
+                it.form.exerciseLink()?.matches(exercise) == true && (it.form as? LoadedSet)?.sideOf == side
             }
             ?: return null
         return amendEntry(

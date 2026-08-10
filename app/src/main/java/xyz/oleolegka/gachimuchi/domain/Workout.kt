@@ -749,9 +749,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         if (link == null) {
             unkeyed += activity
         } else {
-            // only a HoldSet ever carries a side (see HoldSet.sideOf); every other form joins
-            // the sideless block, which is the only block such an exercise can have anyway
-            val side = (activity.form as? HoldSet)?.sideOf
+            // only a LoadedSet ever carries a side (see LoadedSet.sideOf); every other form
+            // joins the sideless block, which is the only block such an exercise can have
+            val side = (activity.form as? LoadedSet)?.sideOf
             sets.getValue(remember(link, row.id, side)) += activity
         }
     }
