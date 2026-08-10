@@ -44,6 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.celebratedByPicture
 import xyz.oleolegka.gachimuchi.domain.dayWatchDelayMs
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.deletedExerciseLinks
 import xyz.oleolegka.gachimuchi.domain.actualRestSec
 import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
@@ -144,7 +145,23 @@ class MainViewModel(
 
     val state: StateFlow<UiState> =
         combine(repo.events, repo.exercises, repo.slots, programRepo.programs) { events, exercises, slots, programs ->
-            UiState(events, exercises, slots, programs.associateBy { it.id }, loading = false)
+            /*
+             * The ONE place a deleted exercise's own catalog row is taken out of what the app
+             * shows — every screen reads the exercise list off this [UiState], never off
+             * `repo.exercises` directly (see ui/screens/ExercisePicker.kt, OverviewScreen.kt,
+             * GachiApp.kt's hold-exercise list). Its history is a separate concern, handled by
+             * the SAME fold one level down: readActivities/buildWorkout already drop a deleted
+             * exercise's own entries because they go through domain/Amendments.kt, which this
+             * merely mirrors for the row itself — see [deletedExerciseLinks]'s own KDoc for why
+             * the two are two folds of one journal rather than one shared answer.
+             */
+            val gone = deletedExerciseLinks(events)
+            val visibleExercises = if (gone.isEmpty()) {
+                exercises
+            } else {
+                exercises.filterNot { ex -> gone.any { it.matches(ExerciseLink(ex.uid, ex.id)) } }
+            }
+            UiState(events, visibleExercises, slots, programs.associateBy { it.id }, loading = false)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
     /**
