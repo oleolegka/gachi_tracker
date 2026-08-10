@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -14,6 +15,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
+import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.JournalFile
@@ -22,11 +24,14 @@ import xyz.oleolegka.gachimuchi.domain.PortableSettings
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
+import xyz.oleolegka.gachimuchi.domain.StrengthSet
+import xyz.oleolegka.gachimuchi.domain.TYPE_DURATION
 import xyz.oleolegka.gachimuchi.domain.TimerSettings
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
+import xyz.oleolegka.gachimuchi.domain.csvRowsByColumn
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.portableSettings
 import xyz.oleolegka.gachimuchi.domain.readJournalFile
@@ -523,5 +528,136 @@ class JournalBackupTest {
         } finally {
             other.close()
         }
+    }
+
+    // --- THE acceptance test: export, wipe the database, restore ---------------------------
+
+    /**
+     * The test the owner of this feature said would be checked first, done literally: export,
+     * erase the very database this phone was using, restore the same file back into it, and
+     * the state has to match field for field. Not "restore into a fresh database elsewhere" —
+     * the test above already covers that — but wiping the database this phone actually had and
+     * rebuilding it from nothing but the file.
+     */
+    @Test
+    fun `THE circular test - export, wipe the database, restore, and the same file comes back out`() = runTest {
+        writeAPhone()
+        val exported = backup.export("2026-08-07", "device-1")
+        assertTrue("the phone actually wrote something worth losing", db.events().all().isNotEmpty())
+
+        db.clearAllTables()
+        assertEquals("the database really is empty now", 0, db.events().all().size)
+        assertEquals(0, db.exercises().all().size)
+
+        val report = backup.restore(accepted(exported))
+        assertTrue("a wipe-and-restore has to write the journal back", report.eventsAdded > 0)
+
+        assertEquals(exported, backup.export("2026-08-07", "device-1"))
+    }
+
+    // --- historicity: deleted, superseded and corrected rows survive the trip ---------------
+
+    /**
+     * A cancelled set is not this app hiding something from itself: it is written as an event
+     * like any other, and the old, JSON-and-CSV-as-two-files design used to leave it out of the
+     * read-only CSV entirely — a table that could not answer "what did this used to say" at
+     * all. Both rows travel now; the flag is what tells them apart.
+     */
+    @Test
+    fun `a cancelled set travels in the file, marked as not the current version`() = runTest {
+        val benchId = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH)
+        val bench = repo.toRef(repo.exercise(benchId)!!)
+        val today = LocalDate.now().toString()
+
+        val keptId = repo.record(strengthSetOf(bench, today, reps = 5, weightKg = 60.0))
+        val cancelledId = repo.record(strengthSetOf(bench, today, reps = 5, weightKg = 65.0))
+        repo.cancelSet(cancelledId)
+
+        val text = backup.export()
+        val keptUid = db.events().byId(keptId)!!.uid
+        val cancelledUid = db.events().byId(cancelledId)!!.uid
+
+        val rows = csvRowsByColumn(text).associateBy { it["uid"] }
+        assertEquals("true", rows.getValue(keptUid)["current_version"])
+        assertEquals("false", rows.getValue(cancelledUid)["current_version"])
+
+        // and both survive a full wipe and restore, the cancellation included
+        db.clearAllTables()
+        backup.restore(accepted(text))
+        val allEvents = db.events().all().map { it.toJournalEvent() }
+        assertEquals(2, allEvents.count { it.uid == keptUid || it.uid == cancelledUid })
+
+        val live = readActivities(allEvents).map { it.uid }
+        assertTrue(keptUid in live)
+        assertTrue("a restored phone must still know the cancelled set is not current", cancelledUid !in live)
+
+        val withHistory = readActivities(allEvents, includeDeleted = true).map { it.uid }
+        assertTrue("but the cancellation itself is not lost", cancelledUid in withHistory)
+    }
+
+    /**
+     * A correction (the full-version model — see domain/Amendments.kt) writes a whole new row
+     * and marks the old one superseded. Both travel; the derived `reps` column shows the
+     * correction only on the row that is now current, and the round trip carries every version.
+     */
+    @Test
+    fun `a corrected entry - the old row is marked superseded, the new one current, and the fix shows`() = runTest {
+        val benchId = repo.ensureExercise("Bench press", ExerciseForm.STRENGTH)
+        val bench = repo.toRef(repo.exercise(benchId)!!)
+        val today = LocalDate.now().toString()
+
+        val originalId = repo.record(strengthSetOf(bench, today, reps = 5, weightKg = 60.0))
+        val originalUid = db.events().byId(originalId)!!.uid
+        val newId = repo.amendEntry(originalId, strengthSetOf(bench, today, reps = 8, weightKg = 60.0))
+        assertNotNull("the correction has to actually write a new row", newId)
+        val newUid = db.events().byId(newId!!)!!.uid
+
+        val text = backup.export()
+        val rows = csvRowsByColumn(text).associateBy { it["uid"] }
+
+        assertEquals("false", rows.getValue(originalUid)["current_version"])
+        assertEquals("true", rows.getValue(newUid)["current_version"])
+        // the derived column, for the eye: the row that is IN FORCE now shows 8 reps
+        assertEquals("8", rows.getValue(newUid)["reps"])
+        // WHEN IT HAPPENED is inherited by the correction from the row it replaces, not
+        // re-stamped to the moment of the correction itself - see writeNewVersion's own KDoc
+        assertEquals(rows.getValue(originalUid)["happened_at"], rows.getValue(newUid)["happened_at"])
+
+        db.clearAllTables()
+        backup.restore(accepted(text))
+        assertEquals(text, backup.export())
+
+        val restoredNew = db.events().all().single { it.uid == newUid }
+        assertEquals(8, (readActivities(listOf(restoredNew.toJournalEvent())).single().form as StrengthSet).reps)
+    }
+
+    /**
+     * WHEN THE TRAINING HAPPENED, separate from WHEN THE ROW WAS WRITTEN — the one column the
+     * old JSON envelope carried into every restore as null, silently, because nothing in it
+     * ever read [EventEntity.occurredTs]. Built by hand rather than through the repository:
+     * nothing public backdates an entry outside of a correction, and a correction's own
+     * inheritance is already the previous test's job.
+     */
+    @Test
+    fun `time executed survives distinctly from time written, through a wipe and restore`() = runTest {
+        val id = db.events().insert(
+            EventEntity(
+                ts = "2026-08-07T18:00:00",
+                type = TYPE_DURATION,
+                payload = """{"op_date":"2026-08-07","activity":"Stretching","duration_sec":600,"activity_key":"stretching"}""",
+                occurredTs = "2026-08-07T15:00:00",
+            )
+        )
+        val stored = db.events().byId(id)!!
+        assertNotEquals("the fixture has to actually separate the two moments", stored.ts, stored.occurredTs)
+
+        val text = backup.export()
+        db.clearAllTables()
+        backup.restore(accepted(text))
+
+        val restored = db.events().all().single { it.uid == stored.uid }
+        assertEquals(stored.ts, restored.ts)
+        assertEquals(stored.occurredTs, restored.occurredTs)
+        assertNotEquals(restored.ts, restored.occurredTs)
     }
 }

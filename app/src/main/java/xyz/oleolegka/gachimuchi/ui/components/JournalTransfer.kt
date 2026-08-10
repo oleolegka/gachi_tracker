@@ -18,7 +18,6 @@ import xyz.oleolegka.gachimuchi.data.DeviceStore
 import xyz.oleolegka.gachimuchi.data.JournalBackup
 import xyz.oleolegka.gachimuchi.data.ProgramFiles
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
-import xyz.oleolegka.gachimuchi.domain.JOURNAL_CSV_MIME
 import xyz.oleolegka.gachimuchi.domain.JOURNAL_FILE_MIME
 import xyz.oleolegka.gachimuchi.domain.JournalImport
 import xyz.oleolegka.gachimuchi.domain.readJournalFile
@@ -47,18 +46,10 @@ class JournalTransfer internal constructor(
     val export: () -> Unit,
     /** Asks, then opens the system file picker and merges what comes back. */
     val restore: () -> Unit,
-    /**
-     * Straight to the file picker with a CSV of the journal — see domain/JournalCsv.kt for
-     * what is in it. No question first, unlike [restore]: this reads the phone and changes
-     * nothing on it, the same as [export] and for the same reason it needs no dialog of its
-     * own either. There is nothing to restore FROM it, so there is no third button here for
-     * that.
-     */
-    val exportCsv: () -> Unit,
 )
 
 /**
- * Nothing larger than this is read back. A journal of years is a few megabytes indented;
+ * Nothing larger than this is read back. A journal of years is a few megabytes of CSV;
  * thirty-two is room for a lifetime of training and still small enough that a video picked
  * by mistake through "all files" is refused instead of taking the app down with it.
  */
@@ -110,29 +101,6 @@ fun rememberJournalTransfer(): JournalTransfer {
         }
     }
 
-    val saveCsv = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(JOURNAL_CSV_MIME)
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val text = backup.exportCsv()
-                val failure = ProgramFiles.write(context, uri, text)
-                if (failure != null) {
-                    say("Not saved", listOf(failure))
-                } else {
-                    say(
-                        "Saved",
-                        listOf(
-                            "One row per set, as the app shows it now - deleted entries and " +
-                                "corrections are already settled. This file is for reading, " +
-                                "not for restoring; keep the JSON backup for that."
-                        ),
-                    )
-                }
-            }
-        }
-    }
-
     val open = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -162,15 +130,16 @@ fun rememberJournalTransfer(): JournalTransfer {
             text = {
                 Text(
                     "Everything the app holds - the journal, the exercises, the plan, the " +
-                        "programs and the settings - as one JSON file. Saving writes it wherever " +
-                        "you choose; sharing hands the same file to another app to send. The " +
-                        "celebration pictures are not in it."
+                        "programs and the settings - as one CSV file, readable as a table and " +
+                        "restorable from the same file. Saving writes it wherever you choose; " +
+                        "sharing hands the same file to another app to send. The celebration " +
+                        "pictures are not in it."
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     choosing = false
-                    save.launch("gachimuchi-journal-$today.json")
+                    save.launch("gachimuchi-journal-$today.csv")
                 }) { Text("Save to a file") }
             },
             dismissButton = {
@@ -180,8 +149,9 @@ fun rememberJournalTransfer(): JournalTransfer {
                         val failure = ProgramFiles.share(
                             context = context,
                             text = backup.export(today, deviceId),
-                            fileName = "gachimuchi-journal-$today.json",
+                            fileName = "gachimuchi-journal-$today.csv",
                             title = "Send the journal",
+                            mime = JOURNAL_FILE_MIME,
                         )
                         if (failure != null) say("Not sent", listOf(failure))
                     }
@@ -206,8 +176,8 @@ fun rememberJournalTransfer(): JournalTransfer {
             confirmButton = {
                 TextButton(onClick = {
                     confirming = false
-                    // any type, rather than a filter on application/json: a .json file arrives
-                    // from half the file managers labelled octet-stream or text/plain, and a
+                    // any type, rather than a filter on text/csv: a .csv file arrives from
+                    // half the file managers labelled octet-stream or text/plain, and a
                     // filtered picker shows the user's own backup greyed out. Nothing about the
                     // contents is trusted either way - readJournalFile validates what comes back
                     open.launch(arrayOf(ANY_MIME))
@@ -230,11 +200,10 @@ fun rememberJournalTransfer(): JournalTransfer {
         )
     }
 
-    return remember(save, open, saveCsv) {
+    return remember(save, open) {
         JournalTransfer(
             export = { choosing = true },
             restore = { confirming = true },
-            exportCsv = { saveCsv.launch("gachimuchi-journal-$today.csv") },
         )
     }
 }

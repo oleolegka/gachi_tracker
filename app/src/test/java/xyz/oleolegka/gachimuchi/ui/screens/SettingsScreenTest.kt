@@ -151,25 +151,6 @@ class SettingsScreenTest : ScreenTest() {
         settle()
     }
 
-    /**
-     * The CSV export sits next to the JSON one and is wired the same direct way - no question
-     * first, because it changes nothing on the phone (see `JournalTransfer.kt`'s own KDoc on
-     * [xyz.oleolegka.gachimuchi.ui.components.JournalTransfer.exportCsv]).
-     */
-    @Test
-    fun `the csv export sits beside the json one, wired and explained`() {
-        screen { SettingsScreen() }
-
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Export as CSV"))
-        compose.onNodeWithText("Export as CSV").assertIsDisplayed().assertHasClickAction()
-        compose.onNodeWithText(
-            "A table of the training itself - one row per set, dates and numbers a " +
-                "spreadsheet can read. It shows what the app shows: a deleted entry or a " +
-                "corrected one is already settled, not listed twice. There is no way back " +
-                "from this file into the app - keep the JSON above for that."
-        ).assertExists()
-    }
-
     /** The row carrying [title], brought into the lazy list's window first. */
     private fun modeRow(title: String): SemanticsNodeInteraction {
         compose.onNode(hasScrollAction()).performScrollToNode(hasText(title))

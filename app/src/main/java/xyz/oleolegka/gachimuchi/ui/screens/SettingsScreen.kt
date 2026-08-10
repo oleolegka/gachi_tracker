@@ -203,35 +203,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
              */
             Text(
                 "The journal, the exercises, the plan, the programs and these settings, as one " +
-                    "JSON file. Nothing else keeps a copy of them - not the phone, not a cloud - " +
-                    "so this file is the only thing standing between a lost phone and a lost " +
-                    "history. Keep it somewhere that is not this phone. The celebration pictures, " +
-                    "and any picture attached to an exercise, are not in it. Restoring merges a " +
-                    "file into what is here and can be done twice without doubling anything.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.inkMuted,
-            )
-        }
-
-        item {
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                OutlinedButton(onClick = journal.exportCsv) { Text("Export as CSV") }
-            }
-        }
-
-        item {
-            /*
-             * The JSON file above is THE backup - it is what a restore reads. This is a second,
-             * unrelated file for a different job: a table to open and read, not a copy to keep.
-             * Saying so here is the one place that matters, because a spreadsheet named
-             * "journal" sitting next to a JSON backup of the same name invites the wrong one to
-             * be trusted as the copy.
-             */
-            Text(
-                "A table of the training itself - one row per set, dates and numbers a " +
-                    "spreadsheet can read. It shows what the app shows: a deleted entry or a " +
-                    "corrected one is already settled, not listed twice. There is no way back " +
-                    "from this file into the app - keep the JSON above for that.",
+                    "CSV file: a table a spreadsheet can open and read, and the same file a " +
+                    "restore reads back. Nothing else keeps a copy of them - not the phone, not " +
+                    "a cloud - so this file is the only thing standing between a lost phone and " +
+                    "a lost history. Keep it somewhere that is not this phone. The celebration " +
+                    "pictures, and any picture attached to an exercise, are not in it. Restoring " +
+                    "merges a file into what is here and can be done twice without doubling " +
+                    "anything.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
             )
