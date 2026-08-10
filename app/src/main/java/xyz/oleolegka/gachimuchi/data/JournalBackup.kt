@@ -12,7 +12,6 @@ import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.ImportReport
 import xyz.oleolegka.gachimuchi.domain.JournalFile
-import xyz.oleolegka.gachimuchi.domain.journalCsv
 import xyz.oleolegka.gachimuchi.domain.PortableEvent
 import xyz.oleolegka.gachimuchi.domain.PortablePlannedExercise
 import xyz.oleolegka.gachimuchi.domain.PortableProgramRow
@@ -20,10 +19,8 @@ import xyz.oleolegka.gachimuchi.domain.PortableSettings
 import xyz.oleolegka.gachimuchi.domain.PortableSlot
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
-import xyz.oleolegka.gachimuchi.domain.elementToPayload
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.mergeExercises
-import xyz.oleolegka.gachimuchi.domain.payloadToElement
 import xyz.oleolegka.gachimuchi.domain.portableSettings
 import xyz.oleolegka.gachimuchi.domain.toTimerSettings
 import xyz.oleolegka.gachimuchi.domain.uniqueProgramName
@@ -35,7 +32,8 @@ import java.time.format.DateTimeFormatter
  * The database half of the backup: the journal out of Room into a file, and a file back into
  * Room without writing anything twice.
  *
- * The format itself, and every judgement about what a valid file is, lives in
+ * The format itself — one CSV table, everything the app holds as either a journal row or a
+ * whole reference row — and every judgement about what a valid file is, lives in
  * domain/JournalTransfer.kt. What is here is the part that needs Room: which tables are read,
  * in which order rows are written back, and how the one link the schema still keeps as a row
  * number (`slot_exercises.exercise_id`) is translated into a uid on the way out and back on
@@ -65,7 +63,11 @@ class JournalBackup(
 
     // --- out ---------------------------------------------------------------------------
 
-    /** The whole journal as file text. */
+    /**
+     * The whole journal as file text: the journal itself, EVERY row of it (live and dead —
+     * see domain/JournalTransfer.kt's `current_version` column for how a reader tells them
+     * apart), plus the catalog, the plan, the programs and the settings, each carried whole.
+     */
     suspend fun export(exportedAt: String = "", deviceId: String = ""): String {
         val exercises = db.exercises().all()
         val uidOfExercise = exercises.associate { it.id to it.uid }
@@ -74,16 +76,8 @@ class JournalBackup(
         val uidOfProgram = db.programs().allPrograms().associate { it.id to it.uid }
 
         return writeJournalFile(
-            events = db.events().all().map { row ->
-                PortableEvent(
-                    uid = row.uid,
-                    ts = row.ts,
-                    type = row.type,
-                    payload = payloadToElement(row.payload),
-                    workoutUid = row.workoutUid,
-                    authorId = row.authorId,
-                )
-            },
+            events = db.events().all().map { it.toJournalEvent() },
+            catalog = exercises.map { it.toCatalogRow() },
             exercises = exercises.map { it.toPortable(it.protocolProgramId?.let(uidOfProgram::get)) },
             slots = slotsOut(uidOfExercise),
             programs = programsOut(uidOfExercise),
@@ -92,16 +86,6 @@ class JournalBackup(
             deviceId = deviceId,
         )
     }
-
-    /**
-     * The journal as a CSV table — see domain/JournalCsv.kt for what that means and why it is
-     * a different read from [export]. A thin bridge and nothing more: the two Room reads a
-     * pure function cannot do itself, handed straight to [xyz.oleolegka.gachimuchi.domain.journalCsv].
-     */
-    suspend fun exportCsv(): String = journalCsv(
-        events = db.events().all().map { it.toJournalEvent() },
-        catalog = db.exercises().all().map { it.toCatalogRow() },
-    )
 
     private suspend fun slotsOut(uidOfExercise: Map<Long, String>): List<PortableSlot> {
         val composition = db.slots().allExercises().groupBy { it.slotId }
@@ -275,7 +259,7 @@ class JournalBackup(
         if (fresh.isNotEmpty()) {
             db.events().insertAll(
                 fresh.map { event ->
-                    val payload = elementToPayload(event.payload)
+                    val payload = event.payload
                     /*
                      * The file carries a local time and no zone — it is the exchange format and
                      * it predates the columns — so a restored row is resolved in THE ZONE OF THE
@@ -298,6 +282,11 @@ class JournalBackup(
                         opDate = opDateOfPayload(payload),
                         tsUtc = written?.utc,
                         tzOffsetMin = written?.offsetMin,
+                        // carried verbatim from the file rather than re-derived: WHEN THE
+                        // TRAINING HAPPENED, as opposed to ts (when the row was written), is an
+                        // independent fact this format used to lose silently on every restore —
+                        // see PortableEvent's own KDoc
+                        occurredTs = event.occurredTs,
                     )
                 }
             )
