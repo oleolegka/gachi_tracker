@@ -1020,4 +1020,60 @@ class WorkoutTest {
      * ActivityRepository.unfinishWorkoutExercise - and stating the gap beats a test that
      * quietly checks something easier.
      */
+
+    // --- a deleted exercise's card disappears from the workout, not just its sets --------
+
+    private fun exerciseDeleted(targetId: Long, ts: String = "2026-08-07T21:00:00") =
+        row(TYPE_EXERCISE_DELETED, payloadJson.encodeToString(ExerciseDeleted(targetId = targetId)), ts)
+
+    /**
+     * The gap a per-row filter would leave: hiding only [bench]'s SETS still leaves the
+     * "added" row standing, and `buildWorkout` would then draw an EMPTY card for an exercise
+     * that is supposed to be gone entirely. The whole point of the cascade in
+     * domain/Amendments.kt is that the "added" row folds dead along with the sets, in the same
+     * pass, so no such ghost card is possible.
+     */
+    @Test
+    fun `deleting an exercise removes its whole card from an open workout, not just its sets`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 90),
+            set(bench, today, workoutId = start.id),
+            added(start.id, squat.id, 120),
+            set(squat, today, workoutId = start.id),
+            exerciseDeleted(bench.id),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(listOf(squat.id), workout.exercises.map { it.exerciseId })
+    }
+
+    /** A finished card of a deleted exercise does not survive as an empty finished ghost. */
+    @Test
+    fun `deleting an exercise removes its finished card too`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 90),
+            set(bench, today, workoutId = start.id),
+            cardFinished(start.id, bench.id),
+            exerciseDeleted(bench.id),
+        )
+
+        assertTrue(buildWorkout(events, start.id)!!.exercises.isEmpty())
+    }
+
+    /** Undoing the exercise deletion brings its card back, same as any other undo in this app. */
+    @Test
+    fun `undoing the exercise deletion brings the card back`() {
+        val start = started(today)
+        val gone = exerciseDeleted(bench.id, ts = "2026-08-07T21:00:00")
+        val undo = row(
+            TYPE_ENTRY_DELETED, payloadJson.encodeToString(EntryDeleted(gone.uid)), "2026-08-07T22:00:00",
+        )
+        val events = listOf(start, added(start.id, bench.id, 90), set(bench, today, workoutId = start.id), gone, undo)
+
+        assertEquals(listOf(bench.id), buildWorkout(events, start.id)!!.exercises.map { it.exerciseId })
+    }
 }
