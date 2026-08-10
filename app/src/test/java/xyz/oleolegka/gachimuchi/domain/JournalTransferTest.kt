@@ -26,7 +26,11 @@ class JournalTransferTest {
         ts: String = "2026-08-07T18:00:00",
         workoutUid: String? = null,
         occurredTs: String? = null,
-    ) = JournalEvent(nextId++, ts, 1, 1, type, payload, uid = uid, workoutUid = workoutUid, occurredTs = occurredTs)
+        tzOffsetMin: Int? = null,
+    ) = JournalEvent(
+        nextId++, ts, 1, 1, type, payload, uid = uid, workoutUid = workoutUid, occurredTs = occurredTs,
+        tzOffsetMin = tzOffsetMin,
+    )
 
     private fun exercise(
         uid: String,
@@ -86,7 +90,7 @@ class JournalTransferTest {
 
     @Test
     fun `a file written by this app reads back as exactly what went into it`() {
-        val ev = event("0198c2f0-0000-7000-8000-000000000001", occurredTs = "2026-08-07T17:55:00")
+        val ev = event("0198c2f0-0000-7000-8000-000000000001", occurredTs = "2026-08-07T17:55:00", tzOffsetMin = 180)
         val exercises = listOf(exercise("0198c2ef-0000-7000-8000-00000000000a"))
         val slots = listOf(
             slot(
@@ -108,7 +112,7 @@ class JournalTransferTest {
         assertEquals("2026-08-07", file.exportedAt)
         assertEquals("device-1", file.deviceId)
         assertEquals(
-            listOf(PortableEvent(ev.uid, ev.ts, ev.type, ev.payload, ev.workoutUid, ev.authorId, ev.occurredTs)),
+            listOf(PortableEvent(ev.uid, ev.ts, ev.type, ev.payload, ev.workoutUid, ev.authorId, ev.occurredTs, ev.tzOffsetMin)),
             file.events,
         )
         assertEquals(exercises, file.exercises)
@@ -235,6 +239,49 @@ class JournalTransferTest {
                 .joinToString("\n")
         }
         assertTrue(rejection(mangled).contains("column"))
+    }
+
+    // --- the timezone offset (schema version 2 of this file) ----------------------------------
+
+    @Test
+    fun `an event's timezone offset round-trips through the file`() {
+        val ev = event("0198c2f0-0000-7000-8000-000000000001", tzOffsetMin = 420)
+        val file = loaded(fileOf(listOf(ev)))
+
+        assertEquals(420, file.events.single().tzOffsetMin)
+    }
+
+    /**
+     * ACCEPTANCE: a v1 file — one written before `tz_offset_min` existed — has never had this
+     * column at all, on every row, not merely blank on one. [REQUIRED_STRUCTURAL_COLUMNS] is
+     * what tells that generation apart from a damaged file, so it must still be accepted, not
+     * refused for lacking a column newer than itself; the offset for a row like that comes back
+     * null, the honest answer for a fact the file never recorded. The restoring side of this
+     * fallback — a device's own zone standing in for the missing offset — is
+     * `data/JournalBackupTest.kt`'s job, not this format-only class's.
+     */
+    @Test
+    fun `a file with no tz_offset_min column at all is accepted, and the offset comes back null`() {
+        val ev = event("0198c2f0-0000-7000-8000-000000000001", tzOffsetMin = 999) // would prove the column WAS read
+        val text = fileOf(listOf(ev))
+
+        val lines = text.split("\n")
+        val header = splitCsvLine(lines.first()).toMutableList()
+        val colIndex = header.indexOf("tz_offset_min")
+        assertTrue("the column has to exist in a normal export to strip it", colIndex >= 0)
+        header.removeAt(colIndex)
+        header[0] = "gachimuchi_journal_v1" // what a v1 file's own version marker says
+
+        val v1 = (
+            listOf(joinCsvLine(header)) +
+                lines.drop(1).map { line ->
+                    if (line.isBlank()) line else joinCsvLine(splitCsvLine(line).toMutableList().apply { removeAt(colIndex) })
+                }
+            ).joinToString("\n")
+
+        val file = loaded(v1)
+        assertEquals(ev.uid, file.events.single().uid)
+        assertEquals(null, file.events.single().tzOffsetMin)
     }
 
     // --- THE rule: a restore never reads a derived column -----------------------------------
@@ -492,4 +539,4 @@ class JournalTransferTest {
 }
 
 /** Mirrors the private `CSV_VERSION` in domain/JournalTransfer.kt for the version-guard tests. */
-private const val CSV_VERSION_FOR_TEST = 1
+private const val CSV_VERSION_FOR_TEST = 2

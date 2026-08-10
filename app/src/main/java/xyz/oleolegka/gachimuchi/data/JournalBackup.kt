@@ -26,6 +26,7 @@ import xyz.oleolegka.gachimuchi.domain.toTimerSettings
 import xyz.oleolegka.gachimuchi.domain.uniqueProgramName
 import xyz.oleolegka.gachimuchi.domain.writeJournalFile
 import java.time.LocalDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /**
@@ -261,16 +262,32 @@ class JournalBackup(
                 fresh.map { event ->
                     val payload = event.payload
                     /*
-                     * The file carries a local time and no zone — it is the exchange format and
-                     * it predates the columns — so a restored row is resolved in THE ZONE OF THE
-                     * DEVICE DOING THE RESTORE, exactly as the 15 -> 16 migration resolves the
-                     * rows already on the phone, and with the same caveat: a journal exported
-                     * abroad and restored at home gets the offset of home. That is a loss the
-                     * file cannot avoid until the format itself carries the offset; leaving the
-                     * columns empty instead would make every restored row unsortable against
-                     * every row this phone wrote.
+                     * The file now carries the offset the row was written at ([PortableEvent
+                     * .tzOffsetMin], schema version 2 of the file format), so a restored row is
+                     * resolved against THAT offset, wherever the restore itself happens to run —
+                     * a journal exported abroad and restored at home keeps the offset it was
+                     * exported with. [WriteTime.of] is handed a [ZonedDateTime] built from the
+                     * file's local wall clock at a FIXED offset (not a named zone, which could
+                     * mean a different UTC delta on a different day): that reproduces the file's
+                     * own offset exactly rather than re-deriving it from a device.
+                     *
+                     * A file with no offset (v1, written before this column existed, or a row
+                     * whose own `ts` never resolved to one) has nothing else to go on, so this
+                     * falls back to THE ZONE OF THE DEVICE DOING THE RESTORE, exactly as the 15
+                     * -> 16 migration resolves the rows already on the phone, and with the same
+                     * caveat: a v1 journal exported abroad and restored at home still gets the
+                     * offset of home. That loss is unavoidable for a file the exporting device
+                     * never recorded an offset into in the first place; leaving the columns empty
+                     * instead would make every restored row unsortable against every row this
+                     * phone wrote.
                      */
-                    val written = WriteTime.ofLocal(event.ts)
+                    val written = event.tzOffsetMin
+                        ?.let { offsetMin ->
+                            runCatching {
+                                WriteTime.of(LocalDateTime.parse(event.ts).atZone(ZoneOffset.ofTotalSeconds(offsetMin * 60)))
+                            }.getOrNull()
+                        }
+                        ?: WriteTime.ofLocal(event.ts)
                     EventEntity(
                         ts = event.ts,
                         authorId = event.authorId,
