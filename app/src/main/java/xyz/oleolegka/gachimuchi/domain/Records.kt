@@ -25,6 +25,11 @@ import kotlin.math.roundToInt
  * every comparison here. The empty bar must not hold the personal best, and it must not
  * become the baseline that silences the first real set either.
  *
+ * NEITHER DO SETS MARKED [StrengthSet.incomplete] — same exclusion, same both sides, for a
+ * different reason: the weight was real, but it was not actually carried through, and a
+ * record set by a rep that was not gotten or a hang that was let go early would tell the
+ * lifter to chase a number they never actually held.
+ *
  * KNOWN SIMPLIFICATIONS (no whitewashing):
  * - strength records are computed ONLY for sets with an absolute weight. Body-weight
  *   and body-weight-plus-added sets take no part in the strength comparison — max reps
@@ -95,10 +100,10 @@ data class RecordHit(
  * note per set. Returns null if no axis was broken or if there are no weighted sets
  * among the previous ones.
  *
- * [warmup] describes the NEW set and defaults to false. It is a separate parameter rather
- * than a whole [StrengthSet] because the set being judged has never been passed as one here
- * — the caller holds a weight and a rep count typed into a card, and may be judging a set
- * that has not been written yet.
+ * [warmup] and [incomplete] describe the NEW set and both default to false. They are separate
+ * parameters rather than a whole [StrengthSet] because the set being judged has never been
+ * passed as one here — the caller holds a weight and a rep count typed into a card, and may be
+ * judging a set that has not been written yet.
  *
  * [side] narrows the comparison to the SAME side, on the same grounds [evaluateHoldRecord]
  * already stands on: a pistol squat's two legs diverge in strength exactly the way a
@@ -113,10 +118,11 @@ fun evaluateStrengthRecord(
     reps: Int?,
     warmup: Boolean = false,
     side: HoldSide? = null,
+    incomplete: Boolean = false,
 ): RecordHit? {
     if (weight == null || reps == null) return null
-    if (warmup) return null
-    val weighted = priorSets.filter { !it.warmup && it.weightKg != null && it.sideOf == side }
+    if (warmup || incomplete) return null
+    val weighted = priorSets.filter { !it.warmup && !it.incomplete && it.weightKg != null && it.sideOf == side }
     if (weighted.isEmpty()) return null // the first weighted set is a baseline, stay quiet
 
     val new1rm = est1rm(weight, reps)
@@ -146,11 +152,11 @@ fun evaluateStrengthRecord(
  * Added weight wins; the seconds axis is for unweighted holds.
  */
 fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
-    if (hold.warmup) return null
+    if (hold.warmup || hold.incomplete) return null
     // ONE HAND'S HISTORY IS THE ONLY THING THIS HAND COMPETES WITH. On a fingerboard the two
     // sides are years apart in strength, and comparing across them would mean the weaker hand
     // never breaks a record while the stronger one breaks every one it is told about.
-    val working = priorHolds.filter { !it.warmup && it.sideOf == hold.sideOf }
+    val working = priorHolds.filter { !it.warmup && !it.incomplete && it.sideOf == hold.sideOf }
     val priorSeconds = working.mapNotNull { it.holdSec }
 
     // A hold with nothing added is a real point on the added-weight axis, at zero, and it has
@@ -264,7 +270,10 @@ fun strengthRecord(
 ): List<ExerciseRecord> {
     val mine = sets.mapNotNull { ev ->
         (ev.form as? StrengthSet)
-            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null && !it.warmup }
+            ?.takeIf {
+                it.exerciseLink()?.matches(exercise) == true && it.weightKg != null &&
+                    !it.warmup && !it.incomplete
+            }
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return emptyList()
@@ -291,7 +300,10 @@ fun heaviestSet(
 ): List<ExerciseRecord> {
     val mine = activities.mapNotNull { ev ->
         (ev.form as? StrengthSet)
-            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && it.weightKg != null && !it.warmup }
+            ?.takeIf {
+                it.exerciseLink()?.matches(exercise) == true && it.weightKg != null &&
+                    !it.warmup && !it.incomplete
+            }
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return emptyList()
@@ -332,7 +344,8 @@ fun holdRecord(
     oneSided: Boolean = false,
 ): List<ExerciseRecord> {
     val mine = sets.mapNotNull { ev ->
-        (ev.form as? HoldSet)?.takeIf { it.exerciseLink()?.matches(exercise) == true && !it.warmup }
+        (ev.form as? HoldSet)
+            ?.takeIf { it.exerciseLink()?.matches(exercise) == true && !it.warmup && !it.incomplete }
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return emptyList()

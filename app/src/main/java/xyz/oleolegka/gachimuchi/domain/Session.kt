@@ -110,6 +110,8 @@ fun strengthSetOf(
     addedKg: Double? = null,
     /** Ramp-up rather than working weight — see [StrengthSet.warmup]. */
     warmup: Boolean = false,
+    /** Fell short of the reps this was attempted at — see [StrengthSet.incomplete]. */
+    incomplete: Boolean = false,
     /**
      * Which side this was, for an exercise trained one limb at a time ([ExerciseRef.oneSided])
      * — a pistol squat, a one-arm row. See [holdSetOf]'s own [HoldSide] parameter for why this
@@ -122,13 +124,14 @@ fun strengthSetOf(
         // zero is "nothing was added", which the payload says by leaving the field out; the
         // sign is KEPT, because a negative one is assistance and not a mistyped positive
         addedKg = addedKg?.takeIf { it != 0.0 }, exerciseId = exercise.id,
-        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup, side = side?.code,
+        exerciseUid = exercise.uid, opDate = opDate, warmup = warmup, incomplete = incomplete,
+        side = side?.code,
     )
 } else {
     StrengthSet(
         exercise = exercise.name, reps = reps, weightKg = weightKg?.takeIf { it > 0 },
         exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
-        warmup = warmup, side = side?.code,
+        warmup = warmup, incomplete = incomplete, side = side?.code,
     )
 }
 
@@ -150,6 +153,8 @@ fun holdSetOf(
     restAfterSec: Double? = null,
     /** Ramp-up rather than a working hang — see [StrengthSet.warmup]. */
     warmup: Boolean = false,
+    /** Fell short of the protocol this was attempted at — see [StrengthSet.incomplete]. */
+    incomplete: Boolean = false,
     /**
      * Which hand this was, for an exercise trained one at a time ([ExerciseRef.oneSided]).
      *
@@ -173,6 +178,7 @@ fun holdSetOf(
     addedKg = addedKg?.takeIf { it != 0.0 },
     ownWeight = true,
     warmup = warmup,
+    incomplete = incomplete,
     side = side?.code,
     exerciseId = exercise.id,
     exerciseUid = exercise.uid,
@@ -429,7 +435,8 @@ private fun recordAt(all: List<ActivityEvent>, target: ActivityEvent): RecordHit
         is LoadedSet -> when (form) {
             is StrengthSet ->
                 evaluateStrengthRecord(
-                    priorOf { it as? StrengthSet }, form.weightKg, form.reps, form.warmup, form.sideOf,
+                    priorOf { it as? StrengthSet }, form.weightKg, form.reps,
+                    warmup = form.warmup, side = form.sideOf, incomplete = form.incomplete,
                 )
 
             is HoldSet -> evaluateHoldRecord(priorOf { it as? HoldSet }, form)

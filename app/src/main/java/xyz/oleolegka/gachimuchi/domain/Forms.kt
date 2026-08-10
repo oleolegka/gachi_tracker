@@ -352,6 +352,14 @@ sealed interface LoadedSet : ActivityForm {
     val restAfterSec: Double?
 
     /**
+     * Whether the set was NOT carried through as the working weight demanded — the hang held
+     * for five seconds of a seven-second protocol, the last two reps of five never happened,
+     * yet the weight on the bar is exactly what it says. See [StrengthSet.incomplete] for the
+     * full story; declared here so both loaded forms carry it under one name.
+     */
+    val incomplete: Boolean
+
+    /**
      * Which side of the body this set was done with — one of [HoldSide]'s codes, or null for
      * two-limbed work, or for a set that failed to say. See [HoldSide] for why this exists.
      *
@@ -442,6 +450,31 @@ data class StrengthSet(
      */
     @SerialName("warmup") override val warmup: Boolean = false,
     /**
+     * Whether this set fell short of what it was attempted at — the reps were not all gotten,
+     * at the same weight the set is otherwise recorded with.
+     *
+     * ── The app cannot tell this on its own, so it is asked ─────────────────────
+     * The timer, the counter, the stepper — none of them know whether the last rep actually
+     * locked out or was let go halfway. Only the lifter does, which is why this is a flag
+     * SET BY HAND on the entry card (owner: "я просто хочу некую плашку, справился ли я с
+     * упражнением или нет") and never inferred from anything else the app already tracks.
+     *
+     * ── What it changes, and what it deliberately does not ──────────────────────
+     * Modelled exactly on [warmup]'s own split, with the axis it excludes turned around: an
+     * incomplete set is kept OUT of records and stays IN volume and time under tension. The
+     * weight was genuinely hung on the bar and the effort was genuinely spent — "the work got
+     * done" is true regardless — but a rep count or a hold time that fell short of the target
+     * must not become the number the app tells the lifter to beat, or a set that was a defeat
+     * quietly starts reading as a personal best next time the exercise comes up. It also has
+     * no bearing on [warmup]'s own two effects (active days, the feed) — the two flags answer
+     * different questions and a set can carry either, both or neither.
+     *
+     * Defaulted to false, so every entry written before this field existed reads as having
+     * carried the set through — there was no way to say otherwise, and the honest default is
+     * "no mark", not "failed" (see [xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord]).
+     */
+    @SerialName("incomplete") override val incomplete: Boolean = false,
+    /**
      * Which side this set was done with, for an exercise trained one limb at a time — a
      * pistol squat, a one-arm row, a single-leg deadlift. See [LoadedSet.side].
      */
@@ -515,6 +548,13 @@ data class HoldSet(
     @SerialName("bodyweight_kg") override val bodyweightKg: Double? = null,
     /** A ramp-up hang rather than a working one — see [StrengthSet.warmup]. */
     @SerialName("warmup") override val warmup: Boolean = false,
+    /**
+     * The hang that did not go the distance — held for less than [workSec] said, or short on
+     * reps of the protocol — at an added weight that is otherwise recorded exactly as hung.
+     * See [StrengthSet.incomplete] for the full story (this is the very case it was written
+     * for: "провисел не 7 секунд, а смог только 5").
+     */
+    @SerialName("incomplete") override val incomplete: Boolean = false,
     /**
      * Which hand (or foot) this set was done with — see [LoadedSet.side].
      *

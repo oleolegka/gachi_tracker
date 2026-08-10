@@ -539,6 +539,50 @@ private fun WarmupChip(selected: Boolean, onToggle: () -> Unit) {
 }
 
 /**
+ * The "not completed" toggle, shared by the two forms that can carry the flag — modelled on
+ * [WarmupChip] one line up, with the axis it defaults to turned around: OFF on arrival, always,
+ * because whether the LAST set was carried through says nothing about whether THIS one will be
+ * (owner: "если провисел весь цикл — хорошо, в следующий раз больше поставлю; а если не смог
+ * доделать, то больше брать и не надо"). The app cannot tell this on its own — the timer counts
+ * its seconds whether or not the lifter actually held on for all of them — so it is a mark set
+ * by hand, never inferred. See [StrengthSet.incomplete] for what ticking it changes: the set
+ * stays in the tonnage (the effort was real) and drops out of the records (the number was not
+ * actually held).
+ */
+@Composable
+private fun IncompleteChip(selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text("Not completed") },
+        modifier = Modifier.heightIn(min = 40.dp),
+    )
+}
+
+/**
+ * "Last time this was not completed" — the one thing this card says about a PAST set rather
+ * than the one being built, and the reason [LoadedSet.incomplete] exists at all: the owner's
+ * whole ask was a note that feeds the NEXT decision about weight, not a badge for its own sake.
+ * Placed right under the weight and reps fields (or the hold time, on [HoldEntry]) — the numbers
+ * this is a comment on — rather than folded into [contextLine], which is read once when the
+ * card is chosen and not while the fields are being looked at.
+ *
+ * Silent when the answer is no (most of the time) or when there is no last set at all, on the
+ * same grounds every quiet default in this file follows: a card that speaks up about ordinary
+ * training is a card nobody reads carefully any more.
+ */
+@Composable
+private fun LastTimeIncompleteNote(show: Boolean) {
+    if (!show) return
+    val colors = LocalGachiColors.current
+    Text(
+        "Last time this was not completed - consider the same weight again, or less.",
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.warning,
+    )
+}
+
+/**
  * Whether an entry card owes an answer for which side a set was — shared by every form that
  * carries [LoadedSet.side], so [StrengthEntry] and [HoldEntry] settle the question the same
  * way. Only a one-sided exercise owes an answer, and only when the card itself did not already
@@ -648,6 +692,10 @@ internal fun StrengthEntry(
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var ownWeight by remember(exercise.id, last) { mutableStateOf(last?.ownWeight ?: false) }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
+    // OFF ON ARRIVAL, on the same grounds [WarmupChip] gives for its own flag: whether the
+    // last set was carried through is not a property of the exercise, so this card opens on
+    // "carried through" however the previous set actually went. See [IncompleteChip].
+    var incomplete by remember(exercise.id, last) { mutableStateOf(false) }
     // NOT prefilled from the last set, on the same grounds [HoldEntry] leaves its own side
     // blank: one-sided work alternates, so last time's side is the wrong answer about as
     // often as it is right, and the failure would be silent.
@@ -660,11 +708,13 @@ internal fun StrengthEntry(
      * repeating the ramp-up is a repeat, and a working set after one is not. Comparing it
      * against the previous set rather than against false is what keeps the button honest in
      * both directions — the card starts unticked, so a working set after a working set still
-     * reads "Repeat set" and still costs one tap.
+     * reads "Repeat set" and still costs one tap. [incomplete] joins it for the same reason:
+     * a card that reads "Repeat set" while quietly UN-marking a set the lifter said fell short
+     * would silently turn the correction back into a repeat.
      */
     val untouched = last != null && weightValue == prefillWeight &&
         repsValue == last.reps && ownWeight == last.ownWeight && warmup == last.warmup &&
-        side == last.sideOf
+        incomplete == last.incomplete && side == last.sideOf
     val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     StepperField(
@@ -680,6 +730,9 @@ internal fun StrengthEntry(
         steps = listOf(1.0),
         decimal = false,
     )
+    // "In the past, this weight was not carried through" — the input the owner asked this
+    // whole feature to feed into: whether to push the weight up next time. See [IncompleteChip].
+    LastTimeIncompleteNote(last?.incomplete == true)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
             selected = ownWeight,
@@ -688,6 +741,7 @@ internal fun StrengthEntry(
             modifier = Modifier.heightIn(min = 40.dp),
         )
         WarmupChip(warmup) { warmup = !warmup }
+        IncompleteChip(incomplete) { incomplete = !incomplete }
     }
     SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
     SubmitButton(
@@ -698,7 +752,7 @@ internal fun StrengthEntry(
             strengthSetOf(
                 exercise = exercise, opDate = opDate, reps = repsValue!!,
                 weightKg = weightValue, ownWeight = ownWeight, addedKg = weightValue,
-                warmup = warmup, side = side,
+                warmup = warmup, incomplete = incomplete, side = side,
             )
         )
     }
@@ -748,13 +802,16 @@ internal fun HoldEntry(
     var reps by remember(exercise.id, last) { mutableStateOf(last?.reps?.toString() ?: "") }
     var holdSeconds by remember(exercise.id, last) { mutableStateOf(last?.holdSec?.let(::formatNumber) ?: "") }
     var warmup by remember(exercise.id, last) { mutableStateOf(false) }
+    // OFF ON ARRIVAL — see [StrengthEntry]'s own note on why this is never prefilled.
+    var incomplete by remember(exercise.id, last) { mutableStateOf(false) }
     var side by remember(exercise.id, last, fixedSide) { mutableStateOf(fixedSide) }
 
     val repsValue = parseCount(reps)
     val weightValue = parseNumber(weight)
     val holdSecValue = parseNumber(holdSeconds)
     val untouched = last != null && weightValue == last.addedKg && repsValue == last.reps &&
-        holdSecValue == last.holdSec && warmup == last.warmup && side == last.sideOf
+        holdSecValue == last.holdSec && warmup == last.warmup &&
+        incomplete == last.incomplete && side == last.sideOf
     val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     StepperField(
@@ -783,8 +840,14 @@ internal fun HoldEntry(
         onValueChange = { holdSeconds = it },
         steps = listOf(1.0, 5.0),
     )
+    // "Last time this was not held for the full protocol" — the owner's own example ("провисел
+    // не 7 секунд, а 5") is exactly what this line is for. See [IncompleteChip].
+    LastTimeIncompleteNote(last?.incomplete == true)
     SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
-    WarmupChip(warmup) { warmup = !warmup }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        WarmupChip(warmup) { warmup = !warmup }
+        IncompleteChip(incomplete) { incomplete = !incomplete }
+    }
     SubmitButton(
         repeat = untouched,
         enabled = !sideMissing &&
@@ -793,7 +856,7 @@ internal fun HoldEntry(
         onAddSet(
             holdSetOf(
                 exercise = exercise, opDate = opDate, addedKg = weightValue, reps = repsValue,
-                holdSec = holdSecValue, warmup = warmup, side = side,
+                holdSec = holdSecValue, warmup = warmup, incomplete = incomplete, side = side,
             )
         )
     }

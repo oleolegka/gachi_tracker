@@ -22,8 +22,17 @@ class EntryLinesTest : ScreenTest() {
 
     private val bench = exerciseRef(1, "Bench press")
 
-    private fun event(id: Long, warmup: Boolean, weightKg: Double = 60.0, reps: Int = 5): ActivityEvent {
-        val form = strengthSetOf(bench, "2026-08-10", reps = reps, weightKg = weightKg, warmup = warmup)
+    private fun event(
+        id: Long,
+        warmup: Boolean,
+        weightKg: Double = 60.0,
+        reps: Int = 5,
+        incomplete: Boolean = false,
+    ): ActivityEvent {
+        val form = strengthSetOf(
+            bench, "2026-08-10", reps = reps, weightKg = weightKg,
+            warmup = warmup, incomplete = incomplete,
+        )
         return ActivityEvent(
             id = id,
             ts = "2026-08-10T09:${10 + id}:00",
@@ -62,5 +71,53 @@ class EntryLinesTest : ScreenTest() {
         }
 
         compose.onNodeWithText("Warm-up").assertDoesNotExist()
+    }
+
+    // --- the "Not completed" badge -------------------------------------------------------
+
+    @Test
+    fun `a set marked not completed carries its own badge, a completed set next to it does not`() {
+        screen {
+            EntryBlock(
+                name = "Bench press",
+                restSec = null,
+                entries = listOf(
+                    event(1, warmup = false, incomplete = true),
+                    event(2, warmup = false, incomplete = false),
+                ),
+                recordOf = emptyMap(),
+            )
+        }
+
+        compose.onAllNodesWithText("Not completed").assertCountEquals(1)
+    }
+
+    @Test
+    fun `a workout with nothing marked incomplete shows no badge for it`() {
+        screen {
+            EntryBlock(
+                name = "Bench press",
+                restSec = null,
+                entries = listOf(event(1, warmup = false), event(2, warmup = false)),
+                recordOf = emptyMap(),
+            )
+        }
+
+        compose.onNodeWithText("Not completed").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a set can carry both badges at once - warmup and not completed are independent`() {
+        screen {
+            EntryBlock(
+                name = "Bench press",
+                restSec = null,
+                entries = listOf(event(1, warmup = true, incomplete = true)),
+                recordOf = emptyMap(),
+            )
+        }
+
+        compose.onNodeWithText("Warm-up").assertExists()
+        compose.onNodeWithText("Not completed").assertExists()
     }
 }

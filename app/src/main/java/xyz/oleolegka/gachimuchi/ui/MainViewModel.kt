@@ -558,6 +558,11 @@ class MainViewModel(
      * The record this set breaks, judged against the journal AS IT IS NOW — the same
      * comparison the session feed makes for a set already written (domain/Session.kt), so
      * the overlay and the feed cannot disagree about what was a record.
+     *
+     * [StrengthSet.warmup] and [StrengthSet.incomplete] are both passed through — a card that
+     * writes either must not pop a "new record" cue for a set domain/Records.kt already refuses
+     * to count. [HoldSet] needs nothing of the sort passed separately: [evaluateHoldRecord] reads
+     * both flags straight off the form it is handed.
      */
     private suspend fun recordBrokenBy(form: ActivityForm): RecordHit? {
         val exercise = form.exerciseLink() ?: return null
@@ -569,7 +574,7 @@ class MainViewModel(
                 is StrengthSet ->
                     evaluateStrengthRecord(
                         strengthSetsOfExercise(events, exercise), form.weightKg, form.reps,
-                        side = form.sideOf,
+                        warmup = form.warmup, side = form.sideOf, incomplete = form.incomplete,
                     )
 
                 is HoldSet -> evaluateHoldRecord(holdSetsOfExercise(events, exercise), form)

@@ -152,7 +152,7 @@ private val REQUIRED_STRUCTURAL_COLUMNS = STRUCTURAL_COLUMNS - "tz_offset_min"
 private val DERIVED_COLUMNS = listOf(
     "current_version", "name", "date", "workout", "exercise", "form", "side",
     "weight_kg", "added_kg", "own_weight", "reps", "hold_sec", "rest_after_sec", "warmup",
-    "bodyweight_kg", "duration_sec", "distance_m", "pace_sec_per_km",
+    "incomplete", "bodyweight_kg", "duration_sec", "distance_m", "pace_sec_per_km",
 )
 
 /** internal rather than private so a test can name a column instead of a bare index. */
@@ -547,6 +547,7 @@ private fun eventRow(
         "hold_sec" to num(hold?.holdSec),
         "rest_after_sec" to num(loaded?.restAfterSec),
         "warmup" to bool(loaded?.warmup),
+        "incomplete" to bool(loaded?.incomplete),
         "bodyweight_kg" to num(loaded?.bodyweightKg ?: bodyweight?.weightKg),
         "duration_sec" to num(duration?.durationSec ?: cardio?.durationSec),
         "distance_m" to num(cardio?.distanceM),

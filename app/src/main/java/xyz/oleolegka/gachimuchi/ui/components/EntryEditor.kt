@@ -92,6 +92,7 @@ fun EntryEditorDialog(
     var km by remember(entry) { mutableStateOf(initialKm(entry)) }
     var pace by remember(entry) { mutableStateOf(initialPace(entry)) }
     var warmup by remember(entry) { mutableStateOf(initialWarmup(entry)) }
+    var incomplete by remember(entry) { mutableStateOf(initialIncomplete(entry)) }
     var side by remember(entry) { mutableStateOf((entry as? LoadedSet)?.sideOf) }
     var holdSeconds by remember(entry) { mutableStateOf(initialHoldSec(entry)) }
 
@@ -101,7 +102,7 @@ fun EntryEditorDialog(
      * is exactly the question the confirm button needs answered.
      */
     val candidate = runCatching {
-        amended(entry, day, weight, reps, minutes, km, pace, warmup, side, holdSeconds)
+        amended(entry, day, weight, reps, minutes, km, pace, warmup, incomplete, side, holdSeconds)
     }.getOrNull()
 
     AlertDialog(
@@ -139,6 +140,7 @@ fun EntryEditorDialog(
                             SideChipsRow(side) { side = it }
                         }
                         WarmupToggle(warmup) { warmup = !warmup }
+                        IncompleteToggle(incomplete) { incomplete = !incomplete }
                     }
 
                     is HoldSet -> {
@@ -167,6 +169,7 @@ fun EntryEditorDialog(
                             SideChipsRow(side) { side = it }
                         }
                         WarmupToggle(warmup) { warmup = !warmup }
+                        IncompleteToggle(incomplete) { incomplete = !incomplete }
                     }
 
                     is Cardio -> {
@@ -264,6 +267,23 @@ private fun WarmupToggle(selected: Boolean, onToggle: () -> Unit) {
 }
 
 /**
+ * The "not completed" toggle of the editor — the same fact
+ * [xyz.oleolegka.gachimuchi.ui.screens.IncompleteChip] sets when recording, and the mark shown
+ * back on this same entry by ui/components/EntryLines.kt's "Not completed" badge. Corrected
+ * here for the set that was not marked at the time — a person remembers a set was a struggle
+ * after the fact more often than not.
+ */
+@Composable
+private fun IncompleteToggle(selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text("Not completed") },
+        modifier = Modifier.heightIn(min = 40.dp),
+    )
+}
+
+/**
  * The left/right chooser, shared by every [LoadedSet] branch — tapping the chosen one again
  * clears it rather than doing nothing, so a mis-tap is undone the same way it was made, the
  * same rule ui/screens/LogScreen.kt's own chip row follows.
@@ -328,6 +348,11 @@ private fun initialWarmup(entry: ActivityForm): Boolean = when (entry) {
     else -> false
 }
 
+private fun initialIncomplete(entry: ActivityForm): Boolean = when (entry) {
+    is LoadedSet -> entry.incomplete
+    else -> false
+}
+
 /** The length of one hold, or blank for anything else — [HoldSet] is the only form that has one. */
 private fun initialHoldSec(entry: ActivityForm): String =
     (entry as? HoldSet)?.holdSec?.let(::formatNumber).orEmpty()
@@ -353,6 +378,7 @@ private fun amended(
     km: String,
     pace: String,
     warmup: Boolean,
+    incomplete: Boolean,
     side: HoldSide?,
     holdSeconds: String = "",
 ): ActivityForm {
@@ -364,12 +390,12 @@ private fun amended(
             // sign survives, because a negative added weight is assistance and not a typo
             entry.copy(
                 addedKg = weightValue?.takeIf { it != 0.0 }, reps = repsValue ?: entry.reps,
-                warmup = warmup, side = side?.code, opDate = day,
+                warmup = warmup, incomplete = incomplete, side = side?.code, opDate = day,
             )
         } else {
             entry.copy(
                 weightKg = weightValue?.takeIf { it > 0 }, reps = repsValue ?: entry.reps,
-                warmup = warmup, side = side?.code, opDate = day,
+                warmup = warmup, incomplete = incomplete, side = side?.code, opDate = day,
             )
         }
 
@@ -378,6 +404,7 @@ private fun amended(
             reps = repsValue?.takeIf { it > 0 },
             holdSec = parseNumber(holdSeconds)?.takeIf { it > 0 },
             warmup = warmup,
+            incomplete = incomplete,
             side = side?.code,
             opDate = day,
         )

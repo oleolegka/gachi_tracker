@@ -479,6 +479,90 @@ class WorkoutLogScreenTest : ScreenTest() {
         assertFalse("an untouched card must record a working set", (logged.single() as StrengthSet).warmup)
     }
 
+    // --- the "not completed" flag ------------------------------------------------------------
+
+    /**
+     * The owner's own example: the weight did not change, but the lifter did not carry the
+     * set through. The flag has to reach the payload for the same reason the warm-up flag
+     * does — a chip that looks ticked and writes nothing is worse than no chip.
+     */
+    @Test
+    fun `ticking not completed writes the flag onto the set`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Not completed").performClick()
+        settle()
+
+        compose.onNodeWithText("Add set").performClick()
+
+        assertTrue(
+            "the set must be marked as not completed",
+            (logged.single() as StrengthSet).incomplete,
+        )
+    }
+
+    /** The other half: an untouched card still records a set that WAS carried through. */
+    @Test
+    fun `a working set stays two taps and is not marked as not completed`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Not completed").assertExists()
+        compose.onNodeWithText("Repeat set").performClick()
+
+        assertFalse(
+            "an untouched card must record a set that was carried through",
+            (logged.single() as StrengthSet).incomplete,
+        )
+    }
+
+    /**
+     * The whole point of the flag, from the reading side: the "Last time" line the decision at
+     * the bar is actually made on has to say which of the previous sets fell short, right next
+     * to the numbers it fell short at — not just that SOMETHING that day did not go well.
+     */
+    @Test
+    fun `the last-time line marks the set that was not completed`() {
+        val journal = Journal()
+        journal.strengthSet(bench, "2026-08-05", at = "18:10", weightKg = 60.0, reps = 9)
+        journal.strengthSet(
+            bench, "2026-08-05", at = "18:15", weightKg = 60.0, reps = 3, incomplete = true,
+        )
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText(
+            "Last time (5 Aug): 60 kg × 9 reps, 60 kg × 3 reps (not completed)",
+        ).assertExists()
+    }
+
+    /** A completed history says nothing extra — the marker earns its place, it is not decoration. */
+    @Test
+    fun `the last-time line stays plain when nothing was marked`() {
+        val journal = Journal()
+        journal.strengthSet(bench, "2026-08-05", at = "18:10", weightKg = 60.0, reps = 9)
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        settle()
+        settle()
+
+        compose.onNodeWithText("Last time (5 Aug): 60 kg × 9 reps").assertExists()
+        compose.onNodeWithText("not completed", substring = true).assertDoesNotExist()
+    }
+
     // --- the two cards of a one-sided exercise ------------------------------------------------
 
     /**
