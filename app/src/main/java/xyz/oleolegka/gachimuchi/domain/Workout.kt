@@ -278,6 +278,26 @@ data class WorkoutExercise(
      */
     val side: HoldSide? = null,
     /**
+     * The id of the live [TYPE_WORKOUT_EXERCISE_FINISHED] event that marked this CARD done, or
+     * null for a card nobody has marked.
+     *
+     * ── The mark and the way to undo it are ONE field on purpose ────────────────────
+     * There used to be a `finished: Boolean` beside this, and the two could only ever say the
+     * same thing: both were read off the same map, in the same expression, one with
+     * `containsKey` and one with `get`. Two fields that must agree are two fields that can be
+     * made to disagree — by a copy() that sets one, by a fold that forgets the other — and the
+     * screen was already asking the same question twice to get both halves. So the id is the
+     * whole of the state and [finished] below is derived from it, which is a fact the type
+     * enforces rather than a rule someone has to keep.
+     *
+     * Carried here rather than looked up again because a screen offering the undo control is
+     * already holding this block — see
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.unfinishWorkoutExercise] for what
+     * deleting it does.
+     */
+    val finishedEventId: Long? = null,
+) {
+    /**
      * Whether this CARD has been marked done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. A status
      * and not a lock, the same rule [Workout.finished] follows one level up: the card can
      * still be written into, and doing so does not clear this.
@@ -285,18 +305,8 @@ data class WorkoutExercise(
      * Drives [buildWorkout]'s grouping (every finished card drawn above every active one) and
      * is what a screen reads to draw the collapsed card and the green check.
      */
-    val finished: Boolean = false,
-    /**
-     * The id of the live [TYPE_WORKOUT_EXERCISE_FINISHED] event, or null when [finished] is
-     * false.
-     *
-     * What undoing the mark deletes — see
-     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.unfinishWorkoutExercise] — carried
-     * here rather than looked up again because a screen offering the undo control already
-     * holds this block.
-     */
-    val finishedEventId: Long? = null,
-) {
+    val finished: Boolean get() = finishedEventId != null
+
     /**
      * The local catalog row number, for the screens that still navigate by one.
      *
@@ -703,7 +713,6 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val blocks = sets.map { (key, ofExercise) ->
         WorkoutExercise(
             links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty(), sides[key],
-            finished = cardFinished.containsKey(key),
             finishedEventId = cardFinished[key],
         )
     }

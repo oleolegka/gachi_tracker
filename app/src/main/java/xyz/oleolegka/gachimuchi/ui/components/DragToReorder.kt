@@ -74,11 +74,13 @@ class ReorderState internal constructor(private val listState: LazyListState) {
      *
      * A card may be carried to another slot but never into another group: [start] measures
      * where its own group begins and ends among the rows on screen, and [drag] refuses to
-     * report a slot outside it. Two callers use this today for two different reasons to draw
-     * the same rule — a workout's active and finished cards must never mix (owner's decision,
-     * §14.2) — but the rule itself belongs here rather than at either call site, because "stay
-     * inside your own group" is exactly the same arithmetic [drag] already does to stay inside
-     * the list.
+     * report a slot outside it.
+     *
+     * ONE caller draws a group today — the workout log, whose finished and active cards must
+     * never mix (owner's decision, decisions.md §18.4). The rule lives here rather than there
+     * because "stay inside your own group" is exactly the arithmetic [drag] already does to
+     * stay inside the list, and because the group is an ARBITRARY key rather than a boolean:
+     * a third group costs a caller a different lambda and this class nothing.
      */
     internal var groupOf: (String) -> Any? = { null }
 
