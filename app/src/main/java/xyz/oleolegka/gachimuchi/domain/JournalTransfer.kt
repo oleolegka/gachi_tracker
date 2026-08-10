@@ -502,7 +502,7 @@ private fun eventRow(
         "workout" to workoutLabel(ev.workoutRef()),
         "exercise" to exerciseName,
         "form" to (FORM_TITLE_BY_TYPE[ev.type] ?: ""),
-        "side" to (hold?.sideOf?.let { if (it == HoldSide.LEFT) "left" else "right" } ?: ""),
+        "side" to (loaded?.sideOf?.code ?: ""),
         "weight_kg" to num(strength?.weightKg),
         "added_kg" to num(loaded?.addedKg),
         "own_weight" to bool(loaded?.ownWeight),
