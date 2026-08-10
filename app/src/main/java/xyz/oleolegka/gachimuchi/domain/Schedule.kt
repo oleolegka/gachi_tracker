@@ -482,6 +482,62 @@ fun planVsFact(
     return out
 }
 
+// --- the calendar's dots --------------------------------------------------------------
+//
+// A rework of §12-B's grid (2026-08-10): the cell used to carry the day's own [DayState] as
+// a wash, which had no honest answer for "two sessions, one done and one missed" — a day is
+// not one verdict, its SLOTS are. The dots now say so directly, one per slot still open and
+// one per thing actually done, instead of the cell trying to average them into a single tint.
+
+/** How many dots the calendar draws under a day before the rest collapse into a "+N" mark. */
+const val MAX_CALENDAR_DOTS = 6
+
+/**
+ * A day's dots for the calendar: how many, and in which colour.
+ *
+ * [states] reuses [SlotState] as the colour a dot draws in rather than inventing a fourth
+ * enum, because the three colours a dot can be ARE the three verdicts a slot can carry:
+ * green for done, red for missed, blue for still planned. A [SlotState.DONE] entry here is
+ * not always a slot's own verdict, though — see [calendarDots] for where the green ones
+ * without a slot behind them come from.
+ *
+ * [overflow] is how many were left off past [MAX_CALENDAR_DOTS], and it is never silently
+ * zero when dots were actually dropped — the bug this replaces threw away everything past
+ * three dots without saying so.
+ */
+data class DayDots(val states: List<SlotState>, val overflow: Int) {
+    val isEmpty: Boolean get() = states.isEmpty() && overflow == 0
+}
+
+/**
+ * The calendar's dots for one day: one PER JOURNAL INSTANCE, not per exercise — a whole
+ * workout is one dot however many exercises it holds, and a run of entries logged with no
+ * workout around them is one dot too (see domain/Analytics.kt's `journalInstanceCounts`,
+ * which counts the same units domain/DayCards.kt turns into RUNNING/DONE/SINGLE cards).
+ * [instanceCount] is that count, folded elsewhere because it needs the journal and this
+ * function is only handed [status].
+ *
+ * ── Green covers more than a closed slot ─────────────────────────────────────────
+ * Every instance draws a green [SlotState.DONE] dot, whether or not it happened to close a
+ * plan — training that was never on the plan still gets its green dot ("well I did it
+ * anyway"), which the old per-day wash had no colour for at all.
+ *
+ * ── A DONE slot draws no dot of its own ───────────────────────────────────────────
+ * The instance that closed it already drew one; a second dot for the same session would be
+ * the same training counted twice. [SlotState.MISS] and [SlotState.PLAN] have no instance
+ * standing in for them, so each of those still draws its own.
+ */
+fun calendarDots(status: DayStatus, instanceCount: Int, maxDots: Int = MAX_CALENDAR_DOTS): DayDots {
+    require(instanceCount >= 0) { "instanceCount must not be negative" }
+    val all = ArrayList<SlotState>(instanceCount + status.slots.size)
+    repeat(instanceCount) { all += SlotState.DONE }
+    for (slot in status.slots) {
+        if (slot.state != SlotState.DONE) all += slot.state
+    }
+    val shown = all.take(maxDots)
+    return DayDots(shown, all.size - shown.size)
+}
+
 // --- editing the plan ----------------------------------------------------------------
 //
 // Slots are the one part of the model that is EDITED rather than appended to (the journal
@@ -512,8 +568,14 @@ data class SlotDraft(
     val exercises: List<PlannedExercise> = emptyList(),
 )
 
-/** Why a draft cannot be saved yet. One reason at a time — the editor shows one message. */
-enum class SlotProblem { NAME_EMPTY, TIME_UNREADABLE, RULE_UNKNOWN, DATE_UNREADABLE }
+/**
+ * Why a draft cannot be saved yet. One reason at a time — the editor shows one message.
+ *
+ * [DATE_IN_PAST] is never returned by [problem] itself — see [isBackdated] for why it lives
+ * apart — but it is a member here because [problemText] and the editor's "one message" still
+ * have to be able to say it.
+ */
+enum class SlotProblem { NAME_EMPTY, TIME_UNREADABLE, RULE_UNKNOWN, DATE_UNREADABLE, DATE_IN_PAST }
 
 /** The draft of a slot that already exists: what "edit" opens with. */
 fun Slot.toDraft(): SlotDraft = SlotDraft(
@@ -546,14 +608,42 @@ fun SlotDraft.problem(): SlotProblem? = when {
     else -> null
 }
 
-/** The message under the editor's fields for [problem]. */
+/** The message under the editor's fields for [problem] (or for [isBackdated], for the editor). */
 fun problemText(problem: SlotProblem): String = when (problem) {
     SlotProblem.NAME_EMPTY -> "Give the session a name, for example Gym or Fingerboard."
     SlotProblem.TIME_UNREADABLE -> "Finish the time: type the digits and 1700 becomes 17:00. " +
         "An empty field means some time that day."
     SlotProblem.RULE_UNKNOWN -> "Pick how often it repeats."
     SlotProblem.DATE_UNREADABLE -> "Pick the day it belongs to."
+    SlotProblem.DATE_IN_PAST -> "Plans can only be made for today or later — a day already " +
+        "gone keeps whatever it already shows. Move the date forward, or log what actually " +
+        "happened instead."
 }
+
+/**
+ * Whether [today] is why this draft cannot be saved from the EDITOR — a day already gone,
+ * as opposed to something wrong with a field (see [SlotProblem.DATE_IN_PAST]).
+ *
+ * ── Reported bugs, and why the fix is here ───────────────────────────────────────
+ * "Nailing a plan onto yesterday" turned out to be two bugs with one cause: the anchor date
+ * had no floor. A one-off could be planned straight onto a day already gone, rewriting
+ * whatever `planVsFact` already said about it (a MISSED slot only exists because nothing
+ * closed it — a plan added after the fact IS a way to manufacture one). And a REPEATING slot
+ * anchored on a past day made every past occurrence of it "planned" as well, because
+ * [occursOn] has always started counting from the anchor, not from today — it was never
+ * wrong, the anchor it was handed was. Refusing an anchor before today closes both at once:
+ * the earliest a newly saved slot can occur is today, whatever the rule says.
+ *
+ * ── Kept apart from [problem] ─────────────────────────────────────────────────────
+ * [problem] is also what [toSlot] checks, and [toSlot] has no "today" of its own — it is
+ * reached by more than the screen (data/ActivityRepository.kt's `saveSlot` calls it
+ * directly, on drafts built outside any dialog). "Plans cannot be backdated" is the
+ * EDITOR's own rule about what a person is doing right now, not a property every caller of
+ * [toSlot] has to prove, so only the screen asks this question and only the screen enforces
+ * the answer.
+ */
+fun SlotDraft.isBackdated(today: LocalDate): Boolean =
+    runCatching { LocalDate.parse(anchorDate) }.getOrNull()?.isBefore(today) == true
 
 /** The draft as a storable slot, or null when [problem] says it is not one yet. */
 fun SlotDraft.toSlot(id: Long = 0L): Slot? {

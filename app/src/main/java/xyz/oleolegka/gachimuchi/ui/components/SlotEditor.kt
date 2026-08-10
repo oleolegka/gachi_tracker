@@ -55,9 +55,11 @@ import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.SlotProblem
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
 import xyz.oleolegka.gachimuchi.domain.formatTime
 import xyz.oleolegka.gachimuchi.domain.formatTimeDigits
+import xyz.oleolegka.gachimuchi.domain.isBackdated
 import xyz.oleolegka.gachimuchi.domain.newSlotDraft
 import xyz.oleolegka.gachimuchi.domain.nextOccurrence
 import xyz.oleolegka.gachimuchi.domain.parseMinuteOfDay
@@ -128,6 +130,16 @@ import java.time.LocalDate
  *
  * It opens by itself when a slot already has exercises, because then there is something to
  * see and hiding it would mean a tap to find out whether anything is in there at all.
+ *
+ * ── Plans start from today, never before ────────────────────────────────────────
+ * The date field can be stepped to any day, but Save shuts the moment it lands before
+ * [today] — the same gate the time field already uses for a half-typed value, now guarding
+ * against two reported bugs at once: a plan added straight onto a day already gone (which
+ * can overwrite a MISSED verdict `planVsFact` had already settled on it) and a repeating
+ * slot anchored in the past making every past occurrence of it read as planned (§12-B's
+ * `occursOn` has always started from the anchor — it was the anchor that had no floor). See
+ * [xyz.oleolegka.gachimuchi.domain.isBackdated] for why the check lives here and not in
+ * [xyz.oleolegka.gachimuchi.domain.toSlot] itself.
  */
 @Composable
 fun SlotEditorDialog(
@@ -161,7 +173,10 @@ fun SlotEditorDialog(
     var picking by remember { mutableStateOf(false) }
     // open on what is already there, shut on what is not — see the header
     var exercisesOpen by remember(initial) { mutableStateOf(initial?.exercises?.isNotEmpty() == true) }
-    val problem = draft.problem()
+    // the field checks first (name, time, rule, a readable date), and only once those are
+    // clean does "is this day already gone" get asked — see isBackdated's own KDoc for why
+    // that one is kept apart rather than folded into problem() itself
+    val problem = draft.problem() ?: if (draft.isBackdated(today)) SlotProblem.DATE_IN_PAST else null
     val anchor = remember(draft.anchorDate) {
         runCatching { LocalDate.parse(draft.anchorDate) }.getOrDefault(day)
     }

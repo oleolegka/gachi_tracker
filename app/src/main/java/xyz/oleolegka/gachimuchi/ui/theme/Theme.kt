@@ -12,8 +12,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import xyz.oleolegka.gachimuchi.domain.DayState
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.SlotState
 
 /**
  * The app theme: Material3 plus our own roles from `research_visual.md` §6.
@@ -49,13 +49,15 @@ data class GachiColors(
     /** Fill of a heatmap cell at an intensity level; 0 is "nothing happened". */
     fun forHeatmapLevel(level: Int): Color = heatmap[level.coerceIn(heatmap.indices)]
 
-    /** Colour of a calendar day status (§12-B). Always paired with a label, never colour alone. */
-    fun forDayState(state: DayState): Color = when (state) {
-        DayState.DONE -> good
-        DayState.MISS -> critical
-        DayState.PLAN -> accent
-        DayState.EXTRA -> inkMuted
-        DayState.EMPTY -> grid
+    /**
+     * Colour of a calendar dot (§12-B rework, 2026-08-10). Always paired with the legend's
+     * words, never colour alone — the same rule the day cell used to follow when it carried
+     * this mapping instead of the dots.
+     */
+    fun forSlotState(state: SlotState): Color = when (state) {
+        SlotState.DONE -> good
+        SlotState.MISS -> critical
+        SlotState.PLAN -> accent
     }
 }
 
