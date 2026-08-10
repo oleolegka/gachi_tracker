@@ -1225,4 +1225,134 @@ class WorkoutTest {
 
         assertEquals(listOf(bench.id), buildWorkout(events, start.id)!!.exercises.map { it.exerciseId })
     }
+
+    // --- starting a workout like a past one (§13.9) -----------------------------------
+
+    private val pistol = ExerciseRef(4, "Pistol squat", ExerciseForm.STRENGTH, oneSided = true)
+
+    @Test
+    fun `three workouts sharing a name appear once in the past-names list`() {
+        val c = started("2026-08-03", ts = "2026-08-03T08:00:00", name = "Push day")
+        val b = started("2026-08-05", ts = "2026-08-05T08:00:00", name = "Push day")
+        val a = started(today, ts = "${today}T08:00:00", name = "Push day")
+        // journal order is not name order, and this must not depend on it
+        val events = listOf(b, a, c)
+
+        assertEquals(listOf("Push day"), pastWorkoutNames(events))
+    }
+
+    @Test
+    fun `a nameless workout contributes nothing to the past-names list`() {
+        val named = started(today, ts = "${today}T08:00:00", name = "Push day")
+        val nameless = started("2026-08-05", ts = "2026-08-05T08:00:00")
+
+        assertEquals(listOf("Push day"), pastWorkoutNames(listOf(named, nameless)))
+    }
+
+    @Test
+    fun `the most recently used name sits at the top of the list`() {
+        val pull = started("2026-08-01", ts = "2026-08-01T08:00:00", name = "Pull day")
+        val push = started("2026-08-05", ts = "2026-08-05T08:00:00", name = "Push day")
+
+        assertEquals(listOf("Push day", "Pull day"), pastWorkoutNames(listOf(pull, push)))
+    }
+
+    @Test
+    fun `lastWorkoutNamed resolves to the most recently started workout under that name`() {
+        val old = started("2026-08-01", ts = "2026-08-01T08:00:00", name = "Push day")
+        val mid = started("2026-08-03", ts = "2026-08-03T08:00:00", name = "Push day")
+        val recent = started("2026-08-05", ts = "2026-08-05T08:00:00", name = "Push day")
+        val events = listOf(
+            old, added(old.id, bench.id, restSec = 90, ts = "2026-08-01T08:01:00"),
+            mid, added(mid.id, squat.id, restSec = 120, ts = "2026-08-03T08:01:00"),
+            recent, added(recent.id, hangs.id, restSec = 45, ts = "2026-08-05T08:01:00"),
+        )
+
+        val found = lastWorkoutNamed(events, "Push day")
+        assertEquals(recent.id, found!!.id)
+        assertEquals(listOf(hangs.id), found.exercises.map { it.exerciseId })
+    }
+
+    @Test
+    fun `a name never used before resolves to no template`() {
+        val events = listOf(started(today, name = "Push day"))
+        assertNull(lastWorkoutNamed(events, "Leg day"))
+    }
+
+    /**
+     * "Removed" here means a card taken OFF this workout — its own "added" row deleted, the
+     * same way [xyz.oleolegka.gachimuchi.data.ActivityRepository.deleteEntry] does it for a
+     * workout still being edited — and not the catalog exercise itself being deleted.
+     */
+    @Test
+    fun `an exercise removed from the source workout is not among what is copied`() {
+        val start = started(today, name = "Push day")
+        val benchAdded = added(start.id, bench.id, restSec = 90)
+        val squatAdded = added(start.id, squat.id, restSec = 120, ts = "${today}T08:02:00")
+        val removeBench = row(
+            TYPE_ENTRY_DELETED, payloadJson.encodeToString(EntryDeleted(benchAdded.uid)), "${today}T08:05:00",
+        )
+        val events = listOf(start, benchAdded, squatAdded, removeBench)
+
+        val workout = lastWorkoutNamed(events, "Push day")!!
+        assertEquals(listOf(squat.id), asPlanned(workout).map { it.exerciseId })
+    }
+
+    @Test
+    fun `the rest recorded on the source card travels with it through resolvedCards`() {
+        val start = started(today, name = "Push day")
+        val workout = buildWorkout(listOf(start, added(start.id, bench.id, restSec = 137)), start.id)!!
+
+        val cards = resolvedCards(asPlanned(workout), refOf = { bench }, restFallback = { 0 })
+
+        assertEquals(listOf(137), cards.map { it.restSec })
+    }
+
+    /**
+     * A one-sided exercise's two cards ALREADY exist as two separate entries in a real
+     * workout — see [WorkoutExercise.side]. Reading them back through [asPlanned] and
+     * [resolvedCards] must hand back exactly two cards, not four: [resolvedCards] must not
+     * fan an entry that already names a side, however the catalog's current
+     * [ExerciseRef.oneSided] flag reads.
+     */
+    @Test
+    fun `a one-sided exercise's two cards travel as two, not four`() {
+        val start = started(today, name = "Hangboard")
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, restSec = 60, side = HoldSide.LEFT),
+            added(start.id, hangs.id, restSec = 60, side = HoldSide.RIGHT, ts = "${today}T09:02:00"),
+        )
+        val workout = lastWorkoutNamed(events, "Hangboard")!!
+        val planned = asPlanned(workout)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), planned.map { it.side })
+
+        val oneSided = hangs.copy(oneSided = true)
+        val cards = resolvedCards(planned, refOf = { oneSided }, restFallback = { 0 })
+
+        assertEquals(2, cards.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), cards.map { it.side })
+    }
+
+    /** The plan side of the same funnel: an entry naming no side IS fanned, off the catalog flag. */
+    @Test
+    fun `resolvedCards fans a one-sided plan entry - no side of its own - into two cards`() {
+        val planned = listOf(PlannedExercise(pistol.id, restSec = 60))
+
+        val cards = resolvedCards(planned, refOf = { pistol }, restFallback = { 0 })
+
+        assertEquals(2, cards.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), cards.map { it.side })
+        assertTrue(cards.all { it.exerciseId == pistol.id })
+    }
+
+    @Test
+    fun `resolvedCards falls back when the source names no rest of its own`() {
+        val planned = listOf(PlannedExercise(bench.id, restSec = null))
+
+        val cards = resolvedCards(planned, refOf = { bench }, restFallback = { 99 })
+
+        assertEquals(listOf(99), cards.map { it.restSec })
+    }
+
 }
