@@ -12,7 +12,6 @@ import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.LOCAL_AUTHOR_ID
 import xyz.oleolegka.gachimuchi.data.db.SlotEntity
 import xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity
-import xyz.oleolegka.gachimuchi.domain.AMENDMENT_PROTECTED_KEYS
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.EntryAmended
 import xyz.oleolegka.gachimuchi.domain.EntryDeleted
@@ -223,9 +222,9 @@ class ActivityRepository(private val db: AppDatabase) {
      * after. See [xyz.oleolegka.gachimuchi.ui.MainViewModel.addSet], the only caller, for the
      * order that keeps this true.
      *
-     * Returns the id of the amendment, or null when [exercise] has no live set yet to amend —
-     * its very first set of a session, which is the honest case where there is nothing to
-     * correct because nothing was rested for.
+     * Returns the id of the NEW, whole version of that set — see [amendEntry] — or null when
+     * [exercise] has no live set yet to amend — its very first set of a session, which is the
+     * honest case where there is nothing to correct because nothing was rested for.
      *
      * [side] narrows "the previous set" to the same CARD when the exercise is trained one limb
      * at a time — the left hand's floor measures the pause since the left hand's own last set,
@@ -588,41 +587,35 @@ class ActivityRepository(private val db: AppDatabase) {
 
     /**
      * Corrects the values of an event already written: [fields] is a fragment of its payload
-     * carrying only what changed.
+     * carrying only what changed onto the CURRENT payload, and the result is written as a whole
+     * new row — see domain/Amendments.kt's header for the model this is half of.
      *
      * ── What it refuses, and why refusing is the point ──────────────────────────
-     * Two checks, and both throw rather than writing something the readers would have to make
-     * the best of:
+     * A patch that leaves the payload UNREADABLE. The merged result is parsed here, before
+     * anything is written, exactly as the readers will parse it. Without this a correction of
+     * "6" to "0" reps would be accepted, and the entry would then vanish from every screen — a
+     * deletion the user never asked for, arriving disguised as an edit. Service events
+     * ([TYPE_WORKOUT_STARTED], [TYPE_WORKOUT_EXERCISE_ADDED]) are checked the same way against
+     * their own payload classes.
      *
-     *  - a field in [AMENDMENT_PROTECTED_KEYS] — moving a set to another exercise is a deletion
-     *    and a new entry, never a correction (see [TYPE_ENTRY_AMENDED]);
-     *  - a patch that leaves the payload UNREADABLE. The merged result is parsed here, before
-     *    anything is written, exactly as the readers will parse it. Without this a correction
-     *    of "6" to "0" reps would be accepted, and the entry would then vanish from every
-     *    screen — a deletion the user never asked for, arriving disguised as an edit. Service
-     *    events ([TYPE_WORKOUT_STARTED], [TYPE_WORKOUT_EXERCISE_ADDED]) are checked the same
-     *    way against their own payload classes.
+     * There is deliberately no check here on WHICH keys [fields] names any more — a full
+     * rewrite protects nothing an earlier version of this method needed to refuse, because the
+     * new row it produces is the whole truth about the entry rather than a patch riding on the
+     * old row's identity. The two callers this app ships ([recordActualRest], [renameWorkout])
+     * never touch an exercise or a workout link through here, so this is exercised only by
+     * whichever value they DO name; a caller that handed in one of those keys anyway would
+     * simply move the row the way [amendEntry] taking a whole [ActivityForm] always could.
      *
-     * Returns the id of the amendment, or null when [eventId] names no row (see [deleteEntry]).
+     * Returns the id of the NEW version — the row every future correction and lookup should
+     * name — or null when [eventId] names no row (see [deleteEntry]).
      */
     suspend fun amendEntry(eventId: Long, fields: JsonObject): Long? {
         val target = db.events().byId(eventId) ?: return null
-        val refused = fields.keys.filter { it in AMENDMENT_PROTECTED_KEYS }
-        require(refused.isEmpty()) {
-            "an amendment may not change which exercise or workout an entry belongs to: $refused"
-        }
         require(fields.isNotEmpty()) { "an amendment with no fields corrects nothing" }
         // parsed exactly as a reader would, so a patch that would make the entry unreadable
         // fails here instead of making it disappear later
-        checkAmendedPayload(target.type, target.payload, fields)
-        return db.events().insert(
-            event(
-                type = TYPE_ENTRY_AMENDED,
-                payload = payloadJson.encodeToString(
-                    EntryAmended(targetUid = target.uid, fields = fields)
-                ),
-            )
-        )
+        val merged = mergedAndCheckedPayload(target.type, target.payload, fields)
+        return writeNewVersion(target, target.type, merged)
     }
 
     /**
@@ -641,8 +634,8 @@ class ActivityRepository(private val db: AppDatabase) {
      *
      * A blank name is a REMOVAL of the name and not a name made of spaces: the payload gets a
      * null, the readers fall back to the time of day, and a workout goes back to being
-     * nameless the way it started. Returns the id of the amendment, or null when [workoutId]
-     * names no row here.
+     * nameless the way it started. Returns the id of the workout's new, whole version — see
+     * [amendEntry] — or null when [workoutId] names no row here.
      */
     suspend fun renameWorkout(workoutId: Long, name: String?): Long? {
         val clean = name?.trim()?.takeIf { it.isNotEmpty() }
@@ -653,25 +646,56 @@ class ActivityRepository(private val db: AppDatabase) {
     }
 
     /**
-     * Corrects an activity entry from the whole form the editor is holding.
+     * Corrects an activity entry from the whole form the editor is holding, by writing it as a
+     * whole new row — see domain/Amendments.kt's header for the model this is half of.
      *
      * The convenience the screens will actually use: an edit dialog has a filled-in form, not a
-     * diff. The protected keys are STRIPPED rather than refused here — the form necessarily
-     * carries the exercise it belongs to, and making every caller remove it by hand would be a
-     * rule enforced by remembering it. What that means in one sentence: the values and the date
-     * of [updated] are applied, and the exercise it names is ignored.
+     * diff, and [updated] is written EXACTLY as it stands — including the exercise it names,
+     * unlike the version of this method that existed before the full-version model. That used
+     * to matter: a patch riding on the OLD row's identity that changed which exercise it named
+     * would rewrite what every past reading of that one row had meant. It does not any more —
+     * the old row is untouched forever, and a new row naming a different exercise is simply
+     * what "delete this set and log it again, correctly" has always looked like from the
+     * outside (see [TYPE_ENTRY_AMENDED]'s own KDoc). [EntryEditorDialog] still never offers to
+     * change it, because moving a set is not what an edit dialog is for; this is what stopped
+     * making that a rule the model itself enforces.
      */
     suspend fun amendEntry(eventId: Long, updated: ActivityForm): Long? {
-        val fields = JsonObject(updated.toJsonObject().filterKeys { it !in AMENDMENT_PROTECTED_KEYS })
-        return amendEntry(eventId, fields)
+        val target = db.events().byId(eventId) ?: return null
+        return writeNewVersion(target, updated.type, updated.toPayload())
     }
 
     /**
-     * Throws unless the target's payload survives the patch. Sets are checked through
-     * [formFromEvent], which is the reader; the two service events have no entry there and are
-     * checked against the classes their own readers use.
+     * The write both [amendEntry] overloads end in: a whole new row of [type]/[payload] — in
+     * the same workout as [target], since a correction does not change which workout an entry
+     * belongs to — and a [TYPE_ENTRY_DELETED] naming [target] as superseded by it.
+     *
+     * The new row is inserted FIRST and its uid is already known before either insert happens
+     * ([xyz.oleolegka.gachimuchi.data.db.EventEntity.uid] is generated when the row is built,
+     * not by the table), so the marker names a real row from the moment it exists — there is no
+     * window where the target is dead and nothing yet stands in its place.
      */
-    private fun checkAmendedPayload(type: String, payload: String, fields: JsonObject) {
+    private suspend fun writeNewVersion(target: EventEntity, type: String, payload: String): Long {
+        val newVersion = event(type = type, payload = payload, workoutId = target.workoutId, workoutUid = target.workoutUid)
+        val newId = db.events().insert(newVersion)
+        db.events().insert(
+            event(
+                type = TYPE_ENTRY_DELETED,
+                payload = payloadJson.encodeToString(
+                    EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)
+                ),
+            )
+        )
+        return newId
+    }
+
+    /**
+     * [fields] laid over [payload], parsed exactly as a reader would so a patch that would
+     * leave the entry unreadable fails here rather than later. Sets are checked through
+     * [formFromEvent], which is the reader; the two service events have no entry there and are
+     * checked against the classes their own readers use. Returns the merged payload text.
+     */
+    private fun mergedAndCheckedPayload(type: String, payload: String, fields: JsonObject): String {
         val base = payloadJson.parseToJsonElement(payload) as? JsonObject
             ?: throw IllegalArgumentException("event $type has no readable payload to amend")
         val merged = JsonObject(LinkedHashMap(base).apply { putAll(fields) })
@@ -682,6 +706,7 @@ class ActivityRepository(private val db: AppDatabase) {
             TYPE_WORKOUT_ORDER_SET -> payloadJson.decodeFromString<WorkoutOrder>(text)
             else -> formFromEvent(type, text)
         }
+        return text
     }
 
     // --- exercise catalog (§11) ---
