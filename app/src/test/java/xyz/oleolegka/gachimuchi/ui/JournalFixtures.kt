@@ -153,8 +153,10 @@ class Journal {
          * this is what a test of that rule has to be able to vary.
          */
         writtenOn: String = day,
+        /** Did not carry the reps through — see [xyz.oleolegka.gachimuchi.domain.StrengthSet.incomplete]. */
+        incomplete: Boolean = false,
     ): Long {
-        val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg)
+        val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg, incomplete = incomplete)
         return add(form.type, form.toPayload(), "${writtenOn}T$at:00", workoutId)
     }
 
@@ -162,9 +164,10 @@ class Journal {
      * A hang. [addedKg] null is the plate-free case, which is the one the weight question on
      * the way into a protocol-led set is required NOT to appear for (§13.5).
      *
-     * [side] is what a one-sided exercise records instead of nothing, and [warmup] keeps a
-     * ramp-up out of the volume and the records. Both go through `holdSetOf` rather than into
-     * a hand-made payload, so a fixture cannot say something the app itself could not.
+     * [side] is what a one-sided exercise records instead of nothing, [warmup] keeps a
+     * ramp-up out of the volume and the records, and [incomplete] marks a hang that was not
+     * held for the full protocol. All three go through `holdSetOf` rather than into a
+     * hand-made payload, so a fixture cannot say something the app itself could not.
      */
     fun holdSet(
         exercise: ExerciseRef,
@@ -175,10 +178,11 @@ class Journal {
         workoutId: Long? = null,
         side: HoldSide? = null,
         warmup: Boolean = false,
+        incomplete: Boolean = false,
     ): Long {
         val form = holdSetOf(
             exercise = exercise, opDate = day, addedKg = addedKg, reps = reps,
-            warmup = warmup, side = side,
+            warmup = warmup, incomplete = incomplete, side = side,
         )
         return add(form.type, form.toPayload(), "${day}T$at:00", workoutId)
     }

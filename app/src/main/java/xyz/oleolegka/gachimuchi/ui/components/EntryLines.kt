@@ -150,6 +150,9 @@ private fun EntryLine(
     // the only thing on the row that can say a set does not count towards a record - the
     // reps and the weight next to it look exactly like a working set's (Records.kt)
     val warmup = (entry.form as? LoadedSet)?.warmup == true
+    // the only thing on the row that can say a set did not go the distance - see
+    // [StrengthSet.incomplete]; the weight and reps still read like a set that landed clean
+    val incomplete = (entry.form as? LoadedSet)?.incomplete == true
     var confirming by remember(entry.id) { mutableStateOf(false) }
 
     val menu = buildList {
@@ -178,6 +181,7 @@ private fun EntryLine(
                     modifier = Modifier.weight(1f),
                 )
                 if (warmup) WarmupBadge(Modifier.padding(end = 6.dp))
+                if (incomplete) IncompleteBadge(Modifier.padding(end = 6.dp))
                 clockOf(entry)?.let { Text(it, fontSize = 10.sp, color = colors.inkMuted) }
             }
             /*
@@ -243,6 +247,34 @@ private fun WarmupBadge(modifier: Modifier = Modifier) {
         fontSize = 9.5.sp,
         fontWeight = FontWeight.Medium,
         color = colors.inkMuted,
+    )
+}
+
+/**
+ * "Not completed" - the one thing on a row that says the lifter did not carry the set through,
+ * at a weight and rep count that otherwise read exactly like a set that landed clean.
+ *
+ * Modelled on [WarmupBadge], with one deliberate difference: this one uses [GachiColors.warning]
+ * rather than the muted role. A warm-up not counting is the expected shape of a warm-up; a set
+ * that fell short of what it was attempted at is closer to worth a second look, which is what
+ * the milder-than-critical warning tone is for. Set by hand on the entry card and on the
+ * correction dialog - see ui/screens/LogScreen.kt's IncompleteChip and
+ * ui/components/EntryEditor.kt's IncompleteToggle - never inferred, because the app has no way
+ * to know whether a hold actually went the distance.
+ */
+@Composable
+private fun IncompleteBadge(modifier: Modifier = Modifier) {
+    val colors = LocalGachiColors.current
+    Text(
+        "Not completed",
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(colors.recessed)
+            .border(1.dp, colors.warning, RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+        fontSize = 9.5.sp,
+        fontWeight = FontWeight.Medium,
+        color = colors.warning,
     )
 }
 

@@ -51,11 +51,13 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.ActivityEvent
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
@@ -1372,7 +1374,7 @@ private fun QuickEntrySheet(
                 lastTime?.let { last ->
                     val day = runCatching { LocalDate.parse(last.opDate) }.getOrNull()
                     val dayText = day?.let { fmtShortDay(it) } ?: last.opDate
-                    "Last time ($dayText): " + last.sets.joinToString(", ") { it.form.summaryLine() }
+                    "Last time ($dayText): " + last.sets.joinToString(", ") { it.lastTimeSetLine() }
                 } ?: "No earlier set of this one.",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkSecondary,
@@ -1390,4 +1392,17 @@ private fun QuickEntrySheet(
             Spacer(Modifier.height(16.dp))
         }
     }
+}
+
+/**
+ * One entry of the "Last time" line: the set's own [summaryLine], with "(not completed)" tacked
+ * on for the one this was actually asked for — see [StrengthSet.incomplete]. This is the
+ * decision the owner asked the whole flag to feed: whether to push the weight up next time, or
+ * hold it, or bring it down, and that decision is made right here, against the set that fell
+ * short and not just the newest one — see [StrengthEntry]'s own [LastTimeIncompleteNote] for the
+ * same fact stated once, for the screen that has no "Last time" line of its own to attach it to.
+ */
+private fun ActivityEvent.lastTimeSetLine(): String {
+    val text = form.summaryLine()
+    return if ((form as? LoadedSet)?.incomplete == true) "$text (not completed)" else text
 }
