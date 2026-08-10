@@ -1,10 +1,17 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -38,6 +45,13 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * Nothing about a name can be wrong, so there is nothing to validate and no error state to
  * draw. Whitespace is trimmed and a name of nothing but spaces is the same as no name, decided
  * here so that neither the caller nor the journal has to think about it twice.
+ *
+ * ── [suggestions] is a shortcut into the field, nothing more (§13.9) ────────────
+ * Picking one just sets [draft] to that string — this dialog knows nothing about what a name
+ * matching a past workout DOES (that is [xyz.oleolegka.gachimuchi.ui.MainViewModel.beginDraft]'s
+ * concern, once [onConfirm] hands the plain text back up). Typing the same word by hand, without
+ * ever opening the list, reaches the exact same string and the exact same outcome — the dropdown
+ * saves a retype, it is not a second way of asking for one.
  */
 @Composable
 fun NameDialog(
@@ -51,27 +65,57 @@ fun NameDialog(
     /** The trimmed name, or null when the field was left blank. */
     onConfirm: (String?) -> Unit,
     onDismiss: () -> Unit,
+    /**
+     * Names offered from a dropdown beside the field — empty for every caller but "start a
+     * workout" (see [xyz.oleolegka.gachimuchi.ui.components.DayActions.startWorkout]), which is
+     * the only question a past NAME answers anything beyond itself for. A rename dialog passes
+     * none: renaming is not "start like", and offering the same list there would suggest it is.
+     */
+    suggestions: List<String> = emptyList(),
 ) {
     val colors = LocalGachiColors.current
     var draft by remember(initial) { mutableStateOf(initial) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text(label) },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Text,
-                        capitalization = KeyboardCapitalization.Sentences,
-                        imeAction = ImeAction.Done,
-                    ),
-                )
+                Box {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(label) },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Text,
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done,
+                        ),
+                        trailingIcon = if (suggestions.isEmpty()) {
+                            null
+                        } else {
+                            {
+                                IconButton(onClick = { menuOpen = true }) {
+                                    Icon(Icons.Filled.ArrowDropDown, contentDescription = "Start like a past workout")
+                                }
+                            }
+                        },
+                    )
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        suggestions.forEach { pastName ->
+                            DropdownMenuItem(
+                                text = { Text(pastName) },
+                                onClick = {
+                                    draft = pastName
+                                    menuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
                 Text(
                     note,
                     style = MaterialTheme.typography.labelSmall,

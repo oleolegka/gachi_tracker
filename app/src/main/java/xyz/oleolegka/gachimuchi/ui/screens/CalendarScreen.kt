@@ -232,7 +232,12 @@ fun CalendarScreen(
         item {
             Column(Modifier.fillMaxWidth()) {
                 SectionHeader("Selected day", fmtWeekdayDay(selectedDate))
-                DayCardList(day = selectedDay, date = selectedDate, actions = cardActions)
+                DayCardList(
+                    day = selectedDay,
+                    date = selectedDate,
+                    actions = cardActions,
+                    pastWorkoutNames = state.pastWorkoutNames,
+                )
                 PlanButton(
                     onClick = { editing = SlotEditorTarget(null, selectedDate) },
                     modifier = Modifier.padding(top = 9.dp),

@@ -97,7 +97,7 @@ fun TodayScreen(
         item {
             Column(Modifier.fillMaxWidth()) {
                 SectionHeader("Today", cardNote(day.cards.size))
-                DayCardList(day = day, date = today, actions = actions)
+                DayCardList(day = day, date = today, actions = actions, pastWorkoutNames = state.pastWorkoutNames)
             }
         }
     }
