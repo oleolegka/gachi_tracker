@@ -461,6 +461,11 @@ fun GachiApp(viewModel: MainViewModel) {
                         viewModel.setWorkoutExerciseOrder(workoutBeingLogged, order)
                     },
                     finish = { viewModel.finishWorkout(workoutBeingLogged) },
+                    // one CARD done, not the workout: `finish` above closes the whole session
+                    finishExercise = { exercise, side ->
+                        viewModel.finishWorkoutExercise(workoutBeingLogged, exercise, side)
+                    },
+                    unfinishExercise = viewModel::unfinishWorkoutExercise,
                     startProtocolSet = { exercise, addedKg, side ->
                         viewModel.startProgramForExercise(exercise, addedKg, side)
                         conductorOpen = true

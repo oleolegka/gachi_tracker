@@ -78,6 +78,65 @@ data class WorkoutFinished(
 )
 
 /**
+ * "This CARD is done." The same idea as [TYPE_WORKOUT_FINISHED] one level down — a status
+ * on one exercise of a workout (one SIDE of it, for a one-sided exercise — see
+ * [WorkoutExerciseFinished.side]) rather than on the workout as a whole.
+ *
+ * A SERVICE event, like its whole-workout sibling: it records no training, so it is absent
+ * from [ACTIVITY_TYPES] and every reducer that folds sets ignores it.
+ *
+ * ── A status and not a lock, same as [TYPE_WORKOUT_FINISHED] ────────────────────
+ * A finished card can still take a set — nothing here refuses one — and doing so does not
+ * un-finish it. What the button on the card actually buys the user (§14.2's own words: "so
+ * it interferes less and cannot be tapped by mistake") is that the card stops OFFERING to
+ * take one: the entry form is not raised by a tap, and the rest countdown running under it
+ * is dismissed (see [xyz.oleolegka.gachimuchi.ui.MainViewModel.finishWorkoutExercise]) rather
+ * than left ticking under a card nobody is going to look at again this session.
+ *
+ * ── Undone by deleting it, exactly like everything else ─────────────────────────
+ * There is no separate "un-finish" event. [TYPE_ENTRY_DELETED] already means "this should
+ * not be there", and it already applies to itself, which is what makes undoing an undo work
+ * for a set, a workout, an "exercise added" row — and now this. A dedicated reversing event
+ * would be a second way of saying the same thing the rest of the journal already has one
+ * word for.
+ *
+ * ── Why the card also moves when this is written ─────────────────────────────────
+ * See [buildWorkout] for the grouping this event drives (finished cards drawn together,
+ * above every active one) and [xyz.oleolegka.gachimuchi.data.ActivityRepository.finishWorkoutExercise]
+ * for the accompanying order write that makes the group read in the order the cards were
+ * actually finished in, rather than the order they happened to be added in.
+ */
+const val TYPE_WORKOUT_EXERCISE_FINISHED = "workout_exercise_finished"
+
+/**
+ * Payload of [TYPE_WORKOUT_EXERCISE_FINISHED] — the card being closed, said the same way
+ * [OrderedExercise] names one: by identity where there is one, by number where there is not,
+ * and never neither (see its own `init`). The workout is also named twice, in the payload as
+ * well as in the column, for the reason spelled out on [WorkoutExerciseAdded].
+ */
+@Serializable
+data class WorkoutExerciseFinished(
+    @SerialName("workout_id") val workoutId: Long,
+    @SerialName("exercise_id") val exerciseId: Long? = null,
+    @SerialName("exercise_uid") val exerciseUid: String? = null,
+    @SerialName("workout_uid") val workoutUid: String? = null,
+    /** Which card this is — the same idea as [OrderedExercise.side], matched the same way. */
+    @SerialName("side") val side: String? = null,
+) {
+    init {
+        require(exerciseId != null || exerciseUid != null) {
+            "workout_exercise_finished: an entry must name an exercise by uid or by id"
+        }
+    }
+}
+
+/** The pair read as one reference — the same funnel [OrderedExercise.link] is. */
+fun WorkoutExerciseFinished.link(): ExerciseLink = ExerciseLink(exerciseUid, exerciseId)
+
+/** [side] read as the domain compares it — see [OrderedExercise.sideOf]. */
+val WorkoutExerciseFinished.sideOf: HoldSide? get() = HoldSide.fromCode(side)
+
+/**
  * "This is the order I want the exercises of that workout in."
  *
  * A SERVICE event like [TYPE_WORKOUT_FINISHED]: it records no training, it is absent from
@@ -218,6 +277,25 @@ data class WorkoutExercise(
      * into either one — the same refusal to guess [holdRecord] makes about such a set.
      */
     val side: HoldSide? = null,
+    /**
+     * Whether this CARD has been marked done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. A status
+     * and not a lock, the same rule [Workout.finished] follows one level up: the card can
+     * still be written into, and doing so does not clear this.
+     *
+     * Drives [buildWorkout]'s grouping (every finished card drawn above every active one) and
+     * is what a screen reads to draw the collapsed card and the green check.
+     */
+    val finished: Boolean = false,
+    /**
+     * The id of the live [TYPE_WORKOUT_EXERCISE_FINISHED] event, or null when [finished] is
+     * false.
+     *
+     * What undoing the mark deletes — see
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.unfinishWorkoutExercise] — carried
+     * here rather than looked up again because a screen offering the undo control already
+     * holds this block.
+     */
+    val finishedEventId: Long? = null,
 ) {
     /**
      * The local catalog row number, for the screens that still navigate by one.
@@ -284,6 +362,18 @@ data class Workout(
      * last [TYPE_WORKOUT_ORDER_SET] row states once they have — a machine being occupied is not
      * a reason to do the session in the order it was sketched in. Folded by [buildWorkout], so
      * every screen showing a workout shows the same one.
+     *
+     * ── EVERY FINISHED CARD FIRST, in the order they were finished ──────────────────
+     * The two groups (see [WorkoutExercise.finished]) are never interleaved: every card
+     * [buildWorkout] considers finished comes before every one it does not, whatever the flat
+     * order above says about them individually. WITHIN each group the flat order still
+     * decides — added order, or the last drag — and for the finished group that flat order is
+     * kept in completion order by
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.finishWorkoutExercise] writing a fresh
+     * one alongside every [TYPE_WORKOUT_EXERCISE_FINISHED] it appends. The split itself is
+     * enforced HERE regardless, rather than trusted to that write having landed — a merged
+     * journal, or the second of the two writes never reaching the table, must not be able to
+     * put a finished card back among the active ones.
      */
     val exercises: List<WorkoutExercise>,
     /**
@@ -366,8 +456,9 @@ fun JournalEvent.workoutRef(): WorkoutRef? {
     val added = workoutExerciseAddedOrNull()
     val done = workoutFinishedOrNull()
     val ordered = workoutOrderOrNull()
-    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid ?: ordered?.workoutUid
-    val id = workoutId ?: added?.workoutId ?: done?.workoutId ?: ordered?.workoutId
+    val cardDone = workoutExerciseFinishedOrNull()
+    val uid = workoutUid ?: added?.workoutUid ?: done?.workoutUid ?: ordered?.workoutUid ?: cardDone?.workoutUid
+    val id = workoutId ?: added?.workoutId ?: done?.workoutId ?: ordered?.workoutId ?: cardDone?.workoutId
     return if (uid == null && id == null) null else WorkoutRef(uid, id)
 }
 
@@ -377,6 +468,14 @@ fun JournalEvent.workoutExerciseAddedOrNull(): WorkoutExerciseAdded? =
         null
     } else {
         runCatching { payloadJson.decodeFromString<WorkoutExerciseAdded>(payload) }.getOrNull()
+    }
+
+/** Payload of a "card finished" row, or null for any other row and for an unreadable one. */
+fun JournalEvent.workoutExerciseFinishedOrNull(): WorkoutExerciseFinished? =
+    if (type != TYPE_WORKOUT_EXERCISE_FINISHED) {
+        null
+    } else {
+        runCatching { payloadJson.decodeFromString<WorkoutExerciseFinished>(payload) }.getOrNull()
     }
 
 /** Payload of a "workout finished" row, or null for any other row and for an unreadable one. */
@@ -534,6 +633,8 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val sides = HashMap<String, HoldSide?>()
     val rests = HashMap<String, Int>()
     val addedRows = HashMap<String, MutableList<Long>>()
+    /** The live "card finished" event of each card, keyed the same way — see [WorkoutExercise.finished]. */
+    val cardFinished = HashMap<String, Long>()
     val unkeyed = ArrayList<ActivityEvent>()
     /*
      * The FIRST row that put each exercise in this workout, which is what decides whether an
@@ -578,6 +679,15 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
+        val cardDone = row.workoutExerciseFinishedOrNull()
+        if (cardDone != null) {
+            // liveEvents already dropped every finish event this card's own un-finish
+            // (a deletion) undid, so whatever is left standing here is the one live mark —
+            // see the header comment on [TYPE_WORKOUT_EXERCISE_FINISHED]
+            val key = remember(cardDone.link(), row.id, cardDone.sideOf)
+            cardFinished[key] = row.id
+            continue
+        }
         val activity = live[row.id] ?: continue
         val link = activity.form.exerciseLink()
         if (link == null) {
@@ -591,8 +701,13 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     }
 
     val blocks = sets.map { (key, ofExercise) ->
-        WorkoutExercise(links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty(), sides[key])
+        WorkoutExercise(
+            links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty(), sides[key],
+            finished = cardFinished.containsKey(key),
+            finishedEventId = cardFinished[key],
+        )
     }
+    val ordered = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks
 
     return Workout(
         id = startRow.id,
@@ -603,10 +718,43 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         // a name of nothing but spaces is nobody having named it, decided here rather than
         // in each screen that would otherwise draw a blank heading
         name = started?.name?.takeIf { it.isNotBlank() },
-        exercises = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks,
+        exercises = ordered.groupedByCardStatus(),
         entriesWithoutExercise = unkeyed,
         finished = finished,
     )
+}
+
+/**
+ * [this] with every FINISHED card ([WorkoutExercise.finished]) moved ahead of every ACTIVE
+ * one, each group otherwise keeping the relative order it already has — see the note on
+ * [Workout.exercises] for why the split is enforced here rather than left to the flat order
+ * to have gotten right on its own.
+ *
+ * A stable partition rather than a sort: [List.partition] preserves the order items already
+ * had within each half it hands back, which is the only thing that lets the finished half
+ * read as "the order they were finished in" — see
+ * [xyz.oleolegka.gachimuchi.data.ActivityRepository.finishWorkoutExercise] for where that
+ * order is actually written.
+ */
+private fun List<WorkoutExercise>.groupedByCardStatus(): List<WorkoutExercise> {
+    val (finishedCards, active) = partition { it.finished }
+    /*
+     * The finished half is sorted by the event that finished it, and the active half is left
+     * exactly as it came.
+     *
+     * Partition alone preserves the order each card already had, which is the order it was
+     * ADDED in (or dragged into) — not the order it was finished in. Those are different
+     * orders whenever the cards are not finished in the order they were added, which is most
+     * sessions, and the difference is the whole point of not putting finished cards at the
+     * very top: who finished first has to stay readable.
+     *
+     * By event id rather than by timestamp: ids are handed out in write order by the same
+     * append that writes the row, so they order the finishes without asking the clock, which
+     * a phone's owner can move. A card finished, un-finished and finished again carries the
+     * LAST such event, so it takes its place at the end of the group, which is where the
+     * person who just finished it again expects to find it.
+     */
+    return finishedCards.sortedBy { it.finishedEventId ?: Long.MAX_VALUE } + active
 }
 
 /**
