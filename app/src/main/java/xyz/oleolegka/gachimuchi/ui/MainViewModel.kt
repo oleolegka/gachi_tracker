@@ -33,6 +33,10 @@ import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.ProgramStart
+import xyz.oleolegka.gachimuchi.domain.asPlanned
+import xyz.oleolegka.gachimuchi.domain.lastWorkoutNamed
+import xyz.oleolegka.gachimuchi.domain.pastWorkoutNames
+import xyz.oleolegka.gachimuchi.domain.resolvedCards
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
@@ -54,7 +58,6 @@ import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
-import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restHintSec
@@ -107,6 +110,12 @@ data class UiState(
 
     /** The catalog row as the domain sees it — what the entry card builds its forms from. */
     fun refById(id: Long?): ExerciseRef? = exerciseById(id)?.let(::refOf)
+
+    /**
+     * Names offered by a "start like last time" dropdown (§13.9) — see
+     * [xyz.oleolegka.gachimuchi.domain.pastWorkoutNames] for what decides the list and its order.
+     */
+    val pastWorkoutNames: List<String> get() = pastWorkoutNames(events)
 
     /**
      * How the journal names an exercise the screen is holding a number for.
@@ -365,33 +374,37 @@ class MainViewModel(
     val draft: StateFlow<WorkoutDraft?> = _draft.asStateFlow()
 
     /**
-     * Opens a draft for [day] — pre-filled from [slotId]'s plan the same way
-     * [ActivityRepository.copyPlannedExercises] would fill a real workout, or empty for one
-     * started off-plan. Replaces whatever draft was open, on the same "starting one closes the
-     * last" grounds [ActivityRepository.startWorkout] already applies to real workouts.
+     * Opens a draft for [day] — pre-filled from [slotId]'s plan, or, when [slotId] is null and
+     * [name] is exactly the name of a past workout, from the LATEST workout that carried it
+     * (§13.9, "start like last time": three workouts can share one name, and this is the one
+     * place that decides which — see [lastWorkoutNamed]). Neither source applying leaves the
+     * draft empty, which is the ordinary state for a workout started off-plan under a name
+     * nothing has used before.
+     *
+     * Both sources are resolved through [resolvedCards], the one funnel
+     * [ActivityRepository.copyPlannedExercises] also goes through for a real workout — so a
+     * plan and a past workout are turned into cards the same way regardless of which wrote this
+     * one.
+     *
+     * Replaces whatever draft was open, on the same "starting one closes the last" grounds
+     * [ActivityRepository.startWorkout] already applies to real workouts. NOTHING IS WRITTEN TO
+     * THE JOURNAL by this either way — the workout itself is only opened once [promoteDraft]
+     * fires.
      */
     fun beginDraft(day: LocalDate, slotId: Long? = null, name: String? = null) {
         viewModelScope.launch {
-            val cards = if (slotId == null) {
-                emptyList()
-            } else {
-                val planned = repo.slotExercises(slotId)
-                val events = repo.allEvents()
-                val settings = timer.settings.value
-                planned.flatMap { entry ->
-                    val ref = state.value.refById(entry.exerciseId)
-                    val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC }
-                        ?: restHintSec(settings, events, ref)
-                    if (ref?.oneSided == true) {
-                        listOf(
-                            DraftCard(entry.exerciseId, rest, HoldSide.LEFT),
-                            DraftCard(entry.exerciseId, rest, HoldSide.RIGHT),
-                        )
-                    } else {
-                        listOf(DraftCard(entry.exerciseId, rest))
-                    }
-                }
+            val events = repo.allEvents()
+            val planned = when {
+                slotId != null -> repo.slotExercises(slotId)
+                name != null -> lastWorkoutNamed(events, name)?.let(::asPlanned).orEmpty()
+                else -> emptyList()
             }
+            val settings = timer.settings.value
+            val cards = resolvedCards(
+                planned,
+                refOf = { id -> state.value.refById(id) },
+                restFallback = { ref -> restHintSec(settings, events, ref) },
+            )
             _draft.value = WorkoutDraft(day, slotId, name, cards)
         }
     }

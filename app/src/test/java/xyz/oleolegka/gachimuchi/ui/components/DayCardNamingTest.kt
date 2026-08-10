@@ -3,6 +3,7 @@ package xyz.oleolegka.gachimuchi.ui.components
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -41,7 +42,11 @@ class DayCardNamingTest : ScreenTest() {
     private var startedWorkout: Pair<LocalDate, String?>? = null
     private var renamed: Pair<Long, String?>? = null
 
-    private fun day(events: List<JournalEvent> = emptyList(), date: LocalDate = today) {
+    private fun day(
+        events: List<JournalEvent> = emptyList(),
+        date: LocalDate = today,
+        pastWorkoutNames: List<String> = emptyList(),
+    ) {
         val cards = dayCards(events, emptyList(), date, today, today.atTime(12, 0))
         screen {
             DayCardList(
@@ -57,6 +62,7 @@ class DayCardNamingTest : ScreenTest() {
                     deleteWorkout = {},
                     renameWorkout = { id, name -> renamed = id to name },
                 ),
+                pastWorkoutNames = pastWorkoutNames,
             )
         }
     }
@@ -122,6 +128,36 @@ class DayCardNamingTest : ScreenTest() {
         compose.onNodeWithText("Start").performClick()
 
         assertEquals(today to null, startedWorkout)
+    }
+
+    // --- starting like a past workout (§13.9) -------------------------------------------
+
+    /**
+     * Nothing to pick from is the ordinary state (nobody has named a workout yet) and must not
+     * grow a control that offers an empty list.
+     */
+    @Test
+    fun `no past names means no dropdown on the field`() {
+        day()
+        openAddMenuOnWorkout()
+
+        compose.onNodeWithContentDescription("Start like a past workout").assertDoesNotExist()
+    }
+
+    @Test
+    fun `picking a past name from the dropdown fills the field, and starting under it goes through as typed text`() {
+        day(pastWorkoutNames = listOf("Push day", "Pull day"))
+        openAddMenuOnWorkout()
+
+        compose.onNodeWithContentDescription("Start like a past workout").performClick()
+        settle()
+        compose.onNodeWithText("Push day").performClick()
+        settle()
+        compose.onNodeWithText("Start").performClick()
+
+        // the dialog itself knows nothing about templates - it only ever hands back a string,
+        // exactly as if the same word had been typed by hand
+        assertEquals(today to "Push day", startedWorkout)
     }
 
     @Test

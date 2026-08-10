@@ -64,10 +64,20 @@ const val SLOT_WINDOW_AFTER_MIN = 180
  * There is no position field: the LIST ORDER is the order. The stored table has a position
  * column, but it is written from the index on save, so there is no second copy of the order
  * that can drift from the one the editor shows.
+ *
+ * [side] is null for everything the plan EDITOR ever writes here — a slot's own composition
+ * names no side, for the reason [xyz.oleolegka.gachimuchi.data.ActivityRepository.copyPlannedExercises]
+ * gives: which hand is out of scope for a plan. It exists on this type anyway because a PAST
+ * WORKOUT'S composition is read back as a list of these too (see [asPlanned]), to go through the
+ * one funnel both a plan and a workout being used as a template share ([resolvedCards]) — and a
+ * workout's cards, unlike a plan's, already know their side. A non-null [side] here is trusted
+ * as-is and is never re-fanned by [resolvedCards], which is what stops an already-split
+ * one-sided pair from being split again.
  */
 data class PlannedExercise(
     val exerciseId: Long,
     val restSec: Int? = null,
+    val side: HoldSide? = null,
 )
 
 /**

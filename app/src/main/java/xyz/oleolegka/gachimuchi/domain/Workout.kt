@@ -967,6 +967,131 @@ fun workoutsOn(events: List<JournalEvent>, opDate: String): List<Workout> =
         .sortedWith(compareBy({ (row, _) -> row.happenedAt }, { (row, _) -> row.id }))
         .mapNotNull { (row, _) -> buildWorkout(events, row.id) }
 
+// --- starting a workout like a past one (§13.9) -----------------------------------------
+//
+// A plan is not the only reasonable answer to "what shall this session consist of". A workout
+// nobody bothered to plan ahead of time, but named the same thing three times because it always
+// is the same thing ("Push day"), is asking to be offered the same cards without a slot ever
+// having existed for it. NAMES ARE NOT UNIQUE — the owner's own words are "we do not forbid it"
+// — so the question this answers is always "the LAST workout under this name", never "the one
+// named this".
+
+/**
+ * Every name a past workout has ever been started under, once each — the list a "start like
+ * last time" dropdown offers, not a workout instance (there is no id here to hand back: picking
+ * a NAME is what [lastWorkoutNamed] resolves into one, at the moment a workout is started, so
+ * that training done in between never goes stale in a list held on screen).
+ *
+ * Ordered by the most recent use of each name, so the routine trained most recently — the one
+ * likeliest to be wanted again — sits at the top.
+ *
+ * A nameless workout (§13's ordinary case) contributes nothing: there is nothing to offer a
+ * dropdown for "no name", and starting one off-plan with no name already has its own path that
+ * does not go near this list.
+ */
+fun pastWorkoutNames(events: List<JournalEvent>): List<String> =
+    workoutStarts(events)
+        .mapNotNull { (row, started) -> started?.name?.trim()?.takeIf { it.isNotEmpty() }?.let { it to row.happenedAt } }
+        // last occurrence of each name decides where it sits in the list; the name itself
+        // does not repeat in the result no matter how many workouts carried it
+        .groupBy({ (name, _) -> name }, { (_, ts) -> ts })
+        .mapValues { (_, timestamps) -> timestamps.max() }
+        .entries
+        .sortedByDescending { (_, lastUsed) -> lastUsed }
+        .map { (name, _) -> name }
+
+/**
+ * The workout to copy from when a new one is started under [name] — the LATEST live workout
+ * that carried exactly this name, or null when none did (a name never used before, or typed by
+ * hand rather than picked off [pastWorkoutNames]).
+ *
+ * "Latest" by [happenedAt] then id, the same tie-break [openWorkoutRow] uses — three sessions
+ * can share one name (§13.9's whole premise), and only the most recent of them is what "like
+ * last time" is asking for. Matched by an EXACT, trimmed name: the same string [pastWorkoutNames]
+ * hands back, and the same normalisation [xyz.oleolegka.gachimuchi.data.ActivityRepository.startWorkout]
+ * already applies before a name is written, so a stray space on the way in cannot make a real
+ * match miss.
+ */
+fun lastWorkoutNamed(events: List<JournalEvent>, name: String): Workout? {
+    val target = name.trim().takeIf { it.isNotEmpty() } ?: return null
+    val match = workoutStarts(events)
+        .filter { (_, started) -> started?.name?.trim() == target }
+        .maxWithOrNull(compareBy({ (row, _) -> row.happenedAt }, { (row, _) -> row.id }))
+        ?.first
+        ?: return null
+    return buildWorkout(events, match.id)
+}
+
+/**
+ * [workout]'s composition read back as [PlannedExercise] entries — the shape [resolvedCards]
+ * wants, so "start like last time" goes through the exact same funnel a plan does rather than a
+ * second way of turning a source into cards.
+ *
+ * A COPY of what the workout consisted of, the same rule §13.7 already gives a plan: this reads
+ * [Workout.exercises] as [buildWorkout] folds it NOW, which already leaves out a card that was
+ * later removed — nothing here re-derives "what used to be there" from a stale snapshot, there
+ * is no snapshot to go stale.
+ *
+ * Each entry's [PlannedExercise.side] is filled in from the card's own [WorkoutExercise.side]
+ * rather than left null, which is what tells [resolvedCards] this pair is ALREADY split and
+ * must not be fanned out a second time.
+ *
+ * A card whose exercise this journal never gave a local row number (merged in from elsewhere)
+ * is dropped: there is nothing on this phone [xyz.oleolegka.gachimuchi.data.ActivityRepository.addExerciseToWorkout]
+ * could add it as.
+ */
+fun asPlanned(workout: Workout): List<PlannedExercise> =
+    workout.exercises.mapNotNull { card ->
+        card.exercise.id?.let { id -> PlannedExercise(id, card.restSec, card.side) }
+    }
+
+/**
+ * [planned] resolved into the CARDS a workout actually gets: the rest each one is offered at,
+ * and — for a one-sided exercise a plan named but did not split — the fan into its two.
+ *
+ * THE ONE FUNNEL both sources of a workout's starting composition go through:
+ * [xyz.oleolegka.gachimuchi.data.ActivityRepository.copyPlannedExercises] (a plan, via
+ * [PlannedExercise] with no side) and [asPlanned] (a past workout, via one that already names a
+ * side). Computing this twice — once in the repository's write path, once wherever a draft
+ * needed the same list before anything is written — is exactly the shape of duplication that
+ * has cost this app defects fixed in one of the two places and not the other; this exists so
+ * there is only the one place left to fix.
+ *
+ * [refOf] and [restFallback] are handed in rather than looked up here because resolving them
+ * needs a database or a loaded [xyz.oleolegka.gachimuchi.ui.UiState] — Android things this pure
+ * function is deliberately kept away from, the same rule the rest of `domain/` follows.
+ *
+ * ── Which rest wins ──────────────────────────────────────────────────────────────
+ * [PlannedExercise.restSec] when it names one — a plan's own rest for THAT session, or a past
+ * workout's own rest for THAT card — because a rest sitting next to an exercise on the SOURCE is
+ * a statement about that source. Failing that, [restFallback], which is `restHintSec`'s usual
+ * order (chosen, then measured, then the default) at every call site this has today.
+ *
+ * ── Fanning a one-sided exercise into two cards ─────────────────────────────────
+ * Only when [PlannedExercise.side] is null AND the catalog currently flags the exercise
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided] — a plan says nothing about a side,
+ * so this is the one place that decides it, off the catalog's CURRENT answer (the plan predates
+ * the flag being changed just as easily as it postdates it, and there is no better fact to ask).
+ * An entry that already NAMES a side (see [PlannedExercise.side]) is never fanned: it already IS
+ * one card of an already-split pair, and fanning it again would double it.
+ */
+fun resolvedCards(
+    planned: List<PlannedExercise>,
+    refOf: (Long) -> ExerciseRef?,
+    restFallback: (ExerciseRef?) -> Int,
+): List<DraftCard> = planned.flatMap { entry ->
+    val ref = refOf(entry.exerciseId)
+    val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC } ?: restFallback(ref)
+    when {
+        entry.side != null -> listOf(DraftCard(entry.exerciseId, rest, entry.side))
+        ref?.oneSided == true -> listOf(
+            DraftCard(entry.exerciseId, rest, HoldSide.LEFT),
+            DraftCard(entry.exerciseId, rest, HoldSide.RIGHT),
+        )
+        else -> listOf(DraftCard(entry.exerciseId, rest))
+    }
+}
+
 /**
  * The day a set being logged right now belongs to.
  *
