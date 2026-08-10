@@ -121,6 +121,10 @@ class WorkoutLogScreenTest : ScreenTest() {
     private var finishes = 0
     private var closed = 0
 
+    /** Cards marked done, and the finish events undone, so tests can assert on either. */
+    private val finishedCards = mutableListOf<Pair<String?, HoldSide?>>()
+    private val unfinished = mutableListOf<Long>()
+
     /** A monotonic instant the floors are placed around, so no test races a real clock. */
     private val now = 1_000_000L
 
@@ -154,6 +158,8 @@ class WorkoutLogScreenTest : ScreenTest() {
                     removeExercise = { ids -> removedRows += ids },
                     reorderExercises = { order -> reordered += order },
                     finish = { finishes++ },
+                    finishExercise = { exercise, side -> finishedCards += exercise.uid to side },
+                    unfinishExercise = { eventId -> unfinished += eventId },
                     startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
                     openConductor = { conductorOpened++ },
                     close = { closed++ },

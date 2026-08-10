@@ -46,6 +46,21 @@ class WorkoutTest {
         workoutId,
     )
 
+    /** "That CARD is done" — one exercise, or one hand of it, and never the workout. */
+    private fun cardFinished(
+        workoutId: Long,
+        exerciseId: Long,
+        ts: String = "2026-08-07T09:30:00",
+        side: HoldSide? = null,
+    ) = row(
+        TYPE_WORKOUT_EXERCISE_FINISHED,
+        payloadJson.encodeToString(
+            WorkoutExerciseFinished(workoutId, exerciseId, side = side?.code)
+        ),
+        ts,
+        workoutId,
+    )
+
     /** "That workout is over" — written by the button and by the start of the next one. */
     private fun finished(workoutId: Long, ts: String = "2026-08-07T20:00:00") =
         row(
@@ -912,4 +927,81 @@ class WorkoutTest {
     fun `a workout the journal does not hold names no rows`() {
         assertEquals(emptyList<Long>(), workoutEventIds(listOf(started(today)), 999L))
     }
+
+    // --- finishing one card ------------------------------------------------------------
+
+    @Test
+    fun `a finished card floats above every active one, whatever order they were added in`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 150),
+            added(start.id, squat.id, 180),
+            added(start.id, hangs.id, 120),
+            // the middle one is the one that gets done
+            cardFinished(start.id, squat.id),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(
+            "the finished card comes first, the active ones keep their own order behind it",
+            listOf(squat.id, bench.id, hangs.id),
+            workout.exercises.map { it.exerciseId },
+        )
+        assertTrue(workout.exercises.first().finished)
+        assertTrue(workout.exercises.drop(1).none { it.finished })
+    }
+
+    /**
+     * Not "at the top" but "above the active ones", and the owner asked for the difference:
+     * who finished first has to stay readable, so the finished group keeps the order the
+     * finishing happened in rather than the order the cards were added in.
+     */
+    @Test
+    fun `finished cards are ordered by when they were finished`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, 150),
+            added(start.id, squat.id, 180),
+            // squat is done first, though bench was added first
+            cardFinished(start.id, squat.id, ts = "${today}T09:30:00"),
+            cardFinished(start.id, bench.id, ts = "${today}T09:45:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(
+            listOf(squat.id, bench.id),
+            workout.exercises.map { it.exerciseId },
+        )
+    }
+
+    /**
+     * One hand at a time: the card is the pair of exercise and side, so finishing the right
+     * hand has to leave the left one alone and still active.
+     */
+    @Test
+    fun `finishing one hand leaves the other hand active`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, hangs.id, 120, side = HoldSide.LEFT),
+            added(start.id, hangs.id, 120, side = HoldSide.RIGHT),
+            cardFinished(start.id, hangs.id, side = HoldSide.RIGHT),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(2, workout.exercises.size)
+        val done = workout.exercises.filter { it.finished }
+        assertEquals("only the right hand is done", 1, done.size)
+        assertEquals(HoldSide.RIGHT, done.single().side)
+    }
+
+    /*
+     * NOT covered here: undo. Un-finishing deletes the finish event, and deletions are
+     * addressed by an event's IDENTITY rather than by its row number, which this file's
+     * hand-built rows do not carry. It is covered where the plumbing actually lives - see
+     * ActivityRepository.unfinishWorkoutExercise - and stating the gap beats a test that
+     * quietly checks something easier.
+     */
 }

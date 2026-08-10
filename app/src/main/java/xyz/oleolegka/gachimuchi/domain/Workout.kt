@@ -738,7 +738,23 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
  */
 private fun List<WorkoutExercise>.groupedByCardStatus(): List<WorkoutExercise> {
     val (finishedCards, active) = partition { it.finished }
-    return finishedCards + active
+    /*
+     * The finished half is sorted by the event that finished it, and the active half is left
+     * exactly as it came.
+     *
+     * Partition alone preserves the order each card already had, which is the order it was
+     * ADDED in (or dragged into) — not the order it was finished in. Those are different
+     * orders whenever the cards are not finished in the order they were added, which is most
+     * sessions, and the difference is the whole point of not putting finished cards at the
+     * very top: who finished first has to stay readable.
+     *
+     * By event id rather than by timestamp: ids are handed out in write order by the same
+     * append that writes the row, so they order the finishes without asking the clock, which
+     * a phone's owner can move. A card finished, un-finished and finished again carries the
+     * LAST such event, so it takes its place at the end of the group, which is where the
+     * person who just finished it again expects to find it.
+     */
+    return finishedCards.sortedBy { it.finishedEventId ?: Long.MAX_VALUE } + active
 }
 
 /**

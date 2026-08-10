@@ -17,7 +17,9 @@ import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_ADDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_FINISHED
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_ORDER_SET
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_EXERCISE_FINISHED
 import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded
+import xyz.oleolegka.gachimuchi.domain.WorkoutExerciseFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutFinished
 import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
 import xyz.oleolegka.gachimuchi.domain.WorkoutStarted
@@ -93,6 +95,29 @@ class Journal {
     ) = add(
         TYPE_WORKOUT_EXERCISE_ADDED,
         payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec, side = side?.code)),
+        "${day}T$at:00",
+        workoutId,
+    )
+
+    /**
+     * Marks ONE CARD of a workout done — the exercise, or, for work trained one limb at a
+     * time, the one hand [side] names. The card the other hand carries is untouched.
+     *
+     * The time matters here in a way it does not for most fixture rows: finished cards are
+     * drawn in the order they were finished in, and that order is the order these rows were
+     * written. A test asserting on it must space its [at] values apart on purpose.
+     */
+    fun finishCard(
+        workoutId: Long,
+        day: String,
+        exercise: ExerciseRef,
+        at: String = "09:30",
+        side: HoldSide? = null,
+    ) = add(
+        TYPE_WORKOUT_EXERCISE_FINISHED,
+        payloadJson.encodeToString(
+            WorkoutExerciseFinished(workoutId, exercise.id, side = side?.code)
+        ),
         "${day}T$at:00",
         workoutId,
     )
