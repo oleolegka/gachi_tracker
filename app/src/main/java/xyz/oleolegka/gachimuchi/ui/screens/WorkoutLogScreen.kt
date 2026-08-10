@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -598,6 +599,16 @@ fun WorkoutLogScreen(
                      */
                     onMoveUp = if (index == 0) null else ({ moveExercise(index, index - 1) }),
                     onMoveDown = if (index == shown.lastIndex) null else ({ moveExercise(index, index + 1) }),
+                    finished = exercise.finished,
+                    onFinish = if (exercise.finished || ref == null) {
+                        null
+                    } else {
+                        { actions.finishExercise(ref.link, exercise.side) }
+                    },
+                    // the id of the event that said "done" IS the handle for undoing it
+                    onUnfinish = exercise.finishedEventId?.let { eventId ->
+                        { actions.unfinishExercise(eventId) }
+                    },
                 )
             }
 
@@ -928,9 +939,24 @@ private fun ExerciseCard(
     /** Move this card one place, from the menu. Null at the end it is already at. */
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
+    /**
+     * This card is done for today: drawn thin, ticked, and refusing to log anything.
+     *
+     * REFUSING is the point rather than a side effect. The ask was "so it gets in the way less
+     * and cannot be tapped again by accident", and a card that still takes a tap while looking
+     * finished would be the worst of the two states. So [onTap], the rest button and the
+     * countdown all go, and what is left is the name, the tick and the way back.
+     */
+    finished: Boolean = false,
+    /** Put a finished card back among the active ones. Null on a card that is not finished. */
+    onUnfinish: (() -> Unit)? = null,
+    /** Mark this card done. Null on a card that already is. */
+    onFinish: (() -> Unit)? = null,
 ) {
     val colors = LocalGachiColors.current
     val menu = buildList {
+        onFinish?.let { add(ItemAction("Mark as done") { it() }) }
+        onUnfinish?.let { add(ItemAction("Back to active") { it() }) }
         onMoveUp?.let { add(ItemAction("Move up") { it() }) }
         onMoveDown?.let { add(ItemAction("Move down") { it() }) }
         // destructive last, and away from the top of the menu where the finger already is
@@ -939,7 +965,8 @@ private fun ExerciseCard(
     ItemActions(
         title = name,
         actions = menu,
-        onTap = onTap,
+        // a finished card takes no taps at all: see [finished]
+        onTap = onTap.takeIf { !finished },
         drag = drag,
         modifier = Modifier
             .fillMaxWidth()
@@ -960,14 +987,22 @@ private fun ExerciseCard(
             Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (finished) {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Done",
+                    tint = colors.good,
+                    modifier = Modifier.padding(end = 8.dp).size(18.dp),
+                )
+            }
             Text(
                 name,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (finished) colors.inkMuted else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
-            if (onRest != null) {
+            if (onRest != null && !finished) {
                 TextButton(onClick = onRest, modifier = Modifier.heightIn(min = 44.dp)) {
                     Text(
                         restSec?.takeIf { it >= MIN_STEP_SEC }
@@ -978,6 +1013,13 @@ private fun ExerciseCard(
                 }
             }
         }
+        /*
+         * EVERYTHING BELOW THE NAME IS WHAT "COLLAPSED" MEANS. A finished card keeps its name,
+         * its tick and its menu, and drops the divider, the set list, the running line and the
+         * countdown - which is the whole of the height it used to take.
+         */
+        if (finished) return@GachiCard
+
         HorizontalDivider(color = colors.grid)
 
         if (running) {

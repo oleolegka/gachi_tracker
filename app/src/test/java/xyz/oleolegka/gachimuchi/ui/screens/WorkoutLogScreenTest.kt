@@ -347,6 +347,28 @@ class WorkoutLogScreenTest : ScreenTest() {
     }
 
     /**
+     * The whole of what "finished" is for, in one assertion: the card stops being a way to log
+     * anything. The owner asked for it so a card "gets in the way less and cannot be tapped
+     * again by accident", and a card that still opened the entry form while looking done would
+     * be worse than one that never collapsed at all.
+     */
+    @Test
+    fun `a finished card is collapsed and cannot be logged into`() {
+        val journal = Journal()
+        val workout = supersetWorkout(journal)
+        journal.finishCard(workout, iso, bench, at = "18:30")
+
+        show(journal, workout)
+
+        // the set line is what "collapsed" takes away, and bench had two sets on it
+        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").assertDoesNotExist()
+        // the other card is untouched: one card finishing is not the workout finishing
+        compose.onNodeWithText("no sets yet").assertExists()
+        // and the name is still there to be found, and to be put back from
+        compose.onNodeWithText("Bench press").assertExists()
+    }
+
+    /**
      * The bug the whole model exists to prevent: a set filed under today while the workout it
      * belongs to happened a fortnight ago. The journal is append-only, so there is no
      * correcting it afterwards.
