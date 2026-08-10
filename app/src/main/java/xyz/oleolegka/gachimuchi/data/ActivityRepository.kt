@@ -61,6 +61,7 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutOrder
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.readActivities
+import xyz.oleolegka.gachimuchi.domain.resolvedCards
 import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
@@ -468,6 +469,11 @@ class ActivityRepository(private val db: AppDatabase) {
      * two cards for an exercise the catalog flags [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.oneSided].
      * So this fans out the same way, at the same rest, rather than leaving a plan-started
      * workout with the one card the picker path would never produce.
+     *
+     * The resolving itself — rest, fan-out — is [resolvedCards], the one funnel this shares
+     * with starting a workout "like last time" from a past one instead of a plan (§13.9); only
+     * the DB lookups a pure function cannot make (the catalog ref per exercise) and the actual
+     * writing stay here.
      */
     suspend fun copyPlannedExercises(
         workoutId: Long,
@@ -477,18 +483,13 @@ class ActivityRepository(private val db: AppDatabase) {
         val planned = slotExercises(slotId)
         if (planned.isEmpty()) return emptyList()
         val events = allEvents()
-        return planned.flatMap { entry ->
-            val ref = exercise(entry.exerciseId)?.let { toRef(it) }
-            val rest = entry.restSec?.takeIf { it >= MIN_STEP_SEC } ?: restHintSec(settings, events, ref)
-            if (ref?.oneSided == true) {
-                listOf(
-                    addExerciseToWorkout(workoutId, entry.exerciseId, rest, HoldSide.LEFT),
-                    addExerciseToWorkout(workoutId, entry.exerciseId, rest, HoldSide.RIGHT),
-                )
-            } else {
-                listOf(addExerciseToWorkout(workoutId, entry.exerciseId, rest))
-            }
-        }
+        val refs = planned.associate { it.exerciseId to exercise(it.exerciseId)?.let { e -> toRef(e) } }
+        val cards = resolvedCards(
+            planned,
+            refOf = { id -> refs[id] },
+            restFallback = { ref -> restHintSec(settings, events, ref) },
+        )
+        return cards.map { card -> addExerciseToWorkout(workoutId, card.exerciseId, card.restSec, card.side) }
     }
 
     /**
