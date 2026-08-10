@@ -18,6 +18,7 @@ import xyz.oleolegka.gachimuchi.data.DeviceStore
 import xyz.oleolegka.gachimuchi.data.JournalBackup
 import xyz.oleolegka.gachimuchi.data.ProgramFiles
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
+import xyz.oleolegka.gachimuchi.domain.JOURNAL_CSV_MIME
 import xyz.oleolegka.gachimuchi.domain.JOURNAL_FILE_MIME
 import xyz.oleolegka.gachimuchi.domain.JournalImport
 import xyz.oleolegka.gachimuchi.domain.readJournalFile
@@ -46,6 +47,14 @@ class JournalTransfer internal constructor(
     val export: () -> Unit,
     /** Asks, then opens the system file picker and merges what comes back. */
     val restore: () -> Unit,
+    /**
+     * Straight to the file picker with a CSV of the journal — see domain/JournalCsv.kt for
+     * what is in it. No question first, unlike [restore]: this reads the phone and changes
+     * nothing on it, the same as [export] and for the same reason it needs no dialog of its
+     * own either. There is nothing to restore FROM it, so there is no third button here for
+     * that.
+     */
+    val exportCsv: () -> Unit,
 )
 
 /**
@@ -94,6 +103,29 @@ fun rememberJournalTransfer(): JournalTransfer {
                         listOf(
                             "The whole journal is in that file. Keep it somewhere that is not " +
                                 "this phone - a copy that is lost with the phone is not a copy."
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    val saveCsv = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(JOURNAL_CSV_MIME)
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val text = backup.exportCsv()
+                val failure = ProgramFiles.write(context, uri, text)
+                if (failure != null) {
+                    say("Not saved", listOf(failure))
+                } else {
+                    say(
+                        "Saved",
+                        listOf(
+                            "One row per set, as the app shows it now - deleted entries and " +
+                                "corrections are already settled. This file is for reading, " +
+                                "not for restoring; keep the JSON backup for that."
                         ),
                     )
                 }
@@ -198,10 +230,11 @@ fun rememberJournalTransfer(): JournalTransfer {
         )
     }
 
-    return remember(save, open) {
+    return remember(save, open, saveCsv) {
         JournalTransfer(
             export = { choosing = true },
             restore = { confirming = true },
+            exportCsv = { saveCsv.launch("gachimuchi-journal-$today.csv") },
         )
     }
 }
