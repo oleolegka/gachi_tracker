@@ -147,6 +147,15 @@ interface ExerciseDao {
     suspend fun setBodyweightShare(id: Long, share: Double?, spaceId: Long = LOCAL_SPACE_ID)
 
     /**
+     * Attaches, replaces or removes the picture of the machine this exercise is trained on
+     * (null) — see [ExerciseEntity.pictureId]. The file itself is not this DAO's concern; the
+     * caller ([xyz.oleolegka.gachimuchi.data.ActivityRepository.setPicture]) is what also moves
+     * the file in [xyz.oleolegka.gachimuchi.data.ExercisePictureStore].
+     */
+    @Query("UPDATE exercises SET picture_id = :pictureId WHERE space_id = :spaceId AND id = :id")
+    suspend fun setPictureId(id: Long, pictureId: String?, spaceId: Long = LOCAL_SPACE_ID)
+
+    /**
      * Whether any exercise's protocol IS this program — the live fact
      * [xyz.oleolegka.gachimuchi.data.ProgramRepository.save] freezes a program's content on.
      *

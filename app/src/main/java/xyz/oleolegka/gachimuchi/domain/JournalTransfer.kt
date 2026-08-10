@@ -148,6 +148,16 @@ data class PortableEvent(
  * bare numbers during import would duplicate the migration's own find-or-create logic in a
  * second place, maintained for a path nobody exercises routinely. See
  * `PortableExerciseCoverageTest` for the test pinning this behaviour.
+ *
+ * ── `picture_id` is on [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity] and deliberately NOT
+ * here (schema version 23) ────────────────────────────────────────────────────────
+ * It names a file in [xyz.oleolegka.gachimuchi.data.ExercisePictureStore], and a file is not
+ * something a JSON document can carry — the same reason the celebration gallery's pictures are
+ * not in this backup either (see `ui/screens/SettingsScreen.kt`'s own note on that button). A
+ * restore therefore lands an exercise with no picture even when the phone it came from had one;
+ * that is a real loss and not a bug, the same trade the gallery already makes. See
+ * `PortableExerciseCoverageTest`, which names this column in its own exclusion list so the
+ * omission is a decision it enforces rather than one a future column could recreate by accident.
  */
 @Serializable
 data class PortableExercise(

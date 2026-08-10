@@ -41,6 +41,7 @@ fun ExerciseEntity.toCatalogRow(): CatalogRow = CatalogRow(
     oneSided = oneSided,
     bodyweightShare = bodyweightShare,
     hidden = hidden,
+    pictureId = pictureId,
 )
 
 /**

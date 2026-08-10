@@ -1,12 +1,17 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
+import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
@@ -19,6 +24,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -26,6 +33,8 @@ import kotlin.math.round
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
 import xyz.oleolegka.gachimuchi.data.ExerciseEdit
+import xyz.oleolegka.gachimuchi.data.ExercisePictureOutcome
+import xyz.oleolegka.gachimuchi.data.ExercisePictureStore
 import xyz.oleolegka.gachimuchi.data.ProgramRepository
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
@@ -33,6 +42,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.parseNumber
+import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 
 /**
  * Correcting a catalog exercise, taking one out of the pickers, removing one for good, or
@@ -95,6 +105,7 @@ fun rememberExerciseEditor(): ExerciseEditor {
     // catalog row itself no longer carries them
     val programRepo = remember(context) { ProgramRepository(AppDatabase.get(context)) }
     val programs by programRepo.programs.collectAsState(initial = emptyList())
+    val pictureStore = remember(context) { ExercisePictureStore.get(context) }
 
     var editing by remember { mutableStateOf<ExerciseEntity?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -104,6 +115,7 @@ fun rememberExerciseEditor(): ExerciseEditor {
         EditExerciseDialog(
             exercise = exercise,
             program = program,
+            pictureStore = pictureStore,
             onDismiss = { editing = null },
             onSave = { name, oneSided, share ->
                 editing = null
@@ -133,6 +145,35 @@ fun rememberExerciseEditor(): ExerciseEditor {
                                 "exercise is those together. Two rows claiming to be the same " +
                                 "exercise would split its history in half, so this one was " +
                                 "left as it was."
+                    }
+                }
+            },
+            /*
+             * Immediate, unlike the name/side/share above: there is no "Save" to gate this on,
+             * the same way adding a picture to the celebration gallery is immediate rather than
+             * part of a form. `editing` is updated to the new value on success so the dialog's
+             * own preview reflects the change right away, without waiting for it to be reopened.
+             */
+            onPickPicture = { uri ->
+                scope.launch {
+                    when (val outcome = pictureStore.add(uri)) {
+                        is ExercisePictureOutcome.Added -> {
+                            val previous = exercise.pictureId
+                            repo.setPicture(exercise.id, outcome.pictureId)
+                            previous?.let { pictureStore.remove(it) }
+                            editing = exercise.copy(pictureId = outcome.pictureId)
+                        }
+                        ExercisePictureOutcome.TooBig -> message = "Too large (over 16 MB). Not attached."
+                        ExercisePictureOutcome.Unreadable -> message = "That picture could not be read."
+                    }
+                }
+            },
+            onRemovePicture = {
+                exercise.pictureId?.let { previous ->
+                    scope.launch {
+                        repo.setPicture(exercise.id, null)
+                        pictureStore.remove(previous)
+                        editing = exercise.copy(pictureId = null)
                     }
                 }
             },
@@ -198,8 +239,15 @@ private fun EditExerciseDialog(
     exercise: ExerciseEntity,
     /** The resolved protocol program [exercise.protocolProgramId] names, or null for none. */
     program: WorkoutProgram?,
+    pictureStore: ExercisePictureStore,
     onDismiss: () -> Unit,
     onSave: (String, Boolean, Double?) -> Unit,
+    /** Picked from the camera or the gallery — see [rememberExerciseEditor] for what this does
+     *  with it (an immediate write, not part of [onSave]). */
+    onPickPicture: (Uri) -> Unit,
+    /** Takes the picture away. A no-op if the exercise has none — the button offering it is
+     *  simply absent in that case, see below. */
+    onRemovePicture: () -> Unit,
 ) {
     val hold = exercise.form == ExerciseForm.HOLD.code
     val lifted = hold || exercise.form == ExerciseForm.STRENGTH.code
@@ -213,6 +261,9 @@ private fun EditExerciseDialog(
     // floor, since a number that vanishes on save is how this column stayed empty for months
     val percentBad = percent.isNotBlank() && share == null
 
+    val takePhoto = rememberCameraCapture(onPickPicture)
+    val pickFromGallery = rememberSinglePicturePicker(onPickPicture)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit exercise") },
@@ -225,6 +276,33 @@ private fun EditExerciseDialog(
                     singleLine = true,
                     label = { Text("Name") },
                 )
+                /*
+                 * The owner's own reason for the whole feature: "on different machines the same
+                 * weight feels very different" — a picture is here so that a glance at it, next
+                 * time, says which rack or which pulldown this row means. Above the form fields
+                 * because it is the one thing on this dialog that is recognised rather than
+                 * read.
+                 */
+                Text("Picture", style = MaterialTheme.typography.labelSmall)
+                val picture = rememberPicture(
+                    exercise.pictureId?.let { pictureStore.fileOf(it) },
+                    EDIT_DIALOG_PICTURE_MAX_PX,
+                )
+                picture?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = null, // decoration: the Name field above already names this exercise
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(96.dp).clip(RoundedCornerShape(12.dp)),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = takePhoto) { Text("Camera") }
+                    OutlinedButton(onClick = pickFromGallery) { Text("Gallery") }
+                    if (exercise.pictureId != null) {
+                        TextButton(onClick = onRemovePicture) { Text("Remove") }
+                    }
+                }
                 if (hold) {
                     Text(
                         "Protocol (work : rest, seconds)",
@@ -378,3 +456,7 @@ internal fun Double?.asPercentField(): String =
 /** The form of a row, degrading to a check-in rather than throwing — see `ExerciseEntity.toRef`. */
 private fun ExerciseForm.Companion.fromCodeOrTick(code: Int): ExerciseForm =
     runCatching { fromCode(code) }.getOrDefault(ExerciseForm.TICK)
+
+/** How large a decode this dialog's own preview asks for — bigger than the picker's row
+ *  thumbnail (it is the only thing on screen here), still nowhere near the full file. */
+private const val EDIT_DIALOG_PICTURE_MAX_PX = 240

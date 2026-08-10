@@ -381,11 +381,43 @@ data class ExerciseEntity(
      * no other way to touch those columns: Room's whole-entity `@Update` is gone from the
      * DAO precisely because it would let a caller rewrite the name and leave the key behind.
      *
-     * Last in the parameter list because a Kotlin default may only refer to parameters
-     * declared before it.
+     * Declared after every column its own default expression reads ([name], [form]) — a Kotlin
+     * default may only refer to parameters declared before it. [pictureId] sits after THIS one
+     * instead of nearer the columns it is conceptually closest to; see that field's own KDoc
+     * for why its position, unlike this one's, is load-bearing rather than a convenience.
      */
     @androidx.room.ColumnInfo(name = "identity_key")
     val identityKey: String = exerciseIdentityKey(name, form, null),
+    /**
+     * Which picture in [xyz.oleolegka.gachimuchi.data.ExercisePictureStore] shows the machine
+     * or the setup this exercise is trained on (schema version 23), or null for none.
+     *
+     * AFTER [identityKey] rather than beside the other presentation columns above it, and that
+     * placement is load-bearing, not cosmetic: `MIGRATION_22_23` is a plain
+     * `ALTER TABLE ... ADD COLUMN`, which SQLite always appends at the end of the table, and
+     * `data/SchemaParityTest` compares a migrated database against a fresh install COLUMN BY
+     * COLUMN, order included. A fresh install's column order follows this constructor's
+     * parameter order, so the two only agree if this is declared last here too — the same
+     * reason [EventEntity.occurredTs] sits at the end of that entity instead of near the
+     * columns it is conceptually closest to.
+     *
+     * ── The same arrangement [xyz.oleolegka.gachimuchi.data.GalleryStore] already uses ─────
+     * The picture itself is a file in the app's own folder, named by this id; this column is
+     * the only record that the file belongs to THIS exercise. There is no foreign key and no
+     * second index of the file, on the same grounds [protocolProgramId] gives a few lines
+     * above: the file is reference data the row points at, not something Room needs to enforce
+     * the existence of, and a dangling id would simply mean "no picture" the same way a
+     * dangling `protocol_program_id` means "no protocol".
+     *
+     * ── Why the whole picture is on disk, and only a downsampled DECODE is small ────
+     * The point of the picture is telling one gym machine apart from another with the same
+     * name at a glance, which wants real detail; nothing here writes a separate thumbnail
+     * file. Every place this is drawn small (the exercise picker) asks
+     * [xyz.oleolegka.gachimuchi.ui.celebrate.decodeScaled] for a downsampled bitmap instead of
+     * decoding the file whole — the same function the celebration overlay already uses to keep
+     * a full-size phone photo from blowing the decode heap.
+     */
+    @androidx.room.ColumnInfo(name = "picture_id") val pictureId: String? = null,
 )
 
 /**

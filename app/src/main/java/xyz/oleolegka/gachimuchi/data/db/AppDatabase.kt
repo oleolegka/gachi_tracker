@@ -44,7 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.planLegacyAmendmentMigration
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1616,6 +1616,22 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 22 -> 23: an exercise can point at a picture — see
+         * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.pictureId].
+         *
+         * ONE NULLABLE COLUMN, NO DEFAULT, NO BACKFILL — a plain `ALTER TABLE` is enough. There
+         * is nothing to migrate the way `bodyweight_share` or `occurred_ts` had a value to
+         * recover from the rows already there: no exercise had a picture before this column
+         * existed, so every existing row reading back "none" is the true answer, not a
+         * placeholder standing in for one that could be computed.
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `picture_id` TEXT")
+            }
+        }
+
+        /**
          * The last row id `INSERT`ed on this connection — SQLite's own `last_insert_rowid()`,
          * used inside [MIGRATION_18_19] to learn the autoincrement id of a row this migration
          * just wrote with raw `execSQL`, which returns nothing.
@@ -2011,7 +2027,7 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
             MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
-            MIGRATION_21_22,
+            MIGRATION_21_22, MIGRATION_22_23,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

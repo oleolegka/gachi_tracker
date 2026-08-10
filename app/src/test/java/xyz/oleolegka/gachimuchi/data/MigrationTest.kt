@@ -1088,18 +1088,52 @@ abstract class SchemaV18Database : RoomDatabase() {
 }
 
 /**
- * Version 20: every table except the journal already matches today's
+ * The catalog exactly as it stood from version 19 through version 22: every column the live
+ * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity] has today EXCEPT `picture_id`, which only
+ * arrived at version 23 ([xyz.oleolegka.gachimuchi.data.db.AppDatabase.Companion.MIGRATION_22_23]).
+ *
+ * Split out from the live entity for the same reason [EventEntityV16] is — see its own KDoc:
+ * reusing the live class stopped being safe for [SchemaV20Database] the moment it grew a
+ * column version 20 never had.
+ */
+@Entity(
+    tableName = "exercises",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "identity_key"], unique = true),
+    ],
+)
+data class ExerciseEntityV20(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    val name: String,
+    val form: Int,
+    @ColumnInfo(name = "created_at") val createdAt: String,
+    @ColumnInfo(name = "protocol_program_id") val protocolProgramId: Long? = null,
+    @ColumnInfo(name = "default_rest_sec") val defaultRestSec: Int? = null,
+    @ColumnInfo(name = "led_by_protocol") val ledByProtocol: Boolean? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "one_sided") val oneSided: Boolean = false,
+    @ColumnInfo(name = "bodyweight_share") val bodyweightShare: Double? = null,
+    val hidden: Boolean = false,
+    @ColumnInfo(name = "identity_key")
+    val identityKey: String = exerciseIdentityKey(name, form, null),
+)
+
+/**
+ * Version 20: every table except the journal and the catalog already matches today's
  * [xyz.oleolegka.gachimuchi.data.db.AppDatabase] entities one for one, so those are reused
- * directly. The journal needs [EventEntityV16] instead — nothing changes about it at the
- * 20 -> 21 step (only content, see MIGRATION_20_21's own KDoc), but it DOES change one version
- * later, at 21 -> 22 ([MIGRATION_21_22] adds `occurred_ts`), and the live entity already has
- * that column — reusing it here would seed a "version 20" database that already has a column
- * version 20 never had.
+ * directly. The journal needs [EventEntityV16] and the catalog needs [ExerciseEntityV20] —
+ * neither changes at the 20 -> 21 step (only content, see MIGRATION_20_21's own KDoc), but each
+ * changes one version later: the journal at 21 -> 22 ([MIGRATION_21_22] adds `occurred_ts`),
+ * the catalog at 22 -> 23 ([MIGRATION_22_23] adds `picture_id`) — and the live entities already
+ * have those columns, which would seed a "version 20" database with columns version 20 never had.
  */
 @Database(
     entities = [
         EventEntityV16::class,
-        xyz.oleolegka.gachimuchi.data.db.ExerciseEntity::class,
+        ExerciseEntityV20::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
         xyz.oleolegka.gachimuchi.data.db.ProgramEntity::class,

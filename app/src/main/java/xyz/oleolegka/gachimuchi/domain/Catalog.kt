@@ -174,6 +174,21 @@ data class CatalogRow(
     val oneSided: Boolean = false,
     val bodyweightShare: Double? = null,
     val hidden: Boolean = false,
+    /**
+     * Which picture shows the machine this exercise is trained on — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.pictureId].
+     *
+     * DELIBERATELY absent from [toRef] and [toCatalogExercise]: neither the entry card nor the
+     * dashboard draws it. It IS carried into the exercise picker, which reads
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity] directly rather than through this type
+     * (see `ui/screens/ExercisePicker.kt`) — this field exists on [CatalogRow] anyway, for the
+     * same reason every other column does: a view that starts wanting it later finds it already
+     * wired in here instead of being the second place that has to remember the column exists.
+     * It is also deliberately absent from `PortableExercise` (domain/JournalTransfer.kt) — a
+     * local file reference is not portable data, the same decision already made for the
+     * celebration gallery, which the journal backup does not carry either.
+     */
+    val pictureId: String? = null,
 )
 
 /**
