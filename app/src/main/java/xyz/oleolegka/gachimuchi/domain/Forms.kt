@@ -52,36 +52,32 @@ const val TYPE_BODYWEIGHT = "bodyweight"
 const val TYPE_SET_CANCEL = "set_cancel"
 
 /**
- * "That event's values were wrong; here are the right ones." A correction, not a rewrite: the
- * original row stays exactly as it was written and this one says what to read instead.
+ * SUPERSEDED, the same way [TYPE_SET_CANCEL] is: nothing writes this any more.
  *
- * ── Why a patch of fields rather than a whole new payload ───────────────────────
- * The payload carries only the keys being changed, and [journalView] lays them over the
- * original. Two reasons, and the second is the one that decided it:
+ * ── What this used to be, kept for the readers still standing on it ─────────────
+ * "That event's values were wrong; here are the right ones" — a PATCH: the payload carried
+ * only the keys being changed, and [journalView] laid them over the original in place, the
+ * original row's own identity never moving. [ActivityRepository.amendEntry] now writes a
+ * correction the other way round instead: a whole new row, of the row's own type, carrying
+ * every field — and marks the old row superseded with [TYPE_ENTRY_DELETED]
+ * ([EntryDeleted.successorUid]). See `domain/Amendments.kt`'s header for why: a single line of
+ * the journal is now meant to be a complete, self-sufficient statement of what was true when
+ * it was written, and a patch that only makes sense laid over another row was the opposite of
+ * that.
  *
- *  - it is the only shape that works for EVERY event type. There are six activity forms plus
- *    two service events, and a typed amendment per type would be eight classes that have to be
- *    kept in step with the eight they mirror — the second definition of a form, waiting to
- *    disagree with the first;
- *  - a correction is a small fact ("it was 8 reps, not 6"), and writing the whole payload again
- *    would make every amendment claim authority over fields nobody touched. When two of them
- *    land on one entry, a patch merges and a full payload overwrites.
- *
- * ── What an amendment may NOT change ────────────────────────────────────────────
- * WHICH exercise the entry is about — see [AMENDMENT_PROTECTED_KEYS]. Moving a set to another
- * exercise is a deletion and a new entry, because an exercise's history is the set of entries
- * that always were its own; a set that can walk from one exercise to another turns every record
- * and every chart into a statement about wherever the sets happen to be pointing today. The
- * protected keys are dropped on the way in AND ignored on the way out, so a journal merged in
- * from elsewhere cannot do it either.
- *
- * Values and the date are what it is for. [opDate] specifically: "I logged this on Tuesday but
- * did it on Monday" is the correction people actually need, and it is only a value.
+ * This type string, [EntryAmended] and [AMENDMENT_PROTECTED_KEYS] all stay, because a journal
+ * written before this change is full of rows shaped exactly like this, and
+ * [xyz.oleolegka.gachimuchi.domain.journalView] still has to read them correctly. The one-time
+ * migration (schema version 21) converts every LIVE one it finds into the new shape; this
+ * reader is the fallback for whatever that migration cannot see — a merged journal, a restored
+ * backup written by an older build — so that a bug in the migration means a row read the old
+ * way rather than a row silently misread.
  */
 const val TYPE_ENTRY_AMENDED = "entry_amended"
 
 /**
- * "That event should not be there at all."
+ * "That event should not be there at all" — or, carrying [EntryDeleted.successorUid], "that
+ * event is superseded; this other one is what to read instead."
  *
  * The successor to [TYPE_SET_CANCEL] and the same act, with two differences that are the whole
  * point of adding it. It names ANY event — a workout started by accident, an exercise added to
@@ -89,9 +85,9 @@ const val TYPE_ENTRY_AMENDED = "entry_amended"
  * target by IDENTITY ONLY (see [EntryDeleted]).
  *
  * It applies to itself, which is what makes undoing an undo work: a deletion that has itself
- * been deleted stops hiding anything, and whatever it was hiding comes back. Nothing is ever
- * removed from the journal — see [journalView] for the fold that turns a pile of these into an
- * answer.
+ * been deleted stops hiding anything, and whatever it was hiding comes back — INCLUDING a
+ * successor named by it, which stops being current at the same moment and is itself dead again,
+ * see [journalView] for the fold that turns a pile of these into an answer.
  */
 const val TYPE_ENTRY_DELETED = "entry_deleted"
 
@@ -128,13 +124,23 @@ const val TYPE_ENTRY_DELETED = "entry_deleted"
 const val TYPE_EXERCISE_DELETED = "exercise_deleted"
 
 /**
- * Payload keys an amendment is not allowed to carry — everything that says WHICH thing an
- * event is about, as opposed to what happened.
+ * Payload keys a legacy PATCH amendment was not allowed to carry — everything that said WHICH
+ * thing an event was about, as opposed to what happened.
  *
- * The exercise keys are the reason this list exists ([TYPE_ENTRY_AMENDED] explains it). The
- * name keys ride along because they are the exercise said in words, and the `*_key` pair
+ * ── Legacy-only, kept for [journalView]'s reading of old [TYPE_ENTRY_AMENDED] rows ─────
+ * A full-version correction has nothing of this to protect: [ActivityRepository.amendEntry]
+ * writes every field of the new row together, so there is no "the rest of the payload" left
+ * unguarded for a stray key to corrupt, and moving a set to another exercise this way is
+ * exactly the "delete it and log it again, correctly" act [TYPE_ENTRY_AMENDED]'s own KDoc
+ * always asked for — no longer a special case to refuse. This list is therefore no longer
+ * consulted anywhere a NEW row is written; it lives on only inside [EntryAmended.allowedFields]
+ * and [journalView]'s merge of an old-style patch, so that a journal still carrying one from
+ * before this change reads exactly as it always did.
+ *
+ * The exercise keys are the reason this list existed ([TYPE_ENTRY_AMENDED] explains it). The
+ * name keys rode along because they are the exercise said in words, and the `*_key` pair
  * because they are computed from the names and would go stale the moment a name moved without
- * them. The workout keys are the same argument one level up: which workout a block belongs to
+ * them. The workout keys were the same argument one level up: which workout a block belongs to
  * is not a value of the block.
  */
 val AMENDMENT_PROTECTED_KEYS: Set<String> = setOf(
@@ -622,11 +628,14 @@ data class SetCancel(
 /**
  * Payload of [TYPE_ENTRY_AMENDED]: which event, and the fields that were wrong.
  *
+ * LEGACY — nothing writes this any more; see [TYPE_ENTRY_AMENDED]'s own KDoc. Kept so
+ * [journalView] keeps reading a journal written before the full-version model correctly.
+ *
  * ── The target is an identity and nothing else ──────────────────────────────────
  * Unlike [SetCancel] there is no row-number twin here, and that is deliberate rather than an
  * omission. The number exists on the older event because it predates uids and had to keep
- * working for rows written before them; nothing writes an amendment except this app, today,
- * against a row that certainly has an identity. Offering a number as well would only offer a
+ * working for rows written before them; nothing wrote an amendment except this app, and only
+ * against a row that certainly had an identity. Offering a number as well would only offer a
  * way to amend the wrong entry on a phone that numbers its journal differently.
  *
  * [fields] is a fragment of the target's own payload — the same keys, the same spellings —
@@ -648,15 +657,34 @@ data class EntryAmended(
 }
 
 /**
- * Payload of [TYPE_ENTRY_DELETED]: which event should stop being read.
+ * Payload of [TYPE_ENTRY_DELETED]: which event should stop being read, and — since the
+ * full-version model replaced [TYPE_ENTRY_AMENDED] as the way to correct an entry — which one
+ * replaces it, if any.
  *
  * By identity only, for the reason spelled out on [EntryAmended]. A deletion naming an event
  * that is not in this journal is inert rather than an error — the row it meant may simply not
  * have arrived yet, and a journal is a stream that can be read halfway.
+ *
+ * ── [successorUid], and why one event now covers both acts ──────────────────────
+ * A plain removal ("this should not be there at all") and a correction ("the old values were
+ * wrong; a new, whole row has the right ones") are the SAME fact from a reader's point of
+ * view — the old row is no longer the one to read — and differ only in whether something
+ * takes its place. So they share this one event: null means removed with nothing to replace
+ * it, non-null names the row that does. [xyz.oleolegka.gachimuchi.domain.journalView] treats
+ * both as "not alive" identically; the successor link exists purely so that a row can be read
+ * as CURRENT or SUPERSEDED on its own, without consulting its neighbours — see
+ * `domain/Amendments.kt`'s header for the model this event is half of.
+ *
+ * A correction no longer patches the original row in place ([EntryAmended] is kept only to
+ * read journals written before this change): [ActivityRepository.amendEntry] writes the new,
+ * whole row FIRST and then this event naming both, so the pair lands together and a reader
+ * that only sees the first half of a partial write finds a row that simply has not been
+ * corrected yet, rather than one that vanished.
  */
 @Serializable
 data class EntryDeleted(
     @SerialName("target_uid") val targetUid: String,
+    @SerialName("successor_uid") val successorUid: String? = null,
 ) {
     init {
         require(targetUid.isNotBlank()) { "entry_deleted: target_uid must name an event" }

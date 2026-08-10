@@ -636,8 +636,17 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      * the sets went through readActivities and were dropped, the "exercise added" rows did not
      * go through anything at all. liveEvents is idempotent, so handing it on costs nothing.
      */
-    val journal = liveEvents(events)
-    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }
+    val view = journalView(events)
+    val journal = events.mapNotNull { view.revised(it) }
+    /*
+     * [workoutId] may name a `workout_started` row that has since been CORRECTED — its own date
+     * or name amended, which writes a new row under a new id (see domain/Amendments.kt's header
+     * on rows other rows point at by uid). A caller holding the id from before that correction
+     * — every screen that opened this workout and kept its id around — must still find it, so
+     * the id is resolved forward the same way a child's `workout_id` column already is.
+     */
+    val resolvedId = view.canonicalId(workoutId)
+    val (startRow, started) = workoutStarts(journal).firstOrNull { (row, _) -> row.id == resolvedId }
         ?: return null
 
     // parsed once: readActivities is what drops deleted sets and unreadable payloads, and
@@ -720,10 +729,21 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         }
     }
 
+    /*
+     * Sorted by [happenedAt] rather than left in the journal order the loop above walked: the
+     * loop's order decides STRUCTURE (which card, which side, which rest, whether an order
+     * event could have meant this card — all of that stays exactly as it was, unaffected), but
+     * the sets DRAWN ON a card are a tape of the exercise as it was actually done, the same
+     * argument [buildSession] makes for the day's feed. A set corrected after later ones were
+     * logged must not visibly jump past them.
+     */
     val blocks = sets.map { (key, ofExercise) ->
         WorkoutExercise(
-            links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty(), sides[key],
-            finishedEventId = cardFinished[key],
+            links.getValue(key), rests[key],
+            // happenedAt first, then id (journal order) for a same-second tie, the same rule
+            // buildSession settles its own tie by
+            ofExercise.sortedWith(compareBy({ it.happenedAt }, { it.id })),
+            addedRows[key].orEmpty(), sides[key], finishedEventId = cardFinished[key],
         )
     }
     val ordered = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks
@@ -851,18 +871,28 @@ private fun reordered(
  * export.
  */
 fun workoutEventIds(events: List<JournalEvent>, workoutId: Long): List<Long> {
-    val journal = liveEvents(events)
-    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == workoutId }?.first
+    val view = journalView(events)
+    val journal = events.mapNotNull { view.revised(it) }
+    // see buildWorkout for why the incoming id has to be resolved forward first
+    val resolvedId = view.canonicalId(workoutId)
+    val startRow = workoutStarts(journal).firstOrNull { (row, _) -> row.id == resolvedId }?.first
         ?: return emptyList()
     return listOf(startRow.id) +
         journal.filter { it.id != startRow.id && it.workoutRef()?.matches(startRow) == true }
             .map { it.id }
 }
 
-/** Every workout of one training day, in the order they were started. */
+/**
+ * Every workout of one training day, in the order they were started — by [happenedAt], not by
+ * the position of the (possibly corrected) start row in the journal. A workout renamed or
+ * moved onto this day after a LATER workout was already logged must still show up before it,
+ * the same argument [buildSession] makes for a corrected set within a day's feed.
+ */
 fun workoutsOn(events: List<JournalEvent>, opDate: String): List<Workout> =
     workoutStarts(events)
         .filter { (row, started) -> (started?.opDate ?: row.writeDay()) == opDate }
+        // happenedAt first, then id (journal order) for a same-second tie
+        .sortedWith(compareBy({ (row, _) -> row.happenedAt }, { (row, _) -> row.id }))
         .mapNotNull { (row, _) -> buildWorkout(events, row.id) }
 
 /**

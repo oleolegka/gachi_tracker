@@ -57,7 +57,22 @@ data class JournalEvent(
     val tsUtc: String? = null,
     /** Minutes east of UTC when it was written — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.tzOffsetMin]. */
     val tzOffsetMin: Int? = null,
+    /**
+     * When this row's OWN training happened, as opposed to [ts] — see
+     * [xyz.oleolegka.gachimuchi.data.db.EventEntity.occurredTs] for the full story (schema
+     * version 22). Null for a row written before that column existed and never backfilled —
+     * [happenedAt] is the one place every reader should ask this question through instead.
+     */
+    val occurredTs: String? = null,
 )
+
+/**
+ * [row]'s [JournalEvent.occurredTs] if it has one, or its write time [JournalEvent.ts]
+ * otherwise — the funnel every reader that orders entries by WHEN THEY HAPPENED (rather than
+ * by journal position) goes through, so that "no occurred_ts on this old row" and "an
+ * original entry, occurred_ts equal to ts" read the same way.
+ */
+val JournalEvent.happenedAt: String get() = occurredTs ?: ts
 
 /**
  * What a row says about the workout it belongs to — an identity where the row has one, and a
@@ -152,6 +167,14 @@ data class ActivityEvent(
      * the corrected values, which is the whole point of applying them in one place.
      */
     val amendedAt: String? = null,
+    /**
+     * WHEN THE TRAINING HAPPENED — see [JournalEvent.happenedAt]. This is what a screen sorts
+     * entries by; [ts] is only the write time, which stops meaning "recorded in training order"
+     * the moment a row can be corrected (domain/Amendments.kt's header, "A correction is now a
+     * whole new row"): the corrected row's own [ts] is when the CORRECTION was made, not when
+     * the set was done.
+     */
+    val happenedAt: String = ts,
 )
 
 /**
@@ -251,7 +274,7 @@ fun readActivities(
             ActivityEvent(
                 id = row.id, ts = row.ts, authorId = row.authorId, type = row.type,
                 opDate = form.opDate, key = form.key, form = form, workout = row.workoutRef(),
-                uid = row.uid, amendedAt = state.amendedAt,
+                uid = row.uid, amendedAt = state.amendedAt, happenedAt = row.happenedAt,
             )
         )
     }

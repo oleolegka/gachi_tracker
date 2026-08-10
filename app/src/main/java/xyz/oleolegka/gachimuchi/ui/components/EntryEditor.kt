@@ -40,19 +40,19 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * Correcting or removing ONE entry that is already in the journal.
  *
  * ── Why an entry can be corrected at all, in an append-only journal ─────────────
- * It is not edited in place. Confirming here appends an amendment naming this event, and
- * `domain/Amendments.kt` folds the pair into what every reader sees; deleting appends a
- * deletion. The original row stays exactly as it was written, which is the whole point of the
- * journal — this dialog changes what the journal SAYS, never what it recorded.
+ * It is not edited in place. Confirming here writes a whole NEW row and marks this one
+ * superseded — see `domain/Amendments.kt` for the model — and deleting appends a deletion. The
+ * original row stays exactly as it was written, which is the whole point of the journal — this
+ * dialog changes what the journal SAYS is current, never what it recorded.
  *
  * ── What is deliberately not on this dialog: the exercise ──────────────────────
- * There is no way to move this entry to another exercise, and that is a rule rather than an
- * omission. An exercise's history is the set of entries that always were its own; a set that
- * can walk from one exercise to another turns every record and every chart into a statement
- * about wherever the sets happen to be pointing today. The repository REFUSES such a patch by
- * throwing (see [xyz.oleolegka.gachimuchi.domain.AMENDMENT_PROTECTED_KEYS]), so the honest
- * thing is to never offer it — a control that throws when pressed is worse than no control.
- * Moving a set is a deletion and a new entry, and the line at the bottom says so.
+ * There is no way to move this entry to another exercise, and that is a UI rule rather than a
+ * refusal enforced underneath it: an exercise's history is the set of entries that always were
+ * its own, and a set that can walk from one exercise to another turns every record and every
+ * chart into a statement about wherever the sets happen to be pointing today. The candidate
+ * this dialog builds always keeps [entry]'s own exercise (see `amended` below), so the honest
+ * thing is to never offer a control for it — moving a set is a deletion and a new entry, and
+ * the line at the bottom says so.
  *
  * ── The button is enabled only when what it would write is legal ───────────────
  * The candidate form is BUILT on every keystroke, inside `runCatching`, and the confirm button

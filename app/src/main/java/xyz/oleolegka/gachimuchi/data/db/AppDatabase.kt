@@ -13,8 +13,10 @@ import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
 import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.fmtNum
 import xyz.oleolegka.gachimuchi.domain.freeExerciseName
+import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.newUid
 import xyz.oleolegka.gachimuchi.domain.normPhrase
+import xyz.oleolegka.gachimuchi.domain.planLegacyAmendmentMigration
 
 /**
  * The local database (SQLite via Room). The schema repeats the server one (`bot/db.py`):
@@ -42,7 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.normPhrase
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 20,
+    version = 22,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1538,6 +1540,82 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 20 -> 21: a correction becomes a whole new row instead of a patch — see
+         * domain/Amendments.kt's header for the model, and
+         * [xyz.oleolegka.gachimuchi.domain.planLegacyAmendmentMigration] for the fold this
+         * migration is a thin SQL shell around.
+         *
+         * No column changes at all: every existing row is untouched, and this only APPENDS —
+         * for every row this phone's journal currently reads as corrected, one new row carrying
+         * the folded-together result and one [xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED]
+         * superseding the original. A row nobody ever corrected, or one that is currently
+         * deleted, gets nothing written for it — see that function's own KDoc for why.
+         *
+         * The whole table is read into memory first because the plan needs to see it as one
+         * journal (a folded verdict about one row can depend on any other row); at the personal
+         * scale this schema is built for, that is nothing.
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val events = ArrayList<JournalEvent>()
+                db.query(
+                    "SELECT `id`, `ts`, `space_id`, `author_id`, `type`, `payload`, `workout_id`, " +
+                        "`uid`, `workout_uid`, `op_date`, `ts_utc`, `tz_offset_min` FROM `events`"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        events += JournalEvent(
+                            id = c.getLong(0), ts = c.getString(1),
+                            spaceId = c.getLong(2), authorId = c.getLong(3),
+                            type = c.getString(4), payload = c.getString(5),
+                            workoutId = if (c.isNull(6)) null else c.getLong(6),
+                            uid = c.getString(7),
+                            workoutUid = if (c.isNull(8)) null else c.getString(8),
+                            opDate = if (c.isNull(9)) null else c.getString(9),
+                            tsUtc = if (c.isNull(10)) null else c.getString(10),
+                            tzOffsetMin = if (c.isNull(11)) null else c.getInt(11),
+                        )
+                    }
+                }
+
+                for (row in planLegacyAmendmentMigration(events)) {
+                    db.execSQL(
+                        "INSERT INTO `events` (`ts`, `space_id`, `author_id`, `type`, `payload`, " +
+                            "`workout_id`, `uid`, `workout_uid`, `op_date`, `ts_utc`, `tz_offset_min`) " +
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        arrayOf<Any?>(
+                            row.ts, LOCAL_SPACE_ID, LOCAL_AUTHOR_ID, row.type, row.payload,
+                            row.workoutId, row.uid, row.workoutUid, opDateOfPayload(row.payload),
+                            row.tsUtc, row.tzOffsetMin,
+                        )
+                    )
+                }
+            }
+        }
+
+        /**
+         * Version 21 -> 22: a row also states WHEN THE TRAINING HAPPENED, separately from [ts]
+         * (when the ROW was written) — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.occurredTs]
+         * for the fact this exists to state and [xyz.oleolegka.gachimuchi.domain.happenedAt] for
+         * the one place every reader asks it through.
+         *
+         * ── Why every existing row is backfilled with its own `ts` ───────────────────
+         * That is exactly what this app already treated a row's position as meaning, for every
+         * row on the phone at this point — including a row [MIGRATION_20_21] just wrote a moment
+         * ago for a lineage that carried a legacy patch amendment, whose `ts` is already the
+         * FOLDED-in correction time rather than the original set's, because that migration
+         * inherited the amendment's own `ts` for the exact same reason (see its own KDoc). This
+         * step changes nothing about how anything reads relative to right after that one; it
+         * only gives a name to the fact every screen already relied on, so that a FUTURE
+         * correction can start keeping it instead of losing it to the correction's own moment.
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `occurred_ts` TEXT")
+                db.execSQL("UPDATE `events` SET `occurred_ts` = `ts`")
+            }
+        }
+
+        /**
          * The last row id `INSERT`ed on this connection — SQLite's own `last_insert_rowid()`,
          * used inside [MIGRATION_18_19] to learn the autoincrement id of a row this migration
          * just wrote with raw `execSQL`, which returns nothing.
@@ -1932,7 +2010,8 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
+            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
+            MIGRATION_21_22,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
