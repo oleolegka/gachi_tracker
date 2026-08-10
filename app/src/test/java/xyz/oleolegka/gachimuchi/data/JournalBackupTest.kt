@@ -40,6 +40,7 @@ import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.tickOf
 import java.time.LocalDate
+import java.util.TimeZone
 
 /**
  * The backup against a real database: out of Room into a file, back into Room, and again.
@@ -659,5 +660,134 @@ class JournalBackupTest {
         assertEquals(stored.ts, restored.ts)
         assertEquals(stored.occurredTs, restored.occurredTs)
         assertNotEquals(restored.ts, restored.occurredTs)
+    }
+
+    // --- ACCEPTANCE: the timezone offset (schema version 2 of the file) --------------------
+
+    /**
+     * THE acceptance test this feature exists for: a journal exported in one zone and restored
+     * in another keeps every event's OWN offset rather than taking on the restoring device's —
+     * which is exactly the loss domain/JournalTransfer.kt's v1 -> v2 KDoc describes. Two fixed
+     * offsets rather than named zones with daylight saving, so nothing about which day a set
+     * falls on can confound the one fact under test here.
+     */
+    @Test
+    fun `an event's timezone offset survives being exported in one zone and restored in another`() = runTest {
+        val originalZone = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Bangkok")) // UTC+7, no daylight saving
+            val id = db.events().insert(
+                EventEntity(
+                    ts = "2026-08-07T20:00:00",
+                    type = TYPE_DURATION,
+                    payload = """{"op_date":"2026-08-07","activity":"Stretching","duration_sec":600,"activity_key":"stretching"}""",
+                    tsUtc = "2026-08-07T13:00:00Z",
+                    tzOffsetMin = 420,
+                )
+            )
+            val stored = db.events().byId(id)!!
+            val text = backup.export()
+
+            TimeZone.setDefault(TimeZone.getTimeZone("Europe/Moscow")) // UTC+3, no daylight saving
+            val other = freshDb()
+            try {
+                JournalBackup(other, null).restore(accepted(text))
+                val restored = other.events().all().single { it.uid == stored.uid }
+
+                assertEquals("the local wall clock the event was written with", stored.ts, restored.ts)
+                assertEquals(
+                    "the restoring device's own zone (+180) must not overwrite the file's own offset (+420)",
+                    420, restored.tzOffsetMin,
+                )
+                assertEquals("2026-08-07T13:00:00Z", restored.tsUtc)
+            } finally {
+                other.close()
+            }
+        } finally {
+            TimeZone.setDefault(originalZone)
+        }
+    }
+
+    /**
+     * The other half of the acceptance criteria: a v1 file — written before `tz_offset_min`
+     * existed, so the column is absent from every row rather than blank on one — is not refused
+     * for it (see JournalTransferTest.kt's own pin of that at the format level) and restores by
+     * FALLING BACK to exactly what a restore did before this feature: the device doing the
+     * restore. Honest, and not a crash — the property this test actually defends.
+     */
+    @Test
+    fun `a v1 file with no tz_offset_min column restores by falling back to the device's own zone`() = runTest {
+        val id = db.events().insert(
+            EventEntity(
+                ts = "2026-08-07T20:00:00",
+                type = TYPE_DURATION,
+                payload = """{"op_date":"2026-08-07","activity":"Stretching","duration_sec":600,"activity_key":"stretching"}""",
+            )
+        )
+        val stored = db.events().byId(id)!!
+        val text = backup.export()
+
+        val lines = text.split("\n")
+        val header = splitCsvRow(lines.first()).toMutableList()
+        val colIndex = header.indexOf("tz_offset_min")
+        assertTrue("the column has to exist in a normal export to strip it", colIndex >= 0)
+        header.removeAt(colIndex)
+        header[0] = "gachimuchi_journal_v1" // what a v1 file's own version marker says
+        val v1 = (
+            listOf(joinCsvRow(header)) +
+                lines.drop(1).map { line ->
+                    if (line.isBlank()) line else joinCsvRow(splitCsvRow(line).toMutableList().apply { removeAt(colIndex) })
+                }
+            ).joinToString("\n")
+
+        db.clearAllTables()
+        val report = backup.restore(accepted(v1))
+        assertTrue("a v1 file must not be refused", report.eventsAdded > 0)
+
+        val restored = db.events().all().single { it.uid == stored.uid }
+        assertEquals(stored.ts, restored.ts)
+        assertNotNull(
+            "the fallback still resolves an offset, off the device's own zone, exactly as every restore " +
+                "did before this feature",
+            restored.tzOffsetMin,
+        )
+    }
+}
+
+/**
+ * A real (quote-aware) CSV row splitter/joiner, the same rule `csvField` in domain/
+ * JournalTransfer.kt uses — duplicated here rather than exposed, because only a TEST needs to
+ * mangle an exported file this literally, to simulate a generation of it that predates a column.
+ */
+private fun splitCsvRow(line: String): List<String> {
+    val cells = ArrayList<String>()
+    val cur = StringBuilder()
+    var inQuotes = false
+    var i = 0
+    while (i < line.length) {
+        val c = line[i]
+        when {
+            c == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                cur.append('"')
+                i++
+            }
+            c == '"' -> inQuotes = !inQuotes
+            c == ',' && !inQuotes -> {
+                cells.add(cur.toString())
+                cur.clear()
+            }
+            else -> cur.append(c)
+        }
+        i++
+    }
+    cells.add(cur.toString())
+    return cells
+}
+
+private fun joinCsvRow(cells: List<String>): String = cells.joinToString(",") { cell ->
+    if (cell.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+        "\"" + cell.replace("\"", "\"\"") + "\""
+    } else {
+        cell
     }
 }

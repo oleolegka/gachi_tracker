@@ -60,8 +60,17 @@ const val JOURNAL_FILE_MIME = "text/csv"
  * The shape of the file, folded into the name of its first column rather than kept as a
  * separate field — see [CSV_HEADER]'s KDoc for why a version marker earns its own column
  * name instead of a line above the header a spreadsheet would show as extra data.
+ *
+ * ── v1 -> v2: `tz_offset_min` joins the structural columns ──────────────────────
+ * A v1 file said an event's `written_at` as a local wall clock alone, so a journal exported
+ * abroad and restored at home silently took on home's offset — see [PortableEvent.tzOffsetMin]
+ * for the fix. The bump does not by itself make an older file unreadable: [STRUCTURAL_COLUMNS]
+ * lists `tz_offset_min` as one a restore reads, but [REQUIRED_STRUCTURAL_COLUMNS] leaves it out
+ * of what a file MUST carry, so a v1 file missing the column still loads, falling back to
+ * exactly the v1 behaviour rather than being refused for having been written before the column
+ * existed.
  */
-private const val CSV_VERSION = 1
+private const val CSV_VERSION = 2
 private const val KIND_COLUMN_PREFIX = "gachimuchi_journal_v"
 private val KIND_COLUMN = "$KIND_COLUMN_PREFIX$CSV_VERSION"
 
@@ -98,10 +107,27 @@ private const val KIND_EVENT = "event"
  * [PortableSlot], [PortableProgramRow] or [PortableSettings]'s own fields) and that is the one
  * actually used; the `uid` cell in those rows is written for a human filtering the file, not
  * read back by anything.
+ *
+ * `tz_offset_min` is read for an `event` row alongside `written_at`: minutes east of UTC at the
+ * moment the row was written, the same fact [xyz.oleolegka.gachimuchi.data.db.EventEntity.tzOffsetMin]
+ * holds — see [PortableEvent.tzOffsetMin] for why it has to be a column here rather than
+ * something a restore reconstructs from the device. There is no separate UTC column: the
+ * instant is `written_at` read against this offset, and storing it a second time would be
+ * storing arithmetic rather than a fact. It is the one column here that a v1 file (see
+ * [CSV_VERSION]) does not have, which is why it is absent from [REQUIRED_STRUCTURAL_COLUMNS].
  */
 private val STRUCTURAL_COLUMNS = listOf(
-    KIND_COLUMN, "uid", "event_type", "written_at", "happened_at", "workout_uid", "author_id", "payload",
+    KIND_COLUMN, "uid", "event_type", "written_at", "tz_offset_min", "happened_at", "workout_uid",
+    "author_id", "payload",
 )
+
+/**
+ * The columns a file MUST carry to be accepted at all — every [STRUCTURAL_COLUMNS] entry except
+ * `tz_offset_min`, which a v1 file was written before this column existed and therefore never
+ * has. Checked in [readJournalFile]; [STRUCTURAL_COLUMNS] itself stays the list a restore is
+ * ALLOWED to read; this is the narrower list of what it can insist on finding.
+ */
+private val REQUIRED_STRUCTURAL_COLUMNS = STRUCTURAL_COLUMNS - "tz_offset_min"
 
 /**
  * FOR THE EYE. NEVER READ BY A RESTORE — see [STRUCTURAL_COLUMNS].
@@ -182,6 +208,15 @@ data class JournalFile(
  * [xyz.oleolegka.gachimuchi.data.db.EventEntity.occurredTs]. Null carries through as null
  * rather than being defaulted to [ts], because a row that never had the column is a different
  * fact from a row whose training happened exactly when it was written.
+ *
+ * [tzOffsetMin] is minutes east of UTC at the moment [ts] was written (Moscow is 180), the same
+ * fact [xyz.oleolegka.gachimuchi.data.db.EventEntity.tzOffsetMin] holds. THIS IS THE FIX the
+ * format was missing: a v1 file said only the local wall clock, so a journal exported abroad
+ * and restored at home silently took on home's offset — see
+ * [xyz.oleolegka.gachimuchi.data.JournalBackup.restore], which now resolves [ts] against THIS
+ * offset rather than the restoring device's zone. Null for a row a v1 file carried (the column
+ * did not exist yet) or whose own `ts` never resolved to an offset in the first place; either
+ * way a restore falls back to the device's zone, which is the only information left to use.
  */
 data class PortableEvent(
     val uid: String,
@@ -191,6 +226,7 @@ data class PortableEvent(
     val workoutUid: String? = null,
     val authorId: Long = 1,
     val occurredTs: String? = null,
+    val tzOffsetMin: Int? = null,
 )
 
 /**
@@ -493,6 +529,7 @@ private fun eventRow(
         "uid" to ev.uid,
         "event_type" to ev.type,
         "written_at" to ev.ts,
+        "tz_offset_min" to (ev.tzOffsetMin?.toString() ?: ""),
         "happened_at" to (ev.occurredTs ?: ""),
         "workout_uid" to (ev.workoutUid ?: ""),
         "author_id" to ev.authorId.toString(),
@@ -661,7 +698,7 @@ fun readJournalFile(text: String): JournalImport {
     val header = table.first()
     versionProblem(header.getOrNull(0).orEmpty())?.let { return JournalImport.Rejected(it) }
 
-    val missing = STRUCTURAL_COLUMNS.drop(1).filterNot { it in header }
+    val missing = REQUIRED_STRUCTURAL_COLUMNS.drop(1).filterNot { it in header }
     if (missing.isNotEmpty()) {
         return JournalImport.Rejected(
             "This file could not be read as a journal backup. It is missing the column(s) " +
@@ -686,6 +723,11 @@ fun readJournalFile(text: String): JournalImport {
             )
         }
         fun cell(name: String): String = cells[index.getValue(name)]
+
+        // for the one structural column a v1 file never has ([REQUIRED_STRUCTURAL_COLUMNS]) —
+        // "" rather than a throw, so a column absent from the header reads the same as a column
+        // present but left blank
+        fun cellOrBlank(name: String): String = index[name]?.let { cells[it] } ?: ""
 
         when (cells[0]) {
             KIND_META -> {
@@ -726,6 +768,7 @@ fun readJournalFile(text: String): JournalImport {
                 workoutUid = cell("workout_uid").ifBlank { null },
                 authorId = cell("author_id").toLongOrNull() ?: 1L,
                 occurredTs = cell("happened_at").ifBlank { null },
+                tzOffsetMin = cellOrBlank("tz_offset_min").toIntOrNull(),
             )
 
             else -> return JournalImport.Rejected(
