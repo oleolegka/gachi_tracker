@@ -6,8 +6,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
@@ -29,6 +34,7 @@ import xyz.oleolegka.gachimuchi.ui.components.MiniBars
 import xyz.oleolegka.gachimuchi.ui.components.MiniDots
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.Sparkline
+import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.fmtDelta
 import xyz.oleolegka.gachimuchi.ui.fmtRecordDate
 import xyz.oleolegka.gachimuchi.ui.fmtRelativeDay
@@ -62,6 +68,14 @@ fun OverviewScreen(
     }
     val tiles = remember(state.events, catalog) { doorTiles(state.events, catalog) }
     val byId = remember(state.exercises) { state.exercises.associateBy { it.id } }
+    /*
+     * Working on the catalog as its own thing — adding a row, or reaching one to rename or
+     * delete it — is not the same errand as looking at a door tile above, but it is the same
+     * exercises, so it lives on this tab rather than a screen built to hold one button. See
+     * [rememberExerciseEditor] for why creating this way never touches the entry card.
+     */
+    val editor = rememberExerciseEditor()
+    var browsingCatalog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -84,6 +98,12 @@ fun OverviewScreen(
         item {
             Column(Modifier.fillMaxWidth()) {
                 SectionHeader("Forms - tap for details", "sparkline - record")
+                // not "the empty state's way out": this is here whether or not there is a
+                // door tile below it, because the catalog is worked on independently of
+                // whether anything has been logged against it yet
+                OutlinedButton(onClick = { browsingCatalog = true }) {
+                    Text("Manage the exercise catalog")
+                }
                 if (tiles.isEmpty()) {
                     EmptyState(
                         title = "No workouts of any kind yet",
@@ -100,6 +120,30 @@ fun OverviewScreen(
             val program = entity?.protocolProgramId?.let { state.programsById[it] }
             FormDoorTile(tile, entity, program, today, onOpenForm)
         }
+    }
+
+    if (browsingCatalog) {
+        /*
+         * The same sheet logging and planning use to pick an exercise, reused rather than
+         * built again — see its own KDoc for why a caller says what happens after a pick. Here
+         * that is "open its page" (rename, hide, delete all live on [FormDetailScreen], which
+         * is otherwise reached only from a tile above, so an exercise with no history yet —
+         * including one just created — would be unreachable without this), and creating adds a
+         * row and stops, through [editor] rather than the workout-shaped path the other callers
+         * use.
+         */
+        ExercisePickerSheet(
+            state = state,
+            today = today,
+            heading = "Exercise catalog",
+            createLabel = "Add to the catalog",
+            onPick = {
+                browsingCatalog = false
+                onOpenForm(it)
+            },
+            onCreate = editor.create,
+            onDismiss = { browsingCatalog = false },
+        )
     }
 }
 

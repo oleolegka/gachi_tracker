@@ -35,7 +35,8 @@ import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.parseNumber
 
 /**
- * Correcting a catalog exercise, taking one out of the pickers, or removing one for good.
+ * Correcting a catalog exercise, taking one out of the pickers, removing one for good, or
+ * adding one that is not about any workout at all.
  *
  * ── Why this exists at all ──────────────────────────────────────────────────────
  * A name typed into the entry card became a catalog row and then could never be touched
@@ -53,6 +54,15 @@ import xyz.oleolegka.gachimuchi.domain.parseNumber
  * That is a deviation and is written down as one: when `GachiApp` is next open for editing,
  * these two should become callbacks like everything else. The precedent it follows is the
  * settings tab, which reaches for its stores the same way.
+ *
+ * ── Why [create] does not go through `MainViewModel.createExercise` ─────────────
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.createExercise] always points the entry card at
+ * the row it just made — right for every existing caller, which is either logging or planning
+ * and has somewhere for the new row to go. A row added on its own has nowhere to go: the next
+ * "Add" on Today would find that exercise sitting in `MainViewModel.activeExerciseId` and open
+ * the entry card on it, which is exactly the workout-shaped side effect a plain catalog entry
+ * must not have. [create] calls `ensureExercise` directly, the same way [edit], [toggleHidden]
+ * and [delete] already reach past the ViewModel for their own writes.
  */
 class ExerciseEditor internal constructor(
     /** Opens the correction dialog for this exercise. */
@@ -66,6 +76,13 @@ class ExerciseEditor internal constructor(
      * reached; there is no confirmation in here to keep in step with a second one.
      */
     val delete: (ExerciseEntity) -> Unit,
+    /**
+     * Adds a catalog row and stops there — no active exercise, no navigation, nothing logged.
+     * Goes through [xyz.oleolegka.gachimuchi.data.ActivityRepository.ensureExercise], the same
+     * find-or-create used by every other caller, so a name that already exists is quietly
+     * reused rather than duplicated.
+     */
+    val create: (name: String, form: ExerciseForm, workSec: Double?, restSec: Double?) -> Unit,
 )
 
 @Composable
@@ -139,6 +156,9 @@ fun rememberExerciseEditor(): ExerciseEditor {
             },
             delete = { exercise ->
                 scope.launch { repo.deleteExercise(exercise) }
+            },
+            create = { name, form, workSec, restSec ->
+                scope.launch { repo.ensureExercise(name, form, workSec, restSec) }
             },
         )
     }

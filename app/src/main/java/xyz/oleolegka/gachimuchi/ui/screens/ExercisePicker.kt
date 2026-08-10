@@ -100,6 +100,14 @@ fun ExercisePickerSheet(
      * action on it would be the button underneath.
      */
     startInCreate: Boolean = false,
+    /**
+     * What the sheet is doing here, which is not the same question in every caller: logging
+     * and planning both PICK something for a purpose, so "Exercise" and "Create and use" say
+     * what happens next. A caller with no next step — browsing or growing the catalog on its
+     * own — passes words that say only that: see [xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen].
+     */
+    heading: String = "Exercise",
+    createLabel: String = "Create and use",
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by rememberSaveable { mutableStateOf("") }
@@ -118,6 +126,7 @@ fun ExercisePickerSheet(
             if (creating && onCreate != null) {
                 CreateExerciseForm(
                     initialName = query,
+                    confirmLabel = createLabel,
                     onCancel = { creating = false },
                     onCreate = { name, form, work, rest ->
                         onCreate(name, form, work, rest)
@@ -129,6 +138,7 @@ fun ExercisePickerSheet(
                 PickExisting(
                     state = state,
                     today = today,
+                    heading = heading,
                     query = query,
                     onQuery = { query = it },
                     onPick = { id ->
@@ -146,6 +156,8 @@ fun ExercisePickerSheet(
 private fun PickExisting(
     state: UiState,
     today: LocalDate,
+    /** See [ExercisePickerSheet.heading]. */
+    heading: String,
     query: String,
     onQuery: (String) -> Unit,
     onPick: (Long) -> Unit,
@@ -172,7 +184,7 @@ private fun PickExisting(
     val catalogEmpty = visible.isEmpty()
     val searching = query.isNotBlank()
 
-    Text("Exercise", style = MaterialTheme.typography.titleMedium)
+    Text(heading, style = MaterialTheme.typography.titleMedium)
     // nothing to search through on a first run, and a search box would only invite typing
     // that can never match
     if (!catalogEmpty) {
@@ -298,6 +310,8 @@ private fun PickExisting(
 @Composable
 private fun CreateExerciseForm(
     initialName: String,
+    /** See [ExercisePickerSheet.createLabel]. */
+    confirmLabel: String,
     onCancel: () -> Unit,
     onCreate: (String, ExerciseForm, Double?, Double?) -> Unit,
 ) {
@@ -378,6 +392,6 @@ private fun CreateExerciseForm(
             },
             enabled = name.isNotBlank(),
             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-        ) { Text("Create and use") }
+        ) { Text(confirmLabel) }
     }
 }
