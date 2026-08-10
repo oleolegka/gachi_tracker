@@ -33,6 +33,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
+import xyz.oleolegka.gachimuchi.domain.tickOf
 import xyz.oleolegka.gachimuchi.timer.TimerController
 
 /**
@@ -141,6 +142,41 @@ class CelebrationCueTest {
         assertFalse("stepping on the scales is not a set", cues.next().isRecord)
         assertTrue("and it emitted nothing of its own", cues.tryReceive().isFailure)
         assertEquals("it is still written down, though", 2, repo.eventCount())
+        job.cancel()
+    }
+
+    /**
+     * The two ways a check-in reaches [MainViewModel.addSet] (ui/GachiApp.kt: [LogScreen] calls
+     * it with `attachToWorkout = false`, [WorkoutLogScreen] with an `intoWorkoutId`) are checked
+     * SEPARATELY rather than assumed to behave alike from one passing test. Both currently reach
+     * the same [xyz.oleolegka.gachimuchi.domain.celebratedByPicture] call inside [addSet], but
+     * that has changed before and each path has its own history of defects — see the docs on
+     * [addSet] for the two writes it makes around it.
+     */
+    @Test
+    fun `a check-in recorded outside a workout gets a cue, same as a set`() = runBlocking {
+        val cues = Channel<CelebrationCue>(Channel.UNLIMITED)
+        val job = collectCues(cues)
+        val stretching = ref("Stretching", ExerciseForm.TICK)
+
+        // the exact call LogScreen's onAddSet makes (ui/GachiApp.kt)
+        viewModel.addSet(tickOf(stretching, day), attachToWorkout = false)
+
+        assertFalse(cues.next().isRecord)
+        job.cancel()
+    }
+
+    @Test
+    fun `a check-in recorded inside a workout gets a cue too`() = runBlocking {
+        val cues = Channel<CelebrationCue>(Channel.UNLIMITED)
+        val job = collectCues(cues)
+        val stretching = ref("Stretching", ExerciseForm.TICK)
+        val workoutId = repo.startWorkout(day)
+
+        // the exact call WorkoutLogScreen's addSet action makes (ui/GachiApp.kt)
+        viewModel.addSet(tickOf(stretching, day), intoWorkoutId = workoutId)
+
+        assertFalse(cues.next().isRecord)
         job.cancel()
     }
 }
