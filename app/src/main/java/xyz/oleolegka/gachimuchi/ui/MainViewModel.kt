@@ -622,13 +622,15 @@ class MainViewModel(
      *
      * Still one deletion event per row, because that is the only thing the journal has to say
      * with: there is no "delete these" event and inventing one would mean a second shape for
-     * every reader in domain/Amendments.kt to understand. What this adds over a loop at the
-     * call site is that the writes are in one coroutine, so the journal is never read back
-     * half-removed by the flow the screen is collecting.
+     * every reader in domain/Amendments.kt to understand. What ties the rows together is
+     * [ActivityRepository.deleteEntries]'s own transaction, not a coroutine on its own — one
+     * coroutine keeps the journal from being READ back half-removed by the flow the screen is
+     * collecting, but only a database transaction keeps it from being WRITTEN back half-removed
+     * when the process itself does not survive the loop.
      */
     fun deleteEntries(eventIds: List<Long>) {
         if (eventIds.isEmpty()) return
-        viewModelScope.launch { eventIds.forEach { repo.deleteEntry(it) } }
+        viewModelScope.launch { repo.deleteEntries(eventIds) }
     }
 
     /**
@@ -645,10 +647,14 @@ class MainViewModel(
      * The journal is read here rather than in the screen because a card knows only an id; the
      * rows a workout is made of are a question about the journal, and this is the layer that
      * has one.
+     *
+     * The write itself goes through [ActivityRepository.deleteEntries], as one transaction —
+     * see its own KDoc for why a loop of [ActivityRepository.deleteEntry] calls used to be able
+     * to leave a workout half gone.
      */
     fun deleteWorkout(workoutId: Long) {
         viewModelScope.launch {
-            workoutEventIds(repo.allEvents(), workoutId).forEach { repo.deleteEntry(it) }
+            repo.deleteEntries(workoutEventIds(repo.allEvents(), workoutId))
         }
     }
 

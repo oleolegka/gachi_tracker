@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.data
 
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -365,17 +366,23 @@ class ActivityRepository(private val db: AppDatabase) {
         opDate: String = today(),
         slotId: Long? = null,
         name: String? = null,
-    ): Long {
+    ): Long = db.withTransaction {
         /*
          * THE FORGOTTEN ONE IS CLOSED ON THE WAY PAST, silently. Nobody presses "finish"
          * reliably, and the alternative to closing it here is two workouts open at once —
          * after which "the one in progress" has to guess, which is what the midnight rule
          * used to do and what §13 replaced. Silent because there is nothing to decide: the
          * user has just said, by starting this one, that the previous one is over.
+         *
+         * TRANSACTED, because "closed" and "opened" are two inserts and this app has been
+         * killed between two inserts before (see [deleteEntries]'s own KDoc). Half of this
+         * pair landing would leave the journal with NO open workout at all — the previous one
+         * finished, the new one never started — which is a state a user cannot get back into
+         * without knowing to look for it.
          */
         openWorkoutRow(allEvents())?.let { finishWorkout(it.id) }
         val slot = slotId?.let { db.slots().byId(it) }
-        return db.events().insert(
+        db.events().insert(
             event(
                 type = TYPE_WORKOUT_STARTED,
                 payload = payloadJson.encodeToString(
@@ -417,21 +424,26 @@ class ActivityRepository(private val db: AppDatabase) {
     ): Long {
         val workoutUid = db.events().byId(workoutId)?.uid
         val exerciseUid = db.exercises().byId(exerciseId)?.uid
-        val id = db.events().insert(
-            event(
-                type = TYPE_WORKOUT_EXERCISE_ADDED,
-                payload = payloadJson.encodeToString(
-                    WorkoutExerciseAdded(
-                        workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
-                        workoutUid = workoutUid, exerciseUid = exerciseUid, side = side?.code,
-                    )
-                ),
-                workoutId = workoutId,
-                workoutUid = workoutUid,
+        // both writes below — the journal event and the catalog's remembered rest — as one
+        // act; see this method's own KDoc for why they are two different facts, and
+        // [deleteEntries] for why a process dying between them is worth guarding against
+        return db.withTransaction {
+            val id = db.events().insert(
+                event(
+                    type = TYPE_WORKOUT_EXERCISE_ADDED,
+                    payload = payloadJson.encodeToString(
+                        WorkoutExerciseAdded(
+                            workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
+                            workoutUid = workoutUid, exerciseUid = exerciseUid, side = side?.code,
+                        )
+                    ),
+                    workoutId = workoutId,
+                    workoutUid = workoutUid,
+                )
             )
-        )
-        setDefaultRest(exerciseId, restSec)
-        return id
+            setDefaultRest(exerciseId, restSec)
+            id
+        }
     }
 
     /**
@@ -489,7 +501,11 @@ class ActivityRepository(private val db: AppDatabase) {
             refOf = { id -> refs[id] },
             restFallback = { ref -> restHintSec(settings, events, ref) },
         )
-        return cards.map { card -> addExerciseToWorkout(workoutId, card.exerciseId, card.restSec, card.side) }
+        // every card lands or none do — see [deleteEntries]'s own KDoc for why a loop of
+        // writes with nothing tying them together is worth guarding this way
+        return db.withTransaction {
+            cards.map { card -> addExerciseToWorkout(workoutId, card.exerciseId, card.restSec, card.side) }
+        }
     }
 
     /**
@@ -619,6 +635,46 @@ class ActivityRepository(private val db: AppDatabase) {
     }
 
     /**
+     * Removes every one of [eventIds] as ONE ATOMIC ACT — a whole workout taken out
+     * ([xyz.oleolegka.gachimuchi.ui.MainViewModel.deleteWorkout]) or one exercise taken out of
+     * a workout, its "added" rows and every set of it together
+     * ([xyz.oleolegka.gachimuchi.ui.MainViewModel.deleteEntries]).
+     *
+     * ── The gap this closes ───────────────────────────────────────────────────────
+     * Both callers used to loop over [deleteEntry] directly, one insert per row and nothing
+     * tying the inserts together. The process dying between two of them — killed, rebooted,
+     * swapped out of memory, the ordinary ways an Android app stops existing mid-tap — left the
+     * journal holding SOME of a workout's rows and not others: a set that survived the deletion
+     * its own workout did not, counting again in the volume, the records and the streak the
+     * confirmation on the card promised it would leave. Nothing in the journal names "these
+     * together were one deletion" the way [TYPE_ENTRY_DELETED] names one row, so there was
+     * nothing to finish the job with, and nothing to notice it needed finishing either.
+     * `withTransaction` closes it the other way: every insert in [eventIds] lands, or none of
+     * them do.
+     *
+     * ── Fails LOUDLY rather than partially, and that is the point ──────────────────
+     * Every id here comes from one fold of the same journal read moments earlier
+     * ([xyz.oleolegka.gachimuchi.domain.workoutEventIds] or the screen's own selection) — a
+     * caller handing over an id [deleteEntry] cannot resolve is describing a journal this
+     * method can no longer trust, and applying only the ids that DID resolve would be exactly
+     * the half-deletion this method exists to prevent. Compare [deleteEntry] on its own, which
+     * stays silent about a stale id for the opposite reason: there a caller names ONE thing, and
+     * there is nothing else that could be left half-done alongside it.
+     *
+     * Returns the ids of the deletion events written, in the order [eventIds] named their
+     * targets. A no-op — no transaction opened at all — for an empty list.
+     */
+    suspend fun deleteEntries(eventIds: List<Long>): List<Long> {
+        if (eventIds.isEmpty()) return emptyList()
+        return db.withTransaction {
+            eventIds.map { id ->
+                deleteEntry(id)
+                    ?: error("deleteEntries: no event $id to delete — rolling the whole batch back rather than applying it halfway")
+            }
+        }
+    }
+
+    /**
      * The row [eventId] names, resolved forward to whatever is CURRENTLY live if it has since
      * been corrected.
      *
@@ -740,22 +796,31 @@ class ActivityRepository(private val db: AppDatabase) {
      * ([xyz.oleolegka.gachimuchi.data.db.EventEntity.uid] is generated when the row is built,
      * not by the table), so the marker names a real row from the moment it exists — there is no
      * window where the target is dead and nothing yet stands in its place.
+     *
+     * ── Both inserts, or neither ────────────────────────────────────────────────
+     * The one gap the ordering above does not close on its own: a process dying AFTER the new
+     * row lands and BEFORE the marker does leaves [target] and its successor both live at
+     * once — the entry now counts twice everywhere [journalView] folds it, silently, until
+     * something else corrects or deletes one of the two. `withTransaction` closes that window
+     * the same way [deleteEntries] closes its own.
      */
     private suspend fun writeNewVersion(target: JournalEvent, type: String, payload: String): Long {
         val newVersion = event(
             type = type, payload = payload, workoutId = target.workoutId, workoutUid = target.workoutUid,
             occurredTs = target.occurredTs ?: target.ts,
         )
-        val newId = db.events().insert(newVersion)
-        db.events().insert(
-            event(
-                type = TYPE_ENTRY_DELETED,
-                payload = payloadJson.encodeToString(
-                    EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)
-                ),
+        return db.withTransaction {
+            val newId = db.events().insert(newVersion)
+            db.events().insert(
+                event(
+                    type = TYPE_ENTRY_DELETED,
+                    payload = payloadJson.encodeToString(
+                        EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)
+                    ),
+                )
             )
-        )
-        return newId
+            newId
+        }
     }
 
     /**
@@ -1061,24 +1126,36 @@ class ActivityRepository(private val db: AppDatabase) {
     suspend fun saveSlot(draft: SlotDraft, id: Long? = null): Long? {
         // aliased on import: this file also declares a SlotEntity.toSlot of its own
         val slot = draft.draftToSlot(id ?: 0L) ?: return null
-        val savedId = if (id == null) {
-            createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
-        } else {
-            val touched = db.slots().updateFields(
-                id = id,
-                name = slot.name,
-                atTime = slot.atTime,
-                repeatRule = slot.repeatRule,
-                anchorDate = slot.anchorDate,
-            )
-            if (touched == 0) return null
-            id
+        // the field write and the composition rewrite as one act — see [writeSlotExercises]
+        // for what a process dying BETWEEN the two of them would leave behind
+        return db.withTransaction {
+            val savedId = if (id == null) {
+                createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
+            } else {
+                val touched = db.slots().updateFields(
+                    id = id,
+                    name = slot.name,
+                    atTime = slot.atTime,
+                    repeatRule = slot.repeatRule,
+                    anchorDate = slot.anchorDate,
+                )
+                if (touched == 0) return@withTransaction null
+                id
+            }
+            writeSlotExercises(savedId, slot.exercises)
+            savedId
         }
-        writeSlotExercises(savedId, slot.exercises)
-        return savedId
     }
 
-    /** Replaces a slot's composition. The list order becomes the stored `position`. */
+    /**
+     * Replaces a slot's composition. The list order becomes the stored `position`.
+     *
+     * DELETE THEN INSERT, which is exactly the pattern that needs its caller's transaction:
+     * a process dying between the two statements does not leave the OLD composition in
+     * place, it leaves NONE — a plan that had six exercises in it a moment ago reads as
+     * empty, which is worse than the edit that was in progress never having started. See
+     * [saveSlot], the only caller, for where the transaction actually opens.
+     */
     private suspend fun writeSlotExercises(slotId: Long, exercises: List<PlannedExercise>) {
         db.slots().deleteExercisesOf(slotId)
         if (exercises.isEmpty()) return
