@@ -897,7 +897,7 @@ data class ExerciseEntityV17(
 @Dao
 interface LegacyCatalogDaoV17 {
     @Insert
-    suspend fun insertEvent(event: xyz.oleolegka.gachimuchi.data.db.EventEntity): Long
+    suspend fun insertEvent(event: EventEntityV16): Long
 
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV17): Long
@@ -934,20 +934,48 @@ abstract class SchemaV15Database : RoomDatabase() {
 }
 
 /**
- * Version 16: the journal and every other table are already today's shape, minus `edge_mm` on
- * the catalog — the 16 -> 17 step ([MIGRATION_16_17]) rewrites payload strings, not a single
- * column, so [xyz.oleolegka.gachimuchi.data.db.EventEntity] is reused here directly. The
- * catalog reuses [ExerciseEntityV17] for the same reason [SchemaV15Database] does.
+ * The journal exactly as it stood from version 16 through version 21: every column that exists
+ * on the live [xyz.oleolegka.gachimuchi.data.db.EventEntity] today EXCEPT `occurred_ts`, which
+ * only arrived at version 22 ([xyz.oleolegka.gachimuchi.data.db.AppDatabase.Companion.MIGRATION_21_22]).
+ *
+ * Split out from the live entity for the same reason every other `EntityVNN` in this file
+ * exists — see the note at the top: reusing the live class stopped being safe for this table
+ * the moment it grew a column none of versions 16-21 had, and every snapshot in that span
+ * ([SchemaV16Database], [SchemaV17Database]/[SchemaV18Database] via their `insertEvent`, and
+ * [SchemaV20Database]) uses this one now instead.
  */
+@Entity(
+    tableName = "events",
+    indices = [
+        Index(value = ["space_id", "id"]),
+        Index(value = ["uid"], unique = true),
+        Index(value = ["space_id", "op_date"]),
+    ],
+)
+data class EventEntityV16(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: String,
+    @ColumnInfo(name = "space_id") val spaceId: Long = LOCAL_SPACE_ID,
+    @ColumnInfo(name = "author_id") val authorId: Long = LOCAL_AUTHOR_ID,
+    val type: String,
+    val payload: String,
+    @ColumnInfo(name = "workout_id") val workoutId: Long? = null,
+    val uid: String = xyz.oleolegka.gachimuchi.domain.newUid(),
+    @ColumnInfo(name = "workout_uid") val workoutUid: String? = null,
+    @ColumnInfo(name = "op_date") val opDate: String? = null,
+    @ColumnInfo(name = "ts_utc") val tsUtc: String? = null,
+    @ColumnInfo(name = "tz_offset_min") val tzOffsetMin: Int? = null,
+)
+
 @Dao
 interface LegacyEventDaoV16 {
     @Insert
-    suspend fun insert(event: xyz.oleolegka.gachimuchi.data.db.EventEntity): Long
+    suspend fun insert(event: EventEntityV16): Long
 }
 
 @Database(
     entities = [
-        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        EventEntityV16::class,
         ExerciseEntityV17::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
@@ -970,7 +998,7 @@ abstract class SchemaV16Database : RoomDatabase() {
  */
 @Database(
     entities = [
-        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        EventEntityV16::class,
         ExerciseEntityV17::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
@@ -1029,7 +1057,7 @@ data class ExerciseEntityV18(
 @Dao
 interface LegacyCatalogDaoV18 {
     @Insert
-    suspend fun insertEvent(event: xyz.oleolegka.gachimuchi.data.db.EventEntity): Long
+    suspend fun insertEvent(event: EventEntityV16): Long
 
     @Insert
     suspend fun insertExercise(exercise: ExerciseEntityV18): Long
@@ -1044,7 +1072,7 @@ interface LegacyCatalogDaoV18 {
  */
 @Database(
     entities = [
-        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        EventEntityV16::class,
         ExerciseEntityV18::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
@@ -1060,15 +1088,17 @@ abstract class SchemaV18Database : RoomDatabase() {
 }
 
 /**
- * Version 20: every table already matches today's [xyz.oleolegka.gachimuchi.data.db.AppDatabase]
- * entities one for one — nothing about the schema changes at the 20 -> 21 step, only content
- * (see MIGRATION_20_21's own KDoc) — so this reuses them directly rather than freezing a
- * snapshot, on the same grounds [SchemaV16Database] and [SchemaV17Database] already do for the
- * journal table specifically.
+ * Version 20: every table except the journal already matches today's
+ * [xyz.oleolegka.gachimuchi.data.db.AppDatabase] entities one for one, so those are reused
+ * directly. The journal needs [EventEntityV16] instead — nothing changes about it at the
+ * 20 -> 21 step (only content, see MIGRATION_20_21's own KDoc), but it DOES change one version
+ * later, at 21 -> 22 ([MIGRATION_21_22] adds `occurred_ts`), and the live entity already has
+ * that column — reusing it here would seed a "version 20" database that already has a column
+ * version 20 never had.
  */
 @Database(
     entities = [
-        xyz.oleolegka.gachimuchi.data.db.EventEntity::class,
+        EventEntityV16::class,
         xyz.oleolegka.gachimuchi.data.db.ExerciseEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotEntity::class,
         xyz.oleolegka.gachimuchi.data.db.SlotExerciseEntity::class,
@@ -3040,14 +3070,14 @@ class MigrationTest {
         opened = v16
 
         val protocolLedId = v16.events().insert(
-            EventEntity(
+            EventEntityV16(
                 ts = "2026-07-01T10:00:00", type = TYPE_HOLD_SET,
                 payload = """{"activity":"Hangs 20 mm","reps":6,"work_sec":7.0,"rest_sec":3.0,""" +
                     """"op_date":"2026-07-01","activity_key":"hangs 20 mm"}""",
             )
         )
         val plankId = v16.events().insert(
-            EventEntity(
+            EventEntityV16(
                 ts = "2026-07-01T10:05:00", type = TYPE_HOLD_SET,
                 payload = """{"activity":"Plank","op_date":"2026-07-01","activity_key":"plank"}""",
             )
@@ -3148,7 +3178,7 @@ class MigrationTest {
             """"rest_sec":3.0,"edge_mm":20.0,"exercise_id":$hangsId,"op_date":"2026-08-06",""" +
             """"activity_key":"hangs"}"""
         val setOnHangsId1 = v17.catalog().insertEvent(
-            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            EventEntityV16(
                 ts = "2026-08-06T10:00:00", type = TYPE_HOLD_SET, payload = hang1,
             )
         )
@@ -3156,7 +3186,7 @@ class MigrationTest {
             """"rest_sec":3.0,"edge_mm":20.0,"exercise_id":$hangsId,"op_date":"2026-08-08",""" +
             """"activity_key":"hangs"}"""
         val setOnHangsId2 = v17.catalog().insertEvent(
-            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            EventEntityV16(
                 ts = "2026-08-08T10:00:00", type = TYPE_HOLD_SET, payload = hang2,
             )
         )
@@ -3341,7 +3371,7 @@ class MigrationTest {
             """"rest_sec":3.0,"hold_sec":7.0,"reps":6,"exercise_id":$hangsId,"op_date":"2026-08-06",""" +
             """"activity_key":"hangs"}"""
         val setOnHangsId1 = v18.catalog().insertEvent(
-            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            EventEntityV16(
                 ts = "2026-08-06T10:00:00", type = TYPE_HOLD_SET, payload = hang1,
             )
         )
@@ -3349,7 +3379,7 @@ class MigrationTest {
             """"rest_sec":3.0,"hold_sec":8.0,"reps":5,"exercise_id":$hangsId,"op_date":"2026-08-08",""" +
             """"activity_key":"hangs"}"""
         val setOnHangsId2 = v18.catalog().insertEvent(
-            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            EventEntityV16(
                 ts = "2026-08-08T10:00:00", type = TYPE_HOLD_SET, payload = hang2,
             )
         )
@@ -3589,14 +3619,14 @@ class MigrationTest {
         val v20 = Room.databaseBuilder(context, SchemaV20Database::class.java, dbName).build()
         opened = v20
 
-        val set = xyz.oleolegka.gachimuchi.data.db.EventEntity(
+        val set = EventEntityV16(
             ts = "2026-08-06T10:00:00", type = TYPE_STRENGTH_SET,
             payload = """{"exercise":"Bench press","reps":5,"weight_kg":60.0,"exercise_id":1,""" +
                 """"op_date":"2026-08-06","exercise_key":"bench press"}""",
         )
         v20.events().insert(set)
         v20.events().insert(
-            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            EventEntityV16(
                 ts = "2026-08-06T11:00:00", type = "entry_amended",
                 payload = """{"target_uid":"${set.uid}","fields":{"weight_kg":65.0}}""",
             )
@@ -3630,7 +3660,7 @@ class MigrationTest {
         val v20 = Room.databaseBuilder(context, SchemaV20Database::class.java, dbName).build()
         opened = v20
         v20.events().insert(
-            xyz.oleolegka.gachimuchi.data.db.EventEntity(
+            EventEntityV16(
                 ts = "2026-08-06T10:00:00", type = TYPE_STRENGTH_SET,
                 payload = """{"exercise":"Bench press","reps":5,"weight_kg":60.0,"exercise_id":1,""" +
                     """"op_date":"2026-08-06","exercise_key":"bench press"}""",
