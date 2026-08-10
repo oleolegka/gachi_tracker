@@ -294,8 +294,14 @@ data class SessionSet(
      * The pause before this set, in seconds. Taken from the previous set's explicit
      * `rest_after_sec` when it has one, otherwise derived from the gap between the two
      * write times. Null for the first set of an exercise and for implausible gaps.
+     *
+     * STILL BY WRITE TIME, deliberately unchanged by [happenedAt] below — a floor measures
+     * wall-clock time between two ACTUAL writes, and a set typed up long after the fact was
+     * never rested for. See [buildSession]'s own note on this.
      */
     val restBeforeSec: Double?,
+    /** See [xyz.oleolegka.gachimuchi.domain.happenedAt] — what [buildSession] sorts a group by. */
+    val happenedAt: String = ts,
 )
 
 /** The sets of one exercise within the session, in the order they were recorded. */
@@ -322,10 +328,21 @@ data class Session(
 /**
  * Builds the session of [opDate] out of the journal.
  *
- * Groups follow the order in which the exercises FIRST appeared that day, and the sets
- * inside a group follow the order they were recorded in — the screen is a live tape of
- * the workout, not a sorted report. Cancelled sets are gone (the reducers drop them),
- * but their events remain in the journal.
+ * Groups follow the order in which the exercises FIRST appeared that day, by write time — that
+ * decision is unaffected by any of this, see below. WITHIN a group, the sets are sorted by
+ * [ActivityEvent.happenedAt] rather than left in journal order: the screen is a tape of the
+ * workout as it was actually done, and journal order stopped being that the moment a set could
+ * be corrected without moving (domain/Amendments.kt's header). Cancelled sets are gone (the
+ * reducers drop them), but their events remain in the journal.
+ *
+ * ── What is deliberately STILL by write time ─────────────────────────────────────
+ * The rest-before-a-set calculation and the record check both read the journal in ITS OWN
+ * order, unchanged — [restBeforeSec]'s derived half is a gap between two ACTUAL writes (a set
+ * typed up after the fact was never rested for, whatever [happenedAt] says it happened at), and
+ * [recordAt] asks "was this a record against everything logged before it", which is a question
+ * about the training log as it stood, not a question this change was asked to touch. Only the
+ * FINAL order a group is handed back in — after both of those have already been computed — is
+ * sorted by [happenedAt].
  *
  * Grouping goes by exercise_id, so entries spelled differently (the bot writes whatever
  * sentence it was given) still land in one block. Entries with no id (written before the
@@ -355,13 +372,14 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
             form = ev.form,
             record = recordAt(all, index),
             restBeforeSec = rest,
+            happenedAt = ev.happenedAt,
         )
         lastTs[groupKey] = ev.ts
     }
 
     val groups = buckets.map { (key, sets) ->
         val (id, name) = labels.getValue(key)
-        SessionGroup(groupKey = key, exerciseId = id, name = name, sets = sets)
+        SessionGroup(groupKey = key, exerciseId = id, name = name, sets = sets.sortedBy { it.happenedAt })
     }
     return Session(opDate, groups)
 }

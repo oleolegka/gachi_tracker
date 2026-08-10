@@ -729,10 +729,18 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         }
     }
 
+    /*
+     * Sorted by [happenedAt] rather than left in the journal order the loop above walked: the
+     * loop's order decides STRUCTURE (which card, which side, which rest, whether an order
+     * event could have meant this card — all of that stays exactly as it was, unaffected), but
+     * the sets DRAWN ON a card are a tape of the exercise as it was actually done, the same
+     * argument [buildSession] makes for the day's feed. A set corrected after later ones were
+     * logged must not visibly jump past them.
+     */
     val blocks = sets.map { (key, ofExercise) ->
         WorkoutExercise(
-            links.getValue(key), rests[key], ofExercise, addedRows[key].orEmpty(), sides[key],
-            finishedEventId = cardFinished[key],
+            links.getValue(key), rests[key], ofExercise.sortedBy { it.happenedAt },
+            addedRows[key].orEmpty(), sides[key], finishedEventId = cardFinished[key],
         )
     }
     val ordered = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks
@@ -871,10 +879,16 @@ fun workoutEventIds(events: List<JournalEvent>, workoutId: Long): List<Long> {
             .map { it.id }
 }
 
-/** Every workout of one training day, in the order they were started. */
+/**
+ * Every workout of one training day, in the order they were started — by [happenedAt], not by
+ * the position of the (possibly corrected) start row in the journal. A workout renamed or
+ * moved onto this day after a LATER workout was already logged must still show up before it,
+ * the same argument [buildSession] makes for a corrected set within a day's feed.
+ */
 fun workoutsOn(events: List<JournalEvent>, opDate: String): List<Workout> =
     workoutStarts(events)
         .filter { (row, started) -> (started?.opDate ?: row.writeDay()) == opDate }
+        .sortedBy { (row, _) -> row.happenedAt }
         .mapNotNull { (row, _) -> buildWorkout(events, row.id) }
 
 /**

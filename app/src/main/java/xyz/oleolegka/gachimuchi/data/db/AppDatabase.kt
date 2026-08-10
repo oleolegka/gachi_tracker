@@ -44,7 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.planLegacyAmendmentMigration
         ProgramGroupEntity::class,
         ProgramBlockEntity::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1593,6 +1593,29 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 21 -> 22: a row also states WHEN THE TRAINING HAPPENED, separately from [ts]
+         * (when the ROW was written) — see [xyz.oleolegka.gachimuchi.data.db.EventEntity.occurredTs]
+         * for the fact this exists to state and [xyz.oleolegka.gachimuchi.domain.happenedAt] for
+         * the one place every reader asks it through.
+         *
+         * ── Why every existing row is backfilled with its own `ts` ───────────────────
+         * That is exactly what this app already treated a row's position as meaning, for every
+         * row on the phone at this point — including a row [MIGRATION_20_21] just wrote a moment
+         * ago for a lineage that carried a legacy patch amendment, whose `ts` is already the
+         * FOLDED-in correction time rather than the original set's, because that migration
+         * inherited the amendment's own `ts` for the exact same reason (see its own KDoc). This
+         * step changes nothing about how anything reads relative to right after that one; it
+         * only gives a name to the fact every screen already relied on, so that a FUTURE
+         * correction can start keeping it instead of losing it to the correction's own moment.
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `events` ADD COLUMN `occurred_ts` TEXT")
+                db.execSQL("UPDATE `events` SET `occurred_ts` = `ts`")
+            }
+        }
+
+        /**
          * The last row id `INSERT`ed on this connection — SQLite's own `last_insert_rowid()`,
          * used inside [MIGRATION_18_19] to learn the autoincrement id of a row this migration
          * just wrote with raw `execSQL`, which returns nothing.
@@ -1988,6 +2011,7 @@ abstract class AppDatabase : RoomDatabase() {
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
             MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
+            MIGRATION_21_22,
         )
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {

@@ -158,6 +158,33 @@ data class EventEntity(
      * rules would silently move it.
      */
     @androidx.room.ColumnInfo(name = "tz_offset_min") val tzOffsetMin: Int? = null,
+    /**
+     * WHEN THIS ROW'S OWN TRAINING HAPPENED (schema version 22), as opposed to [ts] — the
+     * instant it was WRITTEN.
+     *
+     * ── Why the two ever disagree ────────────────────────────────────────────────
+     * They never used to: the journal was append-only in the fullest sense, so a row's position
+     * — and hence [ts] — was fixed the moment it was written, and "journal order" and "training
+     * order" were the same question. A correction breaks that (schema version 21): it is a
+     * WHOLE NEW ROW, appended at the moment of the CORRECTION, and its own [ts] is honestly
+     * that moment, not the moment of the training it corrects. A set fixed an hour after two
+     * later ones were logged would otherwise read as having happened AFTER them.
+     *
+     * ── The rule: inherited, not re-stamped ──────────────────────────────────────
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry] copies this column from the
+     * row being superseded onto its new version — so for the ORIGINAL entry it equals [ts] (it
+     * is its own training, freshly recorded), and for every correction after it it stays
+     * pinned to whatever the very first version said, however many times the row is corrected
+     * again. Read through [xyz.oleolegka.gachimuchi.domain.happenedAt], never directly, so a
+     * row from before this column existed (null) falls back to [ts] in the one place that
+     * decides it rather than at every call site.
+     *
+     * Nullable rather than backfilled with a rebuild, on the same grounds [tsUtc] is: every row
+     * this app ever wrote CAN be backfilled (see `MIGRATION_21_22`, a plain `UPDATE ... SET
+     * occurred_ts = ts`), so in practice this is null only for a merged-in row this app never
+     * touched at all.
+     */
+    @androidx.room.ColumnInfo(name = "occurred_ts") val occurredTs: String? = null,
 )
 
 /**

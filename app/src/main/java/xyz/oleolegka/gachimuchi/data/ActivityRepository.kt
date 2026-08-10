@@ -103,12 +103,17 @@ class ActivityRepository(private val db: AppDatabase) {
      * of its own (its payload is a target and a patch), so it gets a null `op_date` even when the
      * patch inside it moves an entry to another day — see [EventEntity.opDate], which is where
      * the readers are told not to trust the column across a correction.
+     *
+     * [occurredTs] defaults to "now" — this row IS its own training, freshly recorded — and
+     * [writeNewVersion] is the one caller that overrides it, with the value it is INHERITING
+     * from the row being superseded rather than a fresh instant; see [EventEntity.occurredTs].
      */
     private fun event(
         type: String,
         payload: String,
         workoutId: Long? = null,
         workoutUid: String? = null,
+        occurredTs: String? = null,
     ): EventEntity {
         val written = WriteTime.now()
         return EventEntity(
@@ -120,6 +125,7 @@ class ActivityRepository(private val db: AppDatabase) {
             opDate = opDateOfPayload(payload),
             tsUtc = written.utc,
             tzOffsetMin = written.offsetMin,
+            occurredTs = occurredTs ?: written.local,
         )
     }
 
@@ -692,7 +698,17 @@ class ActivityRepository(private val db: AppDatabase) {
     /**
      * The write both [amendEntry] overloads end in: a whole new row of [type]/[payload] — in
      * the same workout as [target], since a correction does not change which workout an entry
-     * belongs to — and a [TYPE_ENTRY_DELETED] naming [target] as superseded by it.
+     * belongs to, and carrying forward WHEN IT HAPPENED rather than stamping the correction's
+     * own moment — and a [TYPE_ENTRY_DELETED] naming [target] as superseded by it.
+     *
+     * ── [occurredTs] is INHERITED, never re-stamped ──────────────────────────────
+     * [target]'s own [xyz.oleolegka.gachimuchi.data.db.EventEntity.occurredTs] is copied onto
+     * the new row unchanged (falling back to [target]'s own `ts` for a row from before that
+     * column existed — the same fallback [xyz.oleolegka.gachimuchi.domain.happenedAt] reads
+     * everywhere else). This is what keeps a corrected set from jumping to the end of its
+     * session or workout on screen: the JOURNAL position of the new row is the moment of the
+     * correction, but the DISPLAY order (domain/Session.kt, domain/Workout.kt) is sorted by
+     * this instead, and it never moves across however many times a row is corrected again.
      *
      * The new row is inserted FIRST and its uid is already known before either insert happens
      * ([xyz.oleolegka.gachimuchi.data.db.EventEntity.uid] is generated when the row is built,
@@ -700,7 +716,10 @@ class ActivityRepository(private val db: AppDatabase) {
      * window where the target is dead and nothing yet stands in its place.
      */
     private suspend fun writeNewVersion(target: JournalEvent, type: String, payload: String): Long {
-        val newVersion = event(type = type, payload = payload, workoutId = target.workoutId, workoutUid = target.workoutUid)
+        val newVersion = event(
+            type = type, payload = payload, workoutId = target.workoutId, workoutUid = target.workoutUid,
+            occurredTs = target.occurredTs ?: target.ts,
+        )
         val newId = db.events().insert(newVersion)
         db.events().insert(
             event(
@@ -1067,7 +1086,7 @@ class ActivityRepository(private val db: AppDatabase) {
 fun EventEntity.toJournalEvent() = JournalEvent(
     id = id, ts = ts, spaceId = spaceId, authorId = authorId, type = type, payload = payload,
     workoutId = workoutId, uid = uid, workoutUid = workoutUid,
-    opDate = opDate, tsUtc = tsUtc, tzOffsetMin = tzOffsetMin,
+    opDate = opDate, tsUtc = tsUtc, tzOffsetMin = tzOffsetMin, occurredTs = occurredTs,
 )
 
 fun SlotEntity.toSlot(exercises: List<PlannedExercise> = emptyList()) = Slot(
