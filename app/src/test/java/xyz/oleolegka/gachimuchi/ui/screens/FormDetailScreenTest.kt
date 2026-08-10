@@ -92,12 +92,13 @@ class FormDetailScreenTest : ScreenTest() {
     }
 
     @Test
-    fun `the screen offers correcting the exercise and hiding it`() {
+    fun `the screen offers correcting the exercise, hiding it, and deleting it`() {
         detail()
         openMenu()
 
         compose.onNodeWithText("Edit exercise").assertIsDisplayed()
         compose.onNodeWithText("Hide from the picker").assertIsDisplayed()
+        compose.onNodeWithText("Delete exercise").assertIsDisplayed()
     }
 
     /** A hidden exercise is reached from the overview, and this is where it is brought back. */
@@ -206,5 +207,87 @@ class FormDetailScreenTest : ScreenTest() {
         compose.onAllNodesWithText("Most weight hung").assertCountEquals(1)
         compose.onNodeWithText("Left", substring = true).assertDoesNotExist()
         compose.onNodeWithText("Right", substring = true).assertDoesNotExist()
+    }
+
+    // --- deleting the exercise ---------------------------------------------------------------
+
+    /**
+     * The warning names a NUMBER, not just "are you sure" — the owner's own requirement: a
+     * confirmation that does not say how many entries go with it is not informative.
+     */
+    @Test
+    fun `the delete confirmation says how many entries will disappear`() {
+        val ref = exerciseRef(1, "Hangs", ExerciseForm.HOLD)
+        val entity = exerciseEntity(1, "Hangs", ExerciseForm.HOLD)
+        val journal = Journal()
+        journal.holdSet(ref, "2026-08-01")
+        journal.holdSet(ref, "2026-07-20")
+
+        screen {
+            FormDetailScreen(
+                state = UiState(events = journal.events, exercises = listOf(entity), loading = false),
+                exerciseId = entity.id,
+                today = today,
+                onClose = {},
+            )
+        }
+        openMenu()
+        compose.onNodeWithText("Delete exercise").performClick()
+        settle()
+
+        compose.onNodeWithText("Delete this exercise?").assertIsDisplayed()
+        compose.onNodeWithText("2 entries go", substring = true).assertIsDisplayed()
+    }
+
+    /** Nothing recorded yet gets a different sentence, not "0 entries". */
+    @Test
+    fun `an exercise with nothing recorded gets a plain warning instead of a count`() {
+        detail()
+        openMenu()
+        compose.onNodeWithText("Delete exercise").performClick()
+        settle()
+
+        compose.onNodeWithText("Nothing has been recorded under it yet", substring = true)
+            .assertIsDisplayed()
+    }
+
+    /** Confirming closes the screen — there is nothing left here to look at. */
+    @Test
+    fun `confirming the delete closes the screen`() {
+        var closed = false
+        screen {
+            FormDetailScreen(
+                state = UiState(
+                    exercises = listOf(hangs),
+                    programsById = mapOf(hangs.protocolProgramId!! to hangsProgram),
+                    loading = false,
+                ),
+                exerciseId = hangs.id,
+                today = today,
+                onClose = { closed = true },
+            )
+        }
+        openMenu()
+        compose.onNodeWithText("Delete exercise").performClick()
+        settle()
+        compose.onNodeWithText("Delete").performClick()
+        settle()
+
+        assert(closed) { "onClose was not called after confirming the delete" }
+    }
+
+    /** Dismissing the warning leaves the exercise exactly as it was, screen still open. */
+    @Test
+    fun `dismissing the delete confirmation keeps the exercise`() {
+        detail()
+        openMenu()
+        compose.onNodeWithText("Delete exercise").performClick()
+        settle()
+        compose.onNodeWithText("Keep it").performClick()
+        settle()
+
+        compose.onNodeWithText("Delete this exercise?").assertDoesNotExist()
+        // the screen is still the one for this exercise, not closed
+        compose.onAllNodesWithText("Hangs").assertCountEquals(1)
     }
 }
