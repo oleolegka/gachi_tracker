@@ -38,10 +38,18 @@ import xyz.oleolegka.gachimuchi.domain.PortableExercise
  * both sides — see JournalBackupTest and JournalTransferTest for the round-trip itself. What it
  * catches is the narrower, actually-recurring defect: a column that a mapper never mentions at
  * all.
+ *
+ * `pictureId` (schema version 23) is excluded on different grounds from the other three: it is
+ * not local plumbing, it is a real, deliberate omission — the picture is a FILE in
+ * [xyz.oleolegka.gachimuchi.data.ExercisePictureStore], and a JSON backup cannot carry one, the
+ * same decision already made for the celebration gallery (see its own note in
+ * `ui/screens/SettingsScreen.kt`). Naming it here is what keeps that decision from being undone
+ * by accident the next time this test is "fixed" to make itself pass.
  */
 class PortableExerciseCoverageTest {
 
-    private val excludedEntityFields = setOf("id", "spaceId", "identityKey", "protocolProgramId")
+    private val excludedEntityFields =
+        setOf("id", "spaceId", "identityKey", "protocolProgramId", "pictureId")
 
     private fun instanceFieldNames(clazz: Class<*>): Set<String> =
         clazz.declaredFields

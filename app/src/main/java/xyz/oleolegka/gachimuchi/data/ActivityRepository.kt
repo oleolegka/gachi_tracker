@@ -545,6 +545,21 @@ class ActivityRepository(private val db: AppDatabase) {
         db.exercises().setBodyweightShare(exerciseId, share)
 
     /**
+     * Points an exercise at a picture, or takes the picture away (null) — see
+     * [xyz.oleolegka.gachimuchi.data.db.ExerciseEntity.pictureId].
+     *
+     * A one-column write, like [setOneSided] beside it: the FILE this id names is
+     * [xyz.oleolegka.gachimuchi.data.ExercisePictureStore]'s concern, not this repository's —
+     * it needs a `Context` this class is deliberately never handed (see
+     * [xyz.oleolegka.gachimuchi.data.GalleryStore] for the same split). The caller is expected
+     * to have already copied the new file in, and to
+     * remove the old one after this returns; see `ui/components/ExerciseEditor.kt`, the only
+     * caller, for where that happens.
+     */
+    suspend fun setPicture(exerciseId: Long, pictureId: String?) =
+        db.exercises().setPictureId(exerciseId, pictureId)
+
+    /**
      * Cancels a set: the journal is append-only, so a REVERSING event is written while
      * the set itself stays in the history (the reducers exclude it).
      *
