@@ -239,10 +239,21 @@ data class WorkoutLogActions(
     /**
      * Mark one CARD done — see `ActivityRepository.finishWorkoutExercise` (§14.2).
      *
-     * A status and not a lock, the same rule [finish] follows for the whole workout: the card
-     * keeps everything already on it and can still be written into. What changes is that the
-     * card stops offering to take a tap, collapses, and joins the finished group above every
-     * active card.
+     * The card keeps everything already on it, collapses, and joins the finished group above
+     * every active card.
+     *
+     * ── Where this DIFFERS from finishing the whole workout, deliberately ───────────
+     * A finished workout is a status and not a lock: its cards stay tappable, and the set
+     * remembered on the way to the car goes straight in. A finished CARD is not that. The ask
+     * was "so it gets in the way less and cannot be tapped again by accident", and on this
+     * screen a tap on the card is the only way to the entry form — so the tap goes, and with
+     * it the only route to logging into this card until "Back to active" puts it among the
+     * active ones again.
+     *
+     * The DOMAIN still refuses nothing (see TYPE_WORKOUT_EXERCISE_FINISHED): a set landing on
+     * a finished card is recorded and does not un-finish it, which is what keeps a set arriving
+     * from anywhere else — an import, a merge, a later screen — from being dropped on the
+     * floor. It is this screen, and only this screen, that stops offering.
      */
     val finishExercise: (exercise: ExerciseLink, side: HoldSide?) -> Unit,
 
@@ -391,10 +402,25 @@ fun WorkoutLogScreen(
      */
     val liveKeys = { live.map { it.cardKey } }
     val shownKeys = { preview ?: liveKeys() }
+    /*
+     * THE TWO GROUPS A CARD CAN BE DRAGGED WITHIN, and the reason a card cannot leave its own.
+     *
+     * Finished cards are drawn above the active ones and ordered by when they were finished
+     * (domain/Workout.kt, groupedByCardStatus). A drag that carried a card across the line
+     * would write an order this screen would then throw away on the next fold - the gesture
+     * would appear to work, land nowhere, and leave the person who made it to guess why. The
+     * grouping is what stops the gesture at the boundary instead.
+     *
+     * Read off the LIVE cards rather than the preview: what group a card belongs to is a fact
+     * about the workout, not about a drag in progress, and mid-drag the preview is exactly the
+     * thing being second-guessed.
+     */
+    val groupOfCard = { key: String -> live.firstOrNull { it.cardKey == key }?.finished }
     val reorder = rememberReorderState(
         listState = listState,
         keys = shownKeys,
         onOrder = { order -> preview = order },
+        groupOf = groupOfCard,
     )
 
     /**

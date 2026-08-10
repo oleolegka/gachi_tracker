@@ -279,22 +279,21 @@ class ActivityRepository(private val db: AppDatabase) {
      * [unfinishWorkoutExercise] rather than by a re-open, because there is nothing here to
      * re-open.
      *
-     * ── The second write ─────────────────────────────────────────────────────────
-     * Also states a fresh [TYPE_WORKOUT_ORDER_SET] that puts this card right after every card
-     * already finished and ahead of every one still active — see the note on
-     * [Workout.exercises]. That is what makes the finished group read in the order the cards
-     * were actually finished in: a plain fold of the flat order would only get that right by
-     * coincidence (the order the exercises happened to be added in), so the completion order
-     * is written down here the same way any other order this app cares about is — as an
-     * explicit event, not inferred.
+     * ── ONE write, and why there is no second one ─────────────────────────────────
+     * This used to also state a fresh [TYPE_WORKOUT_ORDER_SET] putting the card ahead of the
+     * active ones, so that the finished group would read in completion order. It was both
+     * redundant and unreachable in its effect: `groupedByCardStatus` already orders that group
+     * by the id of the very event written above, and it does so on every fold, so the order
+     * this wrote was thrown away the moment it was read back. Two mechanisms deciding one
+     * order is a disagreement waiting to happen, and the one that always won is the cheaper.
      *
-     * Skipped when [workoutId] names no live workout, or when [exercise] (at [side]) names no
-     * live card of it — the finish event is still written either way, exactly as
-     * [setWorkoutExerciseOrder] would be called with nothing to say if it ran off a workout
-     * that no longer exists; there is simply no order left to restate.
+     * Cheaper by a lot, and on the path a finger is on: producing that order meant folding
+     * THE WHOLE JOURNAL ([allEvents] plus [buildWorkout]) to learn the current arrangement of
+     * one workout. The journal only grows — deletions are events too — so the cost of tapping
+     * "done" grew with every session ever recorded. What is left is two lookups by id and one
+     * insert, which is what the whole-workout [finishWorkout] beside it always did.
      */
     suspend fun finishWorkoutExercise(workoutId: Long, exercise: ExerciseLink, side: HoldSide? = null): Long {
-        val before = buildWorkout(allEvents(), workoutId)
         val workoutUid = db.events().byId(workoutId)?.uid
         val exerciseUid = exercise.uid ?: exercise.id?.let { db.exercises().byId(it)?.uid }
         val id = db.events().insert(
@@ -310,12 +309,6 @@ class ActivityRepository(private val db: AppDatabase) {
                 workoutUid = workoutUid,
             )
         )
-        val target = before?.exercises?.firstOrNull { it.exercise.matches(exercise) && it.side == side }
-        if (before != null && target != null) {
-            val (doneAlready, stillActive) = before.exercises.partition { it.finished }
-            val newOrder = doneAlready + target + stillActive.filterNot { it.cardKey == target.cardKey }
-            setWorkoutExerciseOrder(workoutId, newOrder.map { OrderedCard(it.exercise, it.side) })
-        }
         return id
     }
 
