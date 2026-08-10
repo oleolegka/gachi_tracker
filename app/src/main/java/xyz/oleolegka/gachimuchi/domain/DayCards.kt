@@ -240,7 +240,13 @@ private fun placedWorkout(
     running: Boolean,
 ): Placed {
     val entries = workout.exercises.flatMap { it.sets } + workout.entriesWithoutExercise
-    val times = clockTimes(entries.map { it.ts } + workout.ts, workout.opDate)
+    // happenedAt, not ts: a corrected entry's ts is when the CORRECTION was typed, which can
+    // land on a different calendar day than opDate and drop a genuinely-timed set out of the
+    // range for a reason that has nothing to do with when it was trained — see clockTimes.
+    // workout.ts is left as its own write time (a rename writes a new start row too, and the
+    // same gap remains open for the workout's OWN clock reading — a smaller, rarer version of
+    // the same seam, not closed here).
+    val times = clockTimes(entries.map { it.happenedAt } + workout.ts, workout.opDate)
     // the name is the SNAPSHOT taken when the workout was started, never the plan's name as
     // it reads today: the plan is editable and this is a fact about a day already lived. The
     // plan is still linked, it is simply not asked what the workout is called.
@@ -283,7 +289,7 @@ private fun workoutSubtitle(workout: Workout, running: Boolean): String {
 }
 
 private fun placedSingle(group: LooseGroup, recordOf: Map<Long, RecordHit?>): Placed {
-    val times = clockTimes(group.entries.map { it.ts }, group.opDate)
+    val times = clockTimes(group.entries.map { it.happenedAt }, group.opDate)
     return Placed(
         minute = times.minOrNull()?.let { parseMinuteOfDay(it) },
         rank = RANK_FACT,
@@ -345,11 +351,16 @@ private fun looseGroups(events: List<JournalEvent>, opDate: String): List<LooseG
 // --- the small pieces -------------------------------------------------------------------
 
 /**
- * "HH:mm" of each timestamp that was WRITTEN on the day it is filed under, in order.
+ * "HH:mm" of each timestamp that falls on the day it is filed under, in order.
  *
  * The condition is the one domain/Schedule.kt already applies to its own stamps: an entry
  * backfilled on another day carries the time it was TYPED, and printing "recorded at 23:40"
- * on a workout that happened last Tuesday morning would be a plausible-looking lie.
+ * on a workout that happened last Tuesday morning would be a plausible-looking lie. Callers
+ * hand this [happenedAt] rather than the row's write time [JournalEvent.ts] for exactly the
+ * same reason: for an ORIGINAL entry the two agree, so a genuine backfill is excluded exactly
+ * as before, but for a CORRECTED one [happenedAt] is the honest answer and [ts] is the
+ * correction's own moment — using [ts] there would drop a set that really was trained at
+ * 18:20 out of its card's time range for no better reason than a typo fixed a week later.
  */
 private fun clockTimes(timestamps: List<String>, opDate: String): List<String> =
     timestamps.mapNotNull { ts ->

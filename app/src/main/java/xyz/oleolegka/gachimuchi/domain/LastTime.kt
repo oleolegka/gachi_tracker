@@ -20,7 +20,13 @@ package xyz.oleolegka.gachimuchi.domain
 data class LastTime(
     /** The day those sets belong to — the workout's own date, not the day they were typed. */
     val opDate: String,
-    /** Every set of the exercise on that day, in journal order. Never empty. */
+    /**
+     * Every set of the exercise on that day, in the order they were actually done — by
+     * [happenedAt], not journal order. "60 kg x 9, 60 kg x 8, 60 kg x 6" tells a story about
+     * how the session went; a correction to the first of the three, written after the other
+     * two, must not read "60 kg x 8, 60 kg x 6, 60 kg x 9" just because its own row landed at
+     * the end of the journal. Never empty.
+     */
     val sets: List<ActivityEvent>,
 )
 
@@ -59,5 +65,11 @@ fun lastTimeOf(
         .filter { entry -> start == null || entry.workout?.matches(start) != true }
 
     val day = done.maxOfOrNull { it.opDate } ?: return null
-    return LastTime(opDate = day, sets = done.filter { it.opDate == day })
+    return LastTime(
+        opDate = day,
+        // happenedAt first, then id (journal order) as the tie-break for two sets the clock
+        // cannot tell apart — see [LastTime.sets] for why journal order alone is the wrong
+        // reading now that a correction can land anywhere in the journal
+        sets = done.filter { it.opDate == day }.sortedWith(compareBy({ it.happenedAt }, { it.id })),
+    )
 }

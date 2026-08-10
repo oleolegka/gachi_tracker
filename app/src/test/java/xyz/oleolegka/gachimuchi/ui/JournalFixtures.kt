@@ -197,6 +197,37 @@ class Journal {
         )
     }
 
+    /**
+     * Corrects a strength set the way [xyz.oleolegka.gachimuchi.data.ActivityRepository.amendEntry]
+     * writes one today: a whole new row of the corrected values, WRITTEN at [at] on
+     * [writtenOn] (which defaults to right after the target, same day, as an ordinary same-session
+     * fix would be) but inheriting the target's own happened-at time — see domain/Amendments.kt's
+     * header, "A correction is now a whole new row". Returns the new version's id.
+     */
+    fun correctStrengthSet(
+        eventId: Long,
+        exercise: ExerciseRef,
+        day: String,
+        reps: Int = 5,
+        weightKg: Double = 60.0,
+        writtenOn: String,
+        at: String,
+    ): Long {
+        val target = rows.first { it.id == eventId }
+        val form = strengthSetOf(exercise, day, reps = reps, weightKg = weightKg)
+        val newVersion = JournalEvent(
+            nextId++, "${writtenOn}T$at:00", 1, 1, form.type, form.toPayload(),
+            occurredTs = target.occurredTs ?: target.ts,
+        )
+        rows += newVersion
+        add(
+            TYPE_ENTRY_DELETED,
+            payloadJson.encodeToString(EntryDeleted(targetUid = target.uid, successorUid = newVersion.uid)),
+            newVersion.ts,
+        )
+        return newVersion.id
+    }
+
     /** A weigh-in: the one form that carries no exercise, in or out of a workout. */
     fun weighIn(day: String, kg: Double = 74.2, at: String = "07:30", workoutId: Long? = null): Long {
         val form = bodyweightOf(day, kg)

@@ -336,13 +336,22 @@ data class Session(
  * reducers drop them), but their events remain in the journal.
  *
  * ── What is deliberately STILL by write time ─────────────────────────────────────
- * The rest-before-a-set calculation and the record check both read the journal in ITS OWN
- * order, unchanged — [restBeforeSec]'s derived half is a gap between two ACTUAL writes (a set
- * typed up after the fact was never rested for, whatever [happenedAt] says it happened at), and
- * [recordAt] asks "was this a record against everything logged before it", which is a question
- * about the training log as it stood, not a question this change was asked to touch. Only the
- * FINAL order a group is handed back in — after both of those have already been computed — is
- * sorted by [happenedAt].
+ * The rest-before-a-set calculation reads the journal in ITS OWN order, unchanged —
+ * [restBeforeSec]'s derived half is a gap between two ACTUAL writes (a set typed up after the
+ * fact was never rested for, whatever [happenedAt] says it happened at). This is the one place
+ * write order stays the right answer: the floor measures wall-clock time between two writes,
+ * and a correction changes what a row says, never when it was typed.
+ *
+ * ── What is NOT, any more: the record check ───────────────────────────────────────
+ * [recordAt] used to ask "was this a record against everything EARLIER IN THE JOURNAL" — a
+ * question that quietly meant "everything with a smaller row id" for as long as an edit could
+ * not move. It can now: a corrected set is a whole new row appended at the END of the journal
+ * (domain/Amendments.kt's header) that may have happened FIRST. Judging it against rows that
+ * come after it in write order but before it in training order got the record wrong in both
+ * directions — a correction to an early set could steal a later set's record, or hand the
+ * correction one of its own it never broke. So [recordAt] now asks "was this a record against
+ * everything that happened EARLIER" — by [happenedAt], the same clock the display order and
+ * every other reader in this change reads through.
  *
  * Grouping goes by exercise_id, so entries spelled differently (the bot writes whatever
  * sentence it was given) still land in one block. Entries with no id (written before the
@@ -355,7 +364,7 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
     val labels = HashMap<String, Pair<Long?, String>>()
     val lastTs = HashMap<String, String>()
 
-    for ((index, ev) in all.withIndex()) {
+    for (ev in all) {
         if (ev.opDate != opDate) continue
         val exercise = ev.form.exerciseLink()
         val groupKey = exercise?.key ?: "name:${ev.key ?: ev.type}"
@@ -370,7 +379,7 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
             eventId = ev.id,
             ts = ev.ts,
             form = ev.form,
-            record = recordAt(all, index),
+            record = recordAt(all, ev),
             restBeforeSec = rest,
             happenedAt = ev.happenedAt,
         )
@@ -391,17 +400,24 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
 }
 
 /**
- * The record broken by the set at [index], compared against everything EARLIER in the
- * journal — the same comparison the bot performs at write time. Entries with no
- * exercise_id are skipped: there is nothing to compare them against.
+ * The record [target] broke, compared against everything that happened EARLIER — the same
+ * comparison the bot performs at write time, asked of the training log AS IT ACTUALLY
+ * UNFOLDED rather than as it happens to be laid out on disk. Entries with no exercise_id are
+ * skipped: there is nothing to compare them against.
+ *
+ * "Earlier" is decided by [happenedAt] and not by position in [all] — see this function's own
+ * caller, [buildSession], for why a row's journal position stopped being a safe stand-in for
+ * when it happened. [isBefore] is the same happenedAt-then-id rule every other "the order
+ * things really happened in" reader in this file and domain/Workout.kt settles a tie by, so a
+ * set that lands in the same wall-clock second as another is judged the same way everywhere.
  */
-private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
-    val prior = all.subList(0, index)
-    val exercise = all[index].form.exerciseLink() ?: return null
+private fun recordAt(all: List<ActivityEvent>, target: ActivityEvent): RecordHit? {
+    val exercise = target.form.exerciseLink() ?: return null
+    val prior = all.filter { isBefore(it, target) }
     fun <T : ActivityForm> priorOf(pick: (ActivityForm) -> T?): List<T> =
         prior.mapNotNull { pick(it.form)?.takeIf { _ -> it.form.exerciseLink()?.matches(exercise) == true } }
 
-    return when (val form = all[index].form) {
+    return when (val form = target.form) {
         // outward one branch — LoadedSet is the only pair that has a record model at all; which
         // record function applies still depends on the concrete form, so that stays nested
         is LoadedSet -> when (form) {
@@ -416,6 +432,14 @@ private fun recordAt(all: List<ActivityEvent>, index: Int): RecordHit? {
         else -> null
     }
 }
+
+/**
+ * Whether [a] happened strictly before [b] — [happenedAt] first, [ActivityEvent.id] (journal
+ * order) as the tie-break for two entries the clock cannot tell apart, the same rule
+ * [buildSession]'s own group sort and domain/Workout.kt already settle a same-second tie by.
+ */
+private fun isBefore(a: ActivityEvent, b: ActivityEvent): Boolean =
+    a.happenedAt < b.happenedAt || (a.happenedAt == b.happenedAt && a.id < b.id)
 
 /**
  * The rest a form states outright (the bot writes it; the app does not).
