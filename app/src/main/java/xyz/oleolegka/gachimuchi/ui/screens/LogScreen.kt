@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +43,7 @@ import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.Session
 import xyz.oleolegka.gachimuchi.domain.SessionGroup
 import xyz.oleolegka.gachimuchi.domain.SessionSet
@@ -122,7 +124,14 @@ fun LogScreen(
     timer: TimerUiState,
     timerActions: TimerActions,
     onEnableTimer: () -> Unit,
-    onStartExerciseProgram: (ExerciseRef) -> Unit,
+    /**
+     * Starts the one-tap program — a [ProgramStart] rather than an [ExerciseRef], because
+     * this screen is the one place a protocol-led run can begin with no card to already carry
+     * the side (see [MainViewModel.startProgramForExercise][xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise]).
+     * The dialogs below build the [ProgramStart] before this is ever called, so it always
+     * arrives complete.
+     */
+    onStartExerciseProgram: (ProgramStart) -> Unit,
     onSelectExercise: (Long?) -> Unit,
     onCreateExercise: (String, ExerciseForm, Double?, Double?) -> Unit,
     onAddSet: (ActivityForm) -> Unit,
@@ -134,6 +143,28 @@ fun LogScreen(
     val session = remember(state.events, iso) { buildSession(state.events, iso) }
     val active = state.refById(activeExerciseId)
     var picking by remember { mutableStateOf(false) }
+
+    /*
+     * ── The two questions a one-tap program can owe before it starts ─────────────────
+     * Inside a workout both are answered by the card that was tapped: the SIDE is which of
+     * the exercise's two cards it is, the PLATE comes from [WeightDialog] once §13.5 decides
+     * one is worth asking. Here there is no card — only the entry panel's single active
+     * exercise — so the same two questions are asked in dialogs instead of being skipped, and
+     * [beginProgram] is the one place that decides which of them, if either, is still owed
+     * before [onStartExerciseProgram] is allowed to be called at all.
+     */
+    var choosingSideFor by remember { mutableStateOf<ExerciseRef?>(null) }
+    var weighingProgramFor by remember { mutableStateOf<ExerciseRef?>(null) }
+    var weighingProgramSide by remember { mutableStateOf<HoldSide?>(null) }
+
+    fun beginProgram(exercise: ExerciseRef, side: HoldSide?) {
+        if (lastAddedKg(state, exercise) == null) {
+            onStartExerciseProgram(ProgramStart(exercise, side, null))
+        } else {
+            weighingProgramFor = exercise
+            weighingProgramSide = side
+        }
+    }
 
     /*
      * A first run has nothing to log against, and every prompt on this screen would
@@ -185,7 +216,17 @@ fun LogScreen(
                     state = timer,
                     actions = timerActions,
                     exercise = active,
-                    onStartExerciseProgram = { active?.let(onStartExerciseProgram) },
+                    onStartExerciseProgram = {
+                        active?.let { exercise ->
+                            // one-sided: the card that would have carried this answer does
+                            // not exist here, so it is asked for instead of defaulted away
+                            if (exercise.oneSided) {
+                                choosingSideFor = exercise
+                            } else {
+                                beginProgram(exercise, side = null)
+                            }
+                        }
+                    },
                     onEnable = onEnableTimer,
                 )
                 EntryPanel(
@@ -217,6 +258,30 @@ fun LogScreen(
             onPick = onSelectExercise,
             onCreate = onCreateExercise,
             onDismiss = { picking = false },
+        )
+    }
+
+    choosingSideFor?.let { exercise ->
+        SideDialog(
+            exerciseName = exercise.name,
+            onConfirm = { side ->
+                choosingSideFor = null
+                beginProgram(exercise, side)
+            },
+            onDismiss = { choosingSideFor = null },
+        )
+    }
+
+    weighingProgramFor?.let { exercise ->
+        WeightDialog(
+            exerciseName = exercise.name,
+            initialKg = lastAddedKg(state, exercise),
+            onConfirm = { kg ->
+                onStartExerciseProgram(ProgramStart(exercise, weighingProgramSide, kg))
+                weighingProgramFor = null
+                weighingProgramSide = null
+            },
+            onDismiss = { weighingProgramFor = null; weighingProgramSide = null },
         )
     }
 }
@@ -514,6 +579,47 @@ private fun SideChooser(
             color = colors.inkSecondary,
         )
     }
+}
+
+/**
+ * Which hand the one-tap program belongs to, asked before it starts.
+ *
+ * Every other place a protocol-led run can begin already has a CARD that answers this: the
+ * two per-side cards a one-sided exercise gets inside a workout (see [WorkoutLogScreen]).
+ * This screen has no card, only the entry panel's single active exercise, so the question is
+ * put in a dialog that blocks the run rather than one that gets skipped — an unanswered side
+ * used to mean a set that dropped out of both hands' records (see
+ * [xyz.oleolegka.gachimuchi.domain.ProgramStart]).
+ *
+ * Draws [SideChooser] itself rather than a second chip row: the manual entry card just below
+ * asks this exact question the exact same way, and a program run is not allowed to ask it
+ * differently.
+ */
+@Composable
+private fun SideDialog(exerciseName: String, onConfirm: (HoldSide) -> Unit, onDismiss: () -> Unit) {
+    var side by remember(exerciseName) { mutableStateOf<HoldSide?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Which side?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(exerciseName, style = MaterialTheme.typography.titleSmall)
+                SideChooser(
+                    oneSided = true,
+                    fixedSide = null,
+                    side = side,
+                    onSideChange = { side = it },
+                    sideMissing = side == null,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { side?.let(onConfirm) }, enabled = side != null) {
+                Text("Start the set")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**

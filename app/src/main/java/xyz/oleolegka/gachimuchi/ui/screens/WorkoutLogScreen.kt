@@ -865,8 +865,12 @@ private fun lastSetOf(workout: Workout): Long? =
  *
  * Only hold sets carry an added weight, which is also the only form that carries a protocol —
  * so this is the whole of the question for every exercise that can reach it.
+ *
+ * `internal` rather than `private`: [LogScreen] asks the same §13.5 question before its own
+ * one-tap program starts, and it has to be the SAME question — a second copy would drift the
+ * first time one of the two screens changed what counts as "nothing was hung".
  */
-private fun lastAddedKg(state: UiState, exercise: ExerciseRef): Double? =
+internal fun lastAddedKg(state: UiState, exercise: ExerciseRef): Double? =
     lastHoldSet(state.events, exercise.link)?.addedKg?.takeIf { it != 0.0 }
 
 /**
@@ -1217,9 +1221,13 @@ private fun RestDialog(
  * with the field cleared. This dialog is only ever raised when the last set DID carry one
  * (see [lastAddedKg]), so the ordinary path is one tap on a number that is already right, and
  * the only thing that ever needs typing is the day the plate comes off or changes.
+ *
+ * `internal` rather than `private`: [LogScreen] raises the exact same dialog before its own
+ * one-tap program starts, on the same §13.5 rule — see [lastAddedKg]'s own note on why that
+ * has to stay one question asked one way rather than two that can drift apart.
  */
 @Composable
-private fun WeightDialog(
+internal fun WeightDialog(
     exerciseName: String,
     initialKg: Double?,
     onConfirm: (Double?) -> Unit,

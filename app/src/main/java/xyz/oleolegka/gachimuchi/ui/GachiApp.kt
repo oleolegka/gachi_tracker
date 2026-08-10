@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
@@ -467,7 +468,7 @@ fun GachiApp(viewModel: MainViewModel) {
                     },
                     unfinishExercise = viewModel::unfinishWorkoutExercise,
                     startProtocolSet = { exercise, addedKg, side ->
-                        viewModel.startProgramForExercise(exercise, addedKg, side)
+                        viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
                         conductorOpen = true
                     },
                     openConductor = { conductorOpen = true },

@@ -31,6 +31,7 @@ import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.RestFloor
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
@@ -639,30 +640,39 @@ class MainViewModel(
      * the catalog row, the rep count comes from the last set of it that was logged, the set
      * count from the settings, and the pause between sets from what was actually rested.
      *
-     * [addedKg] is the one thing that can be asked first, and only when there is a reason to
-     * (§13.5) — the caller decides that, because the caller is the one that would be putting
-     * the extra screen in front of the user.
+     * Takes a single [ProgramStart] rather than the exercise, the plate and the side as three
+     * loose parameters — see that type's own KDoc for why. In short: with three independent
+     * parameters, two of them defaulted to null, a caller could supply the exercise and
+     * quietly skip the other two, which is exactly what let a standalone one-sided run start
+     * with no side and vanish from both hands' records. A [ProgramStart] cannot be built
+     * without an answer for [ProgramStart.side], even when that answer is "there is no side
+     * to answer for".
      *
-     * [side] names the CARD this run was started from, for an exercise trained one limb at a
-     * time — the same answer the manual entry form is handed as `fixedSide`. It travels with
-     * the run (`RunSnapshot.side`) and comes back out on every set the run's offer writes
-     * ([logRunSets]), which is what makes the two cards of a protocol-led one-sided exercise
-     * lead to two distinguishable runs instead of one that forgets which hand it was.
+     * [ProgramStart.addedKg] is the one thing that can be asked first, and only when there is
+     * a reason to (§13.5) — the caller decides that, because the caller is the one that would
+     * be putting the extra screen in front of the user.
+     *
+     * [ProgramStart.side] names the CARD this run was started from, for an exercise trained
+     * one limb at a time — the same answer the manual entry form is handed as `fixedSide`. It
+     * travels with the run (`RunSnapshot.side`) and comes back out on every set the run's
+     * offer writes ([logRunSets]), which is what makes the two cards of a protocol-led
+     * one-sided exercise lead to two distinguishable runs instead of one that forgets which
+     * hand it was.
      */
-    fun startProgramForExercise(exercise: ExerciseRef, addedKg: Double? = null, side: HoldSide? = null) {
-        _entryAddedKg.value = addedKg
+    fun startProgramForExercise(start: ProgramStart) {
+        _entryAddedKg.value = start.addedKg
         viewModelScope.launch {
             val events = repo.allEvents()
             val settings = timerSettings.value
-            val reps = lastHoldSet(events, exercise.link)?.reps ?: DEFAULT_HOLD_REPS
+            val reps = lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
-                exercise = exercise,
+                exercise = start.exercise,
                 reps = reps,
                 sets = settings.defaultSets,
-                restBetweenSetsSec = resolveRestSec(settings, events, exercise.id),
+                restBetweenSetsSec = resolveRestSec(settings, events, start.exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch
-            timer.start(program, exercise.id, RunOrigin.EXERCISE, side)
+            timer.start(program, start.exercise.id, RunOrigin.EXERCISE, start.side)
         }
     }
 
