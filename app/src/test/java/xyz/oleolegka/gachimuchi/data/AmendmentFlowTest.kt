@@ -18,15 +18,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
+import xyz.oleolegka.gachimuchi.data.db.EventEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
+import xyz.oleolegka.gachimuchi.domain.TYPE_STRENGTH_SET
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
+import xyz.oleolegka.gachimuchi.domain.toPayload
 import xyz.oleolegka.gachimuchi.domain.workoutsOn
 import java.time.LocalDate
 
@@ -92,6 +95,52 @@ class AmendmentFlowTest {
         assertEquals(62.5, set.weightKg!!, 1e-9)
         // the original, the new full version and the marker superseding the original: three rows
         assertEquals(3, repo.eventCount())
+    }
+
+    /**
+     * THE regression this occurred_ts field exists to close. Without it, correcting the first
+     * set would append its new version at the END of the journal — after the second and third
+     * sets, which were written later — and the session screen (drawing sets in journal order)
+     * would show it last. [ActivityRepository.amendEntry] carries the ORIGINAL set's
+     * occurred_ts onto the new version instead of stamping the correction's own moment, and
+     * [buildSession] sorts by it, so the display order is unmoved by an edit however long
+     * after the fact it happens.
+     *
+     * The three sets are inserted with explicit, minutes-apart `ts` (rather than through
+     * [repo.record], which stamps the real clock) so the test is not at the mercy of three
+     * calls happening to land in the same wall-clock second, which would make `happenedAt` tie
+     * between them and prove nothing about the ordering this test exists to check.
+     */
+    @Test
+    fun `correcting the first of three sets does not move it in the session's display order`() = runTest {
+        val bench = ref("Bench press")
+        val firstId = db.events().insert(
+            EventEntity(
+                ts = "${day}T10:00:00", type = TYPE_STRENGTH_SET,
+                payload = strengthSetOf(bench, day, reps = 5, weightKg = 60.0).toPayload(),
+            )
+        )
+        db.events().insert(
+            EventEntity(
+                ts = "${day}T10:05:00", type = TYPE_STRENGTH_SET,
+                payload = strengthSetOf(bench, day, reps = 5, weightKg = 62.5).toPayload(),
+            )
+        )
+        db.events().insert(
+            EventEntity(
+                ts = "${day}T10:10:00", type = TYPE_STRENGTH_SET,
+                payload = strengthSetOf(bench, day, reps = 5, weightKg = 65.0).toPayload(),
+            )
+        )
+
+        // a typo fixed well after the fact - the third set is already in the journal by now
+        repo.amendEntry(firstId, fields("reps" to 8))
+
+        val weights = buildSession(repo.allEvents(), day).groups.single().sets.map { (it.form as StrengthSet).weightKg }
+        assertEquals(listOf(60.0, 62.5, 65.0), weights)
+        // and the correction itself did land - this is not a test of the edit failing silently
+        val corrected = buildSession(repo.allEvents(), day).groups.single().sets.first()
+        assertEquals(8, (corrected.form as StrengthSet).reps)
     }
 
     @Test

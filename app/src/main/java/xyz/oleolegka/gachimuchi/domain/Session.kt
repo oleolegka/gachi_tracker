@@ -379,7 +379,13 @@ fun buildSession(events: List<JournalEvent>, opDate: String): Session {
 
     val groups = buckets.map { (key, sets) ->
         val (id, name) = labels.getValue(key)
-        SessionGroup(groupKey = key, exerciseId = id, name = name, sets = sets.sortedBy { it.happenedAt })
+        // happenedAt first, then eventId (journal order) as the tie-break for two sets that
+        // happened in the same wall-clock second — the same rule domain/Amendments.kt's
+        // journalView already settles a tie by, so two ties resolve the same way everywhere
+        SessionGroup(
+            groupKey = key, exerciseId = id, name = name,
+            sets = sets.sortedWith(compareBy({ it.happenedAt }, { it.eventId })),
+        )
     }
     return Session(opDate, groups)
 }

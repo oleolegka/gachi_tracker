@@ -739,7 +739,10 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      */
     val blocks = sets.map { (key, ofExercise) ->
         WorkoutExercise(
-            links.getValue(key), rests[key], ofExercise.sortedBy { it.happenedAt },
+            links.getValue(key), rests[key],
+            // happenedAt first, then id (journal order) for a same-second tie, the same rule
+            // buildSession settles its own tie by
+            ofExercise.sortedWith(compareBy({ it.happenedAt }, { it.id })),
             addedRows[key].orEmpty(), sides[key], finishedEventId = cardFinished[key],
         )
     }
@@ -888,7 +891,8 @@ fun workoutEventIds(events: List<JournalEvent>, workoutId: Long): List<Long> {
 fun workoutsOn(events: List<JournalEvent>, opDate: String): List<Workout> =
     workoutStarts(events)
         .filter { (row, started) -> (started?.opDate ?: row.writeDay()) == opDate }
-        .sortedBy { (row, _) -> row.happenedAt }
+        // happenedAt first, then id (journal order) for a same-second tie
+        .sortedWith(compareBy({ (row, _) -> row.happenedAt }, { (row, _) -> row.id }))
         .mapNotNull { (row, _) -> buildWorkout(events, row.id) }
 
 /**
