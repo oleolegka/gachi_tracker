@@ -1,10 +1,13 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -15,10 +18,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ActivityEvent
+import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.ui.fmtDuration
 import xyz.oleolegka.gachimuchi.ui.summaryLine
@@ -142,6 +147,9 @@ private fun EntryLine(
 ) {
     val colors = LocalGachiColors.current
     val summary = entry.form.summaryLine()
+    // the only thing on the row that can say a set does not count towards a record - the
+    // reps and the weight next to it look exactly like a working set's (Records.kt)
+    val warmup = (entry.form as? LoadedSet)?.warmup == true
     var confirming by remember(entry.id) { mutableStateOf(false) }
 
     val menu = buildList {
@@ -169,6 +177,7 @@ private fun EntryLine(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
+                if (warmup) WarmupBadge(Modifier.padding(end = 6.dp))
                 clockOf(entry)?.let { Text(it, fontSize = 10.sp, color = colors.inkMuted) }
             }
             /*
@@ -210,6 +219,31 @@ private fun EntryLine(
             onDismiss = { confirming = false },
         )
     }
+}
+
+/**
+ * "Warm-up" - the one thing on a row that tells a ramp-up set apart from a working one.
+ *
+ * Nothing else does: the reps and the weight of a warm-up set look exactly like a working
+ * set's, and domain/Records.kt silently leaves it out of every record it judges. Without
+ * this a user reading "60 x 5, 60 x 8, 65 x 5" back has no way to tell why the first one
+ * did not win anything - the badge is that answer, kept small and neutral (the muted role,
+ * not [GachiColors.warning] - a warm-up is not a problem, just a set that does not count).
+ */
+@Composable
+private fun WarmupBadge(modifier: Modifier = Modifier) {
+    val colors = LocalGachiColors.current
+    Text(
+        "Warm-up",
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(colors.recessed)
+            .border(1.dp, colors.border, RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+        fontSize = 9.5.sp,
+        fontWeight = FontWeight.Medium,
+        color = colors.inkMuted,
+    )
 }
 
 /**
