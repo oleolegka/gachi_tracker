@@ -327,4 +327,70 @@ class AmendmentsTest {
         assertEquals(1, readActivities(events).size)
         assertEquals(setOf("2026-08-06"), activeDays(events, "2026-08-01", "2026-08-31"))
     }
+
+    // --- exercise deletion cascades through the same fold ---
+
+    private fun exerciseDeleted(targetUid: String? = null, targetId: Long? = null, ts: String = "2026-08-06T13:00:00") =
+        JournalEvent(
+            nextId++, ts, 1, 1, TYPE_EXERCISE_DELETED,
+            payloadJson.encodeToString(ExerciseDeleted(targetId = targetId, targetUid = targetUid)),
+        )
+
+    @Test
+    fun `deleting an exercise hides every set naming it by uid`() {
+        val set = ev(bench().copy(exerciseUid = "ex-1"))
+        val other = ev(bench().copy(exerciseUid = "ex-2"))
+        val events = listOf(set, other, exerciseDeleted(targetUid = "ex-1"))
+
+        val left = readActivities(events).map { (it.form as StrengthSet).exerciseUid }
+        assertEquals(listOf("ex-2"), left)
+        // untouched forever: still in the journal, still readable through the history
+        assertEquals(2, readActivities(events, includeDeleted = true).size)
+    }
+
+    @Test
+    fun `deleting an exercise also hides a row that only ever named it by number`() {
+        // pre-uid-migration row: no exercise_uid in the payload at all, only the local id
+        val set = ev(bench(reps = 5)) // exerciseId = 1, exerciseUid = null
+        val events = listOf(set, exerciseDeleted(targetId = 1))
+
+        assertTrue(readActivities(events).isEmpty())
+    }
+
+    @Test
+    fun `deleting an exercise takes its workout-added and workout-finished rows with it`() {
+        val added = JournalEvent(
+            nextId++, "2026-08-06T09:00:00", 1, 1, TYPE_WORKOUT_EXERCISE_ADDED,
+            payloadJson.encodeToString(WorkoutExerciseAdded(workoutId = 1, exerciseId = 1, exerciseUid = "ex-1", restSec = 90)),
+        )
+        val finished = JournalEvent(
+            nextId++, "2026-08-06T09:30:00", 1, 1, TYPE_WORKOUT_EXERCISE_FINISHED,
+            payloadJson.encodeToString(WorkoutExerciseFinished(workoutId = 1, exerciseId = 1, exerciseUid = "ex-1")),
+        )
+        val events = listOf(added, finished, exerciseDeleted(targetUid = "ex-1"))
+
+        val live = liveEvents(events).map { it.uid }
+        assertFalse(added.uid in live)
+        assertFalse(finished.uid in live)
+    }
+
+    @Test
+    fun `deleting the exercise deletion brings its history back, same as any other undo`() {
+        val set = ev(bench().copy(exerciseUid = "ex-1"))
+        val gone = exerciseDeleted(targetUid = "ex-1", ts = "2026-08-06T11:00:00")
+        val undo = delete(gone.uid, ts = "2026-08-06T12:00:00")
+
+        assertTrue(readActivities(listOf(set, gone)).isEmpty())
+        assertEquals(1, readActivities(listOf(set, gone, undo)).size)
+    }
+
+    @Test
+    fun `deletedExerciseLinks reports only the live deletions`() {
+        val gone = exerciseDeleted(targetUid = "ex-1", ts = "2026-08-06T11:00:00")
+        val undone = exerciseDeleted(targetUid = "ex-2", ts = "2026-08-06T11:00:00")
+        val undo = delete(undone.uid, ts = "2026-08-06T12:00:00")
+
+        val links = deletedExerciseLinks(listOf(gone, undone, undo))
+        assertEquals(listOf(ExerciseLink(uid = "ex-1", id = null)), links)
+    }
 }
