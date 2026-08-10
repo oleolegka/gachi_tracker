@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRecord
+import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.FormSeries
 import xyz.oleolegka.gachimuchi.domain.Granularity
 import xyz.oleolegka.gachimuchi.domain.HoldSide
@@ -49,12 +50,14 @@ import xyz.oleolegka.gachimuchi.domain.trendSeries
 import xyz.oleolegka.gachimuchi.domain.volumeSeries
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.BarChart
+import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.EmptyState
 import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.IdentityChip
 import xyz.oleolegka.gachimuchi.ui.components.LineChart
 import xyz.oleolegka.gachimuchi.ui.components.NoteText
+import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.SegmentControl
 import xyz.oleolegka.gachimuchi.ui.components.StatCard
@@ -102,6 +105,7 @@ fun FormDetailScreen(
 ) {
     var period by remember(exerciseId) { mutableStateOf(Period.MONTH) }
     var menuOpen by remember(exerciseId) { mutableStateOf(false) }
+    var confirmDelete by remember(exerciseId) { mutableStateOf(false) }
 
     val entity = state.exerciseById(exerciseId)
     val form = state.formOf(exerciseId)
@@ -119,6 +123,11 @@ fun FormDetailScreen(
     val activities = remember(state.events) { readActivities(state.events) }
     // the screen navigates by row number; the journal is keyed by identity (see ExerciseLink)
     val link = remember(state.exercises, exerciseId) { state.linkOf(exerciseId) }
+    // what the delete confirmation warns about: not "are you sure" on its own, but how many
+    // entries are about to stop being shown anywhere
+    val entryCount = remember(activities, link) {
+        activities.count { it.form.exerciseLink()?.matches(link) == true }
+    }
     val trendAll = remember(activities, link, form) { trendSeries(activities, link, form) }
     /*
      * The two catalog columns are passed rather than left to their defaults, and the defaults
@@ -200,6 +209,13 @@ fun FormDetailScreen(
                             onClick = {
                                 menuOpen = false
                                 editor.toggleHidden(entity)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete exercise") },
+                            onClick = {
+                                menuOpen = false
+                                confirmDelete = true
                             },
                         )
                     }
@@ -288,6 +304,29 @@ fun FormDetailScreen(
 
             item { RecordsBlock(form, records, today) }
         }
+    }
+
+    if (confirmDelete) {
+        ConfirmRemoveDialog(
+            title = "Delete this exercise?",
+            subject = entity.name,
+            explanation = (
+                if (entryCount == 0) {
+                    "Nothing has been recorded under it yet, so nothing else disappears with it. "
+                } else {
+                    "Its $entryCount ${if (entryCount == 1) "entry" else "entries"} go with it " +
+                        "and stop showing anywhere - the history, the calendar, its own trend " +
+                        "and records, the streak. "
+                }
+                ) + REMOVAL_IS_REVERSIBLE,
+            confirmLabel = "Delete",
+            onConfirm = {
+                confirmDelete = false
+                editor.delete(entity)
+                onClose()
+            },
+            onDismiss = { confirmDelete = false },
+        )
     }
 }
 

@@ -16,6 +16,8 @@ import xyz.oleolegka.gachimuchi.domain.AMENDMENT_PROTECTED_KEYS
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.EntryAmended
 import xyz.oleolegka.gachimuchi.domain.EntryDeleted
+import xyz.oleolegka.gachimuchi.domain.ExerciseDeleted
+import xyz.oleolegka.gachimuchi.domain.TYPE_EXERCISE_DELETED
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSet
@@ -874,13 +876,46 @@ class ActivityRepository(private val db: AppDatabase) {
     /**
      * Keeps an exercise out of the pickers, or brings it back.
      *
-     * NOT a delete, and there is no delete to offer instead — see [ExerciseEntity.hidden]. A
+     * NOT a delete — see [ExerciseEntity.hidden] and [deleteExercise] below for the other one. A
      * hidden exercise keeps every set it ever had, goes on counting in the totals it always
-     * counted in, and stays reachable from the overview, which is where it is brought back
-     * from.
+     * counted in, stays reachable from the overview, and — unlike a deleted one — its own
+     * history is still there to look at; hiding only ever touches the pickers.
      */
     suspend fun setHidden(exerciseId: Long, hidden: Boolean) =
         db.exercises().setHidden(exerciseId, hidden)
+
+    /**
+     * Removes an exercise from every reading of the app: its own row in the catalog, and every
+     * set, "added to a workout" and "card finished" row that names it.
+     *
+     * ── One event, not a DELETE ──────────────────────────────────────────────────
+     * The catalog row is untouched — still in the `exercises` table forever, exactly as it was
+     * — and so is every entry it ever collected. What is written is a [TYPE_EXERCISE_DELETED]
+     * event, and [xyz.oleolegka.gachimuchi.domain.journalView] is what turns it into "nowhere to
+     * be seen": the same fold that already does this for one entry at a time
+     * ([TYPE_ENTRY_DELETED]), extended to cascade from one exercise to everything that names it.
+     * See that event's own KDoc in domain/Forms.kt for why this is not a second
+     * [ExerciseEntity.hidden] column.
+     *
+     * Both links are written — [ExerciseEntity.id] and [ExerciseEntity.uid] — so that a row
+     * recorded before schema version 10, which may name this exercise by number alone, still
+     * folds dead along with everything logged about it since.
+     *
+     * Reversible the same way every other deletion in this app is: [deleteEntry] pointed at the
+     * uid of the event this returns undoes it, with no dedicated "restore" action needed. There
+     * is no button for that yet — see the app's own screens for what is actually offered today.
+     *
+     * Returns the id of the event written.
+     */
+    suspend fun deleteExercise(exercise: ExerciseEntity): Long =
+        db.events().insert(
+            event(
+                type = TYPE_EXERCISE_DELETED,
+                payload = payloadJson.encodeToString(
+                    ExerciseDeleted(targetId = exercise.id, targetUid = exercise.uid)
+                ),
+            )
+        )
 
     // --- calendar slots (§12-B) ---
 

@@ -96,6 +96,38 @@ const val TYPE_ENTRY_AMENDED = "entry_amended"
 const val TYPE_ENTRY_DELETED = "entry_deleted"
 
 /**
+ * "That EXERCISE should not be there at all." [TYPE_ENTRY_DELETED] one level up: about a
+ * catalog row rather than about one journal row.
+ *
+ * ── Why this is an event and not a second [ExerciseEntity.hidden] ───────────────
+ * Hiding already answers "keep this out of the pickers", and it is deliberately not what
+ * deletion means (the owner's own words): a hidden exercise's history stays fully readable,
+ * everywhere, on purpose. Deletion asks for the opposite — nothing about the exercise readable
+ * anywhere, including the history — and the journal already has exactly one mechanism for "this
+ * should not be read any more": an event that says so, folded by [journalView]. Adding a second
+ * boolean column next to [ExerciseEntity.hidden] would be a second way of hiding something,
+ * answering to nobody but itself; this is the first way, pointed at the catalog instead of at
+ * one row.
+ *
+ * ── One event hides the exercise's own row AND every entry about it ─────────────
+ * [journalView] does not stop at the catalog row this names. Every set, "added" and "finished"
+ * row that names the SAME exercise (by [ExerciseDeleted.link], matched the way
+ * [ExerciseLink.matches] always is) folds dead along with it, in the same pass — see the class
+ * KDoc there for the cascade. That is what makes this land in "the same filter" every other
+ * deletion already goes through, rather than a second mechanism that only the catalog list
+ * would have to know about.
+ *
+ * ── Undone the same way as everything else ───────────────────────────────────────
+ * This is a row with a uid like any other, so [TYPE_ENTRY_DELETED] can name IT — there is no
+ * dedicated "restore exercise" event, for the same reason there is no dedicated "restore entry"
+ * one.
+ *
+ * Nothing is erased anywhere: the catalog row is untouched forever, and every entry the cascade
+ * hides stays exactly as it was written. Only what is read changes.
+ */
+const val TYPE_EXERCISE_DELETED = "exercise_deleted"
+
+/**
  * Payload keys an amendment is not allowed to carry — everything that says WHICH thing an
  * event is about, as opposed to what happened.
  *
@@ -630,6 +662,31 @@ data class EntryDeleted(
         require(targetUid.isNotBlank()) { "entry_deleted: target_uid must name an event" }
     }
 }
+
+/**
+ * Payload of [TYPE_EXERCISE_DELETED]: which catalog exercise should stop being read anywhere.
+ *
+ * BOTH links, unlike [EntryDeleted] — the same reasoning [OrderedExercise] and
+ * [WorkoutExerciseFinished] already give for carrying id and uid together: an entry written
+ * before schema version 10 may name this exercise by its row number alone, with no uid to match
+ * against, and it still has to fold dead along with everything logged about the exercise since.
+ * Matched through [ExerciseLink.matches] like every other reference to one, never by comparing
+ * the raw fields here directly.
+ */
+@Serializable
+data class ExerciseDeleted(
+    @SerialName("target_id") val targetId: Long? = null,
+    @SerialName("target_uid") val targetUid: String? = null,
+) {
+    init {
+        require(targetId != null || targetUid != null) {
+            "exercise_deleted: an entry must name an exercise by uid or by id"
+        }
+    }
+}
+
+/** The two links read as one reference — see [ExerciseLink.matches]. */
+fun ExerciseDeleted.link(): ExerciseLink = ExerciseLink(targetUid, targetId)
 
 /**
  * Payload of [TYPE_WORKOUT_STARTED].
