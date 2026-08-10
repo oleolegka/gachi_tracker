@@ -21,6 +21,7 @@ import org.robolectric.shadows.ShadowSystemClock
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSet
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
@@ -281,7 +282,7 @@ class RunLoggingChainTest {
         val viewModel = MainViewModel(repo, programs, timer)
 
         // 1. the one-tap program from a catalog exercise
-        viewModel.startProgramForExercise(exercise)
+        viewModel.startProgramForExercise(ProgramStart(exercise, side = null, addedKg = null))
         settle()
         assertNotNull("the one-tap program never started", timer.run.value)
         assertEquals(RunOrigin.EXERCISE, timer.run.value!!.origin)

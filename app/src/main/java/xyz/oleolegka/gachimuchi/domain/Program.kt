@@ -426,6 +426,34 @@ fun programFromExercise(
     )
 }
 
+/**
+ * Everything the one-tap program needs from whatever it is launched FROM, bundled as one
+ * value rather than passed as three loose arguments.
+ *
+ * ── Why bundled ──────────────────────────────────────────────────────────────────
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise] used to take
+ * `exercise`, `addedKg` and `side` as three independent parameters, two of them defaulted
+ * to null. That let a caller supply the exercise and silently skip the other two — which is
+ * exactly what the standalone entry screen did, so a one-sided hangboard run started outside
+ * a workout wrote sets that named no side and dropped out of both hands' records. Folding
+ * the three into one required value removes the silent option: a screen that has not worked
+ * out [side] and [addedKg] cannot build a [ProgramStart] at all, so it cannot call the
+ * function that starts a run.
+ *
+ * [side] is nullable on purpose — most exercises are not trained one limb at a time, and for
+ * those there is nothing to ask. It is NOT optional to supply, only optional in what it may
+ * contain: every caller states an answer, even when that answer is "there is no side here".
+ *
+ * [addedKg] is the plate hung before the set, asked for only when there is a reason to
+ * (§13.5) — see [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen]'s `WeightDialog` for
+ * where that question is actually put to the user.
+ */
+data class ProgramStart(
+    val exercise: ExerciseRef,
+    val side: HoldSide?,
+    val addedKg: Double?,
+)
+
 // --- the two programs that ship with the app ------------------------------------------
 
 /**
