@@ -209,7 +209,7 @@ fun rememberExerciseEditor(): ExerciseEditor {
  * The correction itself: the name — the protocol is shown, never asked for.
  *
  * ── And two things that are not corrections ────────────────────────────────────
- * "One hand at a time" and "how much of you it lifts" are statements about the exercise that
+ * "One side at a time" and "how much of you it lifts" are statements about the exercise that
  * nothing else in the app could make. Both columns were being read — by the records block and
  * by the volume chart — while no control anywhere wrote them, so both features were dead on
  * arrival. They sit in the correction dialog because this is the one screen that shows an
@@ -324,23 +324,29 @@ private fun EditExerciseDialog(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                if (hold) {
+                if (lifted) {
                     /*
                      * The one switch here that is not a correction of a typo.
                      *
-                     * It is what splits the record per hand, and until it existed anywhere in
+                     * It is what splits the record per side, and until it existed anywhere in
                      * the UI the whole per-side feature was unreachable: the entry form asks
-                     * for a hand only when the exercise claims to need one, and nothing could
+                     * for a side only when the exercise claims to need one, and nothing could
                      * make it claim that. Found from the phone, 2026-08-08.
+                     *
+                     * GATED ON [lifted], not on [hold]: a hangboard hang was never the only
+                     * thing trained one limb at a time — a pistol squat and a one-arm row are
+                     * the same asymmetry on a [StrengthSet] — and the mechanism underneath
+                     * (two workout cards, a rest floor per card, a record per side) never cared
+                     * which form the exercise was. Only this switch did, and that was the gap.
                      */
                     FilterChip(
                         selected = oneSided,
                         onClick = { oneSided = !oneSided },
-                        label = { Text("One hand at a time") },
+                        label = { Text("One side at a time") },
                     )
                     Text(
-                        "Each hand keeps its own record, and every set of this exercise is " +
-                            "asked which hand it was.",
+                        "Each side keeps its own record, and every set of this exercise is " +
+                            "asked which side it was.",
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }

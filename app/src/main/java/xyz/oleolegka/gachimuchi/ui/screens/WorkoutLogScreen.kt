@@ -1281,7 +1281,7 @@ private fun QuickEntrySheet(
     exercise: ExerciseRef,
     opDate: String,
     workoutId: Long,
-    /** The card this sheet was raised from already answered which hand — see [HoldEntry]. */
+    /** The card this sheet was raised from already answered which side — see [HoldEntry]. */
     fixedSide: HoldSide? = null,
     onAddSet: (ActivityForm) -> Unit,
     onDismiss: () -> Unit,
@@ -1320,7 +1320,7 @@ private fun QuickEntrySheet(
             )
 
             when (exercise.form) {
-                ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet)
+                ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet, fixedSide)
                 ExerciseForm.HOLD -> HoldEntry(state, exercise, opDate, onAddSet, fixedSide)
                 ExerciseForm.CARDIO -> CardioEntry(state, exercise, opDate, onAddSet)
                 ExerciseForm.DURATION -> DurationEntry(state, exercise, opDate, onAddSet)
