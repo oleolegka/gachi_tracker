@@ -22,6 +22,8 @@ import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
+import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.buildSession
@@ -29,7 +31,10 @@ import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.flatten
 import xyz.oleolegka.gachimuchi.domain.totalSec
+import xyz.oleolegka.gachimuchi.domain.workStepCount
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import xyz.oleolegka.gachimuchi.ui.MainViewModel
 import java.time.Duration
@@ -315,6 +320,82 @@ class RunLoggingChainTest {
          * one. It is gone because a rest is no longer a run — see the floors test below for
          * what recording a set starts now.
          */
+    }
+
+    /**
+     * A STRICT schedule (§18.15) is counted down exactly as it was written.
+     *
+     * The one-tap start used to rebuild every hold run out of the exercise's first block, a rep
+     * count guessed from the last logged set and a set count from the settings — right for a
+     * plain pair, which carries neither, and silently destructive for anything richer. Nothing
+     * said so: the run started, the phone spoke, and the second half of the schedule was simply
+     * not in it.
+     *
+     * Asserted on the flattened step list rather than on "some program started", because the
+     * failure this is about produced a perfectly good run of the wrong shape.
+     */
+    @Test
+    fun `a strict schedule is run exactly as it was written`() = runTest {
+        val schedule = programs.programById(
+            programs.save(
+                WorkoutProgram(
+                    name = "Repeaters",
+                    prepareSec = 15,
+                    groups = listOf(
+                        ProgramGroup(
+                            name = "Repeaters",
+                            blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = 6)),
+                            repeats = 4,
+                            restBetweenRepeatsSec = 180,
+                        )
+                    ),
+                )
+            )
+        )!!
+        val exercise = repo.toRef(
+            repo.exercise(
+                repo.ensureExercise("Hangs 20mm", ExerciseForm.HOLD, protocolProgramId = schedule.id)
+            )!!
+        )
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        viewModel.startProgramForExercise(ProgramStart(exercise, side = null, addedKg = null))
+        settle()
+
+        val run = timer.run.value
+        assertNotNull("the schedule never started", run)
+        assertEquals(RunOrigin.EXERCISE, run!!.origin)
+        assertEquals(exercise.id, run.exerciseId)
+        assertEquals(
+            "the stored schedule is what runs, step for step",
+            schedule.flatten(), run.steps,
+        )
+        assertEquals("24 hangs, not one pair times a guess", 24, schedule.workStepCount())
+    }
+
+    /**
+     * The other side of the same rule: a plain pair carries no rep or set count, so those still
+     * come from the journal and the settings. Nothing about the simple branch changed, and this
+     * is what says so.
+     */
+    @Test
+    fun `a simple pair is still multiplied out from the journal and the settings`() = runTest {
+        val exercise = hangs()
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        viewModel.startProgramForExercise(ProgramStart(exercise, side = null, addedKg = null))
+        settle()
+
+        val run = timer.run.value
+        assertNotNull(run)
+        assertTrue(
+            "a pair of 7:3 alone is two steps; the run has to be the multiplied-out version",
+            run!!.steps.count { it.name == "Hangs" } > 1,
+        )
     }
 
     // --- the two ways a one-tap program can be started must agree on the side ----------------

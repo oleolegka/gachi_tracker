@@ -1,0 +1,99 @@
+package xyz.oleolegka.gachimuchi.domain
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The three branches of a hold, told apart by the shape of the schedule alone (§18.15).
+ *
+ * The point of these tests is that no column was added and no migration ran: if the rule ever
+ * drifts, an exercise silently changes branch — and with it what it asks before a run — with
+ * nothing written down anywhere to say so.
+ */
+class HoldScheduleTest {
+
+    private fun pair(work: Int = 7, rest: Int = 3) = WorkoutProgram(
+        name = "Pair",
+        groups = listOf(
+            ProgramGroup(name = "Set", blocks = listOf(ProgramBlock("Hang", work, rest)))
+        ),
+    )
+
+    @Test
+    fun `no schedule at all is the free branch`() {
+        assertEquals(ScheduleKind.FREE, scheduleKindOf(null))
+    }
+
+    @Test
+    fun `one group one block no repeats is the simple pair`() {
+        assertEquals(ScheduleKind.SIMPLE_PAIR, scheduleKindOf(pair()))
+        assertTrue(pair().isSimplePair())
+    }
+
+    @Test
+    fun `repeats on the block make it strict`() {
+        val program = pair().let {
+            it.copy(groups = listOf(it.groups[0].copy(blocks = listOf(ProgramBlock("Hang", 7, 3, repeats = 6)))))
+        }
+        assertEquals(ScheduleKind.STRICT, scheduleKindOf(program))
+        assertFalse(program.isSimplePair())
+    }
+
+    @Test
+    fun `repeats on the group make it strict`() {
+        val program = pair().let { it.copy(groups = listOf(it.groups[0].copy(repeats = 4))) }
+        assertEquals(ScheduleKind.STRICT, scheduleKindOf(program))
+    }
+
+    @Test
+    fun `a second block makes it strict`() {
+        val program = pair().let {
+            it.copy(
+                groups = listOf(
+                    it.groups[0].copy(
+                        blocks = listOf(ProgramBlock("Hang", 7, 3), ProgramBlock("Pull", 5, 5))
+                    )
+                )
+            )
+        }
+        assertEquals(ScheduleKind.STRICT, scheduleKindOf(program))
+    }
+
+    @Test
+    fun `a second group makes it strict`() {
+        val program = pair().let { it.copy(groups = it.groups + it.groups) }
+        assertEquals(ScheduleKind.STRICT, scheduleKindOf(program))
+    }
+
+    /** The shipped repeaters protocol is the reference example of the strict branch. */
+    @Test
+    fun `hangboard repeaters are strict`() {
+        assertEquals(ScheduleKind.STRICT, scheduleKindOf(starterPrograms().first()))
+    }
+
+    /**
+     * The ambiguity §18.15 names out loud, pinned so nobody later "fixes" it by accident: a
+     * schedule hand-built as one group of one block reads as a simple pair, because it carries
+     * no more information than the two numbers do.
+     */
+    @Test
+    fun `a hand built one block schedule is indistinguishable from a typed pair`() {
+        val handBuilt = WorkoutProgram(
+            name = "Built by hand",
+            prepareSec = 42,
+            category = "Hangboard",
+            groups = listOf(
+                ProgramGroup(name = "Whatever", blocks = listOf(ProgramBlock("Hang", 7, 3)))
+            ),
+        )
+        assertEquals(ScheduleKind.SIMPLE_PAIR, scheduleKindOf(handBuilt))
+    }
+
+    @Test
+    fun `the summary names the pair, the effort count and the length`() {
+        val program = starterPrograms().first() // 7:3 x 6, four sets, 180 s between
+        assertEquals("7:3 - 24 efforts, ${formatClock(program.totalSec())}", program.scheduleSummary())
+    }
+}

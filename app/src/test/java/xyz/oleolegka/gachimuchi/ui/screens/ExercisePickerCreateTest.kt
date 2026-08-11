@@ -1,5 +1,8 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -11,6 +14,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ScheduleKind
+import xyz.oleolegka.gachimuchi.domain.totalSec
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.protocolProgram
@@ -94,6 +99,7 @@ class ExercisePickerCreateTest : ScreenTest() {
         tap(ExerciseForm.HOLD.title)
 
         tap("One side at a time")
+        tap(ScheduleKind.FREE.title)
         tap("Create and use")
 
         assertEquals(ExerciseForm.HOLD, created?.form)
@@ -125,7 +131,7 @@ class ExercisePickerCreateTest : ScreenTest() {
         assertEquals(false, created?.oneSided)
     }
 
-    // --- the protocol, and where it comes from ------------------------------------------
+    // --- the three branches of a hold (§18.15) ------------------------------------------
 
     private fun library() = UiState(
         loading = false,
@@ -134,49 +140,194 @@ class ExercisePickerCreateTest : ScreenTest() {
         ),
     )
 
+    /** The question is put at all — three cards, each with a sentence, and none preselected. */
     @Test
-    fun `a hold can be led by a program already in the library`() {
-        sheet(library())
+    fun `a hold is offered the three branches and starts on none of them`() {
+        sheet()
         name("Hangs")
         tap(ExerciseForm.HOLD.title)
 
-        // the chip names the program and the protocol it carries
-        tap("Fingerboard protocol - 7:3")
-        tap("Create and use")
-
-        assertEquals(protocolProgramIdFor(7), created?.protocolProgramId)
-        assertNull("a picked program IS the protocol - nothing is invented beside it", created?.workSec)
-        assertNull(created?.restSec)
+        ScheduleKind.entries.forEach {
+            compose.onNodeWithText(it.title).assertIsNotSelected()
+        }
     }
 
     /**
-     * The library is an ALTERNATIVE to typing, not a replacement: "New" is the default and
-     * the two numbers still describe a protocol of their own.
+     * The branch is what says whether the numbers are asked, so it has to be answered before
+     * the exercise can be made. Unanswered it is not a message on Save — the button that
+     * starts the thing is the thing that is off.
      */
     @Test
-    fun `typing the two numbers still works with a library present`() {
+    fun `a hold cannot be created until it says which of the three it is`() {
+        sheet()
+        name("Hangs")
+        tap(ExerciseForm.HOLD.title)
+
+        compose.onNodeWithText("Create and use").assertIsNotEnabled()
+        tap(ScheduleKind.FREE.title)
+        compose.onNodeWithText("Create and use").assertIsEnabled()
+    }
+
+    /** Free: no schedule, nothing asked, nothing invented. */
+    @Test
+    fun `the free branch creates a hold with no schedule at all`() {
         sheet(library())
         name("Hangs")
         tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.FREE.title)
+
+        // the branch chosen decides what else is on screen
+        compose.onNodeWithText("Work, s").assertDoesNotExist()
+        tap("Create and use")
+
+        assertNull(created?.workSec)
+        assertNull(created?.restSec)
+        assertNull(created?.protocolProgramId)
+        assertNull(created?.newProgram)
+    }
+
+    /** The simple pair is exactly what it always was: two numbers, and nothing beside them. */
+    @Test
+    fun `the simple pair branch still asks for the two numbers`() {
+        sheet(library())
+        name("Hangs")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.SIMPLE_PAIR.title)
 
         compose.onNodeWithText("Work, s").performTextReplacement("10")
         compose.onNodeWithText("Rest, s").performTextReplacement("5")
         settle()
         tap("Create and use")
 
-        assertNull(created?.protocolProgramId)
         assertEquals(10.0, created?.workSec)
         assertEquals(5.0, created?.restSec)
+        assertNull(created?.protocolProgramId)
+        assertNull(created?.newProgram)
     }
 
-    /** With nothing to choose from, the question is not put at all — just the two numbers. */
+    /**
+     * Half a pair is not a pair, and an empty one is not a free hold: the branch was named on
+     * purpose, so the form has to be finished rather than silently downgraded to the branch
+     * beside it. §18.9 makes that downgrade permanent, which is why it is refused at the
+     * button rather than tidied up afterwards.
+     */
     @Test
-    fun `an empty library offers no programs to be led by`() {
+    fun `the simple pair branch refuses to be created half filled`() {
         sheet()
         name("Hangs")
         tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.SIMPLE_PAIR.title)
 
-        compose.onNodeWithText("Protocol").assertDoesNotExist()
-        assertNotNull(compose.onNodeWithText("Work, s").fetchSemanticsNode())
+        compose.onNodeWithText("Create and use").assertIsNotEnabled()
+        compose.onNodeWithText("Work, s").performTextReplacement("10")
+        settle()
+        compose.onNodeWithText("Create and use").assertIsNotEnabled()
+        compose.onNodeWithText("Rest, s").performTextReplacement("5")
+        settle()
+        compose.onNodeWithText("Create and use").assertIsEnabled()
+    }
+
+    /**
+     * The twins case, and the reason library picking exists at all: "hang 20 mm" and
+     * "hang 15 mm" share one schedule deliberately (§18.15).
+     */
+    @Test
+    fun `the strict branch can take a schedule already in the library`() {
+        sheet(library())
+        name("Hangs 20 mm")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.STRICT.title)
+
+        // the row names the schedule and says what is in it
+        tap("Fingerboard protocol")
+        tap("Create and use")
+
+        assertEquals(protocolProgramIdFor(7), created?.protocolProgramId)
+        assertNull("a chosen schedule IS the schedule - nothing is invented beside it", created?.workSec)
+        assertNull(created?.restSec)
+        assertNull(created?.newProgram)
+    }
+
+    /** Nothing chosen in the strict branch is nothing to create with. */
+    @Test
+    fun `the strict branch refuses to be created with no schedule chosen`() {
+        sheet(library())
+        name("Hangs")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.STRICT.title)
+
+        compose.onNodeWithText("Create and use").assertIsNotEnabled()
+    }
+
+    /**
+     * The whole of the strict branch: the library editor, opened in a dialog over the sheet,
+     * hands a complete schedule back as a value. Asserted on what the FORM reports, because
+     * a schedule built and then dropped on the way to the caller is precisely the failure
+     * this project keeps producing.
+     */
+    @Test
+    fun `a schedule built in the editor travels to the caller`() {
+        sheet()
+        name("Repeaters")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.STRICT.title)
+
+        tap("Build a schedule")
+        // the editor arrived, wearing the create form's vocabulary rather than the library's
+        compose.onNodeWithText("Schedule name").assertExists()
+        tap("Use this schedule")
+
+        tap("Create and use")
+
+        val built = created?.newProgram
+        assertNotNull("the built schedule has to reach the caller", built)
+        assertEquals("Repeaters schedule", built!!.name)
+        assertTrue("it has to be a real schedule, not an empty one", built.totalSec() > 0)
+        assertNull("a built schedule is not one of the library's yet", created?.protocolProgramId)
+    }
+
+    /** With an empty library there is nothing to take, so only building is offered. */
+    @Test
+    fun `an empty library offers nothing to take off the shelf`() {
+        sheet()
+        name("Hangs")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.STRICT.title)
+
+        compose.onNodeWithText("Build a schedule").assertExists()
+        compose.onNodeWithText("Fingerboard protocol").assertDoesNotExist()
+    }
+
+    /**
+     * Switching branches must not leave the previous branch's answer travelling underneath:
+     * a pair typed and then abandoned for the free branch would otherwise create a hold that
+     * counts time, permanently, having been told not to.
+     */
+    @Test
+    fun `numbers typed in one branch do not travel out of another`() {
+        sheet()
+        name("Hangs")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.SIMPLE_PAIR.title)
+        compose.onNodeWithText("Work, s").performTextReplacement("10")
+        compose.onNodeWithText("Rest, s").performTextReplacement("5")
+        settle()
+
+        tap(ScheduleKind.FREE.title)
+        tap("Create and use")
+
+        assertNull(created?.workSec)
+        assertNull(created?.restSec)
+    }
+
+    /** A form with no schedule at all is never asked about one. */
+    @Test
+    fun `a strength exercise is not asked which schedule it is`() {
+        sheet(library())
+        name("Bench press")
+
+        ScheduleKind.entries.forEach {
+            compose.onNodeWithText(it.title).assertDoesNotExist()
+        }
     }
 }
