@@ -127,8 +127,8 @@ class FloorControllerTest {
     fun `dismissing an exercise takes every card of it, and leaves the other exercises alone`() {
         val timer = newController()
 
-        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - left", orderedMs = 240_000, side = "L")
-        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - right", orderedMs = 240_000, side = "R")
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - left", orderedMs = 240_000, side = "left")
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - right", orderedMs = 240_000, side = "right")
         timer.floors.start(exerciseId = 2, exerciseName = "Bench", orderedMs = 180_000)
 
         timer.floors.dismissAllOf(1)
@@ -143,12 +143,12 @@ class FloorControllerTest {
     fun `dismissing one side leaves the other side running`() {
         val timer = newController()
 
-        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - left", orderedMs = 240_000, side = "L")
-        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - right", orderedMs = 240_000, side = "R")
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - left", orderedMs = 240_000, side = "left")
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - right", orderedMs = 240_000, side = "right")
 
-        timer.floors.dismiss(1, "L")
+        timer.floors.dismiss(1, "left")
 
-        assertEquals(listOf("R"), timer.floors.floors.value.map { it.side })
+        assertEquals(listOf("right"), timer.floors.floors.value.map { it.side })
     }
 
     @Test

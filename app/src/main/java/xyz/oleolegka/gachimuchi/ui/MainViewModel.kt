@@ -635,6 +635,40 @@ class MainViewModel(
     }
 
     /**
+     * Takes one exercise CARD out of a workout: its rows, and the rest counting under it.
+     *
+     * ── Why the rest is dismissed twice, by two different rules ─────────────────
+     * First by CARD — (exerciseId, side) — which is right and is what the left hand's card
+     * being removed must not do to the right hand's countdown.
+     *
+     * Then, once the rows are gone, by EXERCISE, but only if the workout no longer holds any
+     * card of it. That second pass is the belt to the first one's braces, and it exists because
+     * the two keys are written by different code paths: a floor is keyed by the side of the SET
+     * that started it, a card by the side of the row that added it, and any journal where those
+     * two disagree (a set recorded with no side on a one-sided exercise — see WorkoutExercise's
+     * own KDoc for how that produces a third, sideless block) leaves a countdown alive with
+     * nothing left on screen to stop it. That is §23.A2 as reported from the phone: the exercise
+     * is gone and the rest goes on counting, and speaking, in the background.
+     */
+    fun removeWorkoutExercise(
+        workoutId: Long,
+        eventIds: List<Long>,
+        exerciseId: Long?,
+        side: HoldSide? = null,
+    ) {
+        exerciseId?.let { timer.floors.dismiss(it, side?.code) }
+        viewModelScope.launch {
+            if (eventIds.isNotEmpty()) repo.deleteEntries(eventIds)
+            if (exerciseId != null) {
+                val stillThere = buildWorkout(repo.allEvents(), workoutId)
+                    ?.exercises.orEmpty()
+                    .any { it.exerciseId == exerciseId }
+                if (!stillThere) timer.floors.dismissAllOf(exerciseId)
+            }
+        }
+    }
+
+    /**
      * Removes a workout and everything recorded into it.
      *
      * ── Why the whole thing and not just the start event ────────────────────────

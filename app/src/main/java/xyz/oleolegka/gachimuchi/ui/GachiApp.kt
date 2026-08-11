@@ -508,8 +508,9 @@ fun GachiApp(viewModel: MainViewModel) {
                         // when there is one; the id and side are also what dismisses this
                         // card's own rest bar, if it has one running (§13.5)
                         removeExercise = { eventIds, exerciseId, side ->
-                            viewModel.deleteEntries(eventIds)
-                            if (exerciseId != null) viewModel.dismissFloor(exerciseId, side)
+                            viewModel.removeWorkoutExercise(
+                                workoutBeingLogged, eventIds, exerciseId, side,
+                            )
                         },
                         // the whole order, one row per drop -- see TYPE_WORKOUT_ORDER_SET
                         reorderExercises = { order ->
