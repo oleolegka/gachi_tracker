@@ -29,10 +29,18 @@ import xyz.oleolegka.gachimuchi.ui.ScreenTest
  * flag had silently not been written, and the alert that followed talked about the name
  * alone. Owner, 2026-08-10: "ну конечно же нужно показывать то, что есть".
  *
- * The fix was "the dialog only closes once the write it is reporting on happened". On a
+ * The first fix was "the dialog only closes once the write it is reporting on happened". On a
  * screen the same rule reads from the other side: [EditExerciseScreen] calls its `onClose`
  * on a successful write and at no other time, so a refusal LEAVES THE SCREEN WHERE IT IS,
- * with everything typed still on it. That is what the first three tests below assert.
+ * with everything typed still on it. That is what the first two tests below assert.
+ *
+ * ── And the second half, which the first one only postponed ────────────────────────
+ * A screen that stays open still loses the flip the moment the rename is given up on - and
+ * giving up on it is the whole of the reported case: "clicked, was told the NAME is taken,
+ * went back, and the switch is where it was". So the switch is written WHATEVER the name did
+ * (backlog.md §14.7 point 10): the refusal is about identity, name plus protocol, and which
+ * limb an exercise is trained with is not part of that. The assertion that used to say a
+ * refused save writes nothing now says the opposite, deliberately.
  *
  * ── Why it drives the real database ────────────────────────────────────────────────
  * [EditExerciseScreen] reaches for the process-wide database directly - a documented
@@ -97,8 +105,8 @@ class EditExerciseScreenTest : ScreenTest() {
         }
     }
 
-    private fun exists(text: String) =
-        compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+    private fun exists(text: String, substring: Boolean = false) =
+        compose.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty()
 
     private fun waitFor(text: String, timeoutMillis: Long = 5_000) {
         val deadline = System.currentTimeMillis() + timeoutMillis
@@ -156,9 +164,18 @@ class EditExerciseScreenTest : ScreenTest() {
         compose.onNodeWithText("Name").assertIsDisplayed()
     }
 
-    /** Nothing about a name collision escapes to the database - the flag was never written. */
+    /**
+     * THE DEFECT THIS FILE IS NOW ABOUT: a name refused as a duplicate used to take the
+     * switch down with it.
+     *
+     * This assertion is the inverse of the one that stood here before, and the inversion is
+     * the fix, not a relaxation. The refusal is about IDENTITY - name plus protocol - and
+     * which limb the exercise is trained with is no part of that, so it must not be refused
+     * along with it. Keeping the screen open (the tests above) only postpones the loss: the
+     * moment the rename is abandoned, which is exactly the reported case, the flip is gone.
+     */
     @Test
-    fun `a refused save does not write the flag to the database either`() {
+    fun `a name refused as taken still writes the switch, and says so`() {
         val taken = unique("Squat")
         exercise(taken)
         val benchPress = exercise(unique("Bench press"))
@@ -171,7 +188,51 @@ class EditExerciseScreenTest : ScreenTest() {
         waitFor("Name is taken")
 
         val stored = runBlocking { repo.exercise(benchPress.id)!! }
-        assert(!stored.oneSided) { "a refused save must not have reached the database" }
+        assert(stored.oneSided) { "the switch is not part of the name and must survive its refusal" }
+        // and the dialog says which half was saved, rather than writing a column in silence
+        compose.onNodeWithText("was saved anyway", substring = true).assertIsDisplayed()
+    }
+
+    /**
+     * The name itself is still refused, and the OLD name is what stayed in the catalog. The
+     * test above proves the switch survives; this one proves that did not turn into the
+     * rename sneaking through with it.
+     */
+    @Test
+    fun `the refused name itself is not written`() {
+        val taken = unique("Squat")
+        exercise(taken)
+        val benchPress = exercise(unique("Bench press"))
+        editing(benchPress)
+
+        compose.onNodeWithText("Name").performTextReplacement(taken)
+        settle()
+        compose.onNodeWithText("Save").performClick()
+        waitFor("Name is taken")
+
+        val stored = runBlocking { repo.exercise(benchPress.id)!! }
+        assert(stored.name == benchPress.name) { "the name was refused, so it must not have changed" }
+        assert(!closed) { "a refused save must not take the screen away" }
+    }
+
+    /** Nothing is written when the switch was never touched: a rename is a rename. */
+    @Test
+    fun `a refusal with the switch untouched writes nothing and does not mention it`() {
+        val taken = unique("Squat")
+        exercise(taken)
+        val benchPress = exercise(unique("Bench press"))
+        editing(benchPress)
+
+        compose.onNodeWithText("Name").performTextReplacement(taken)
+        settle()
+        compose.onNodeWithText("Save").performClick()
+        waitFor("Name is taken")
+
+        val stored = runBlocking { repo.exercise(benchPress.id)!! }
+        assert(!stored.oneSided) { "an untouched switch must not be written by a refusal" }
+        assert(!exists("was saved anyway", substring = true)) {
+            "nothing was saved, so the refusal must not claim anything was"
+        }
     }
 
     @Test

@@ -6,6 +6,7 @@ import xyz.oleolegka.gachimuchi.domain.CatalogRow
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.PortableExercise
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.toCatalogExercise
 import xyz.oleolegka.gachimuchi.domain.toPortable
 import xyz.oleolegka.gachimuchi.domain.toRef
@@ -65,3 +66,39 @@ fun ExerciseEntity.toCatalog(): CatalogExercise? = toCatalogRow().toCatalogExerc
  */
 fun ExerciseEntity.toPortable(protocolProgramUid: String? = null): PortableExercise =
     toCatalogRow().toPortable(protocolProgramUid)
+
+/**
+ * What a journal backup carries for a catalog row -> the row a restore inserts. THE ONE PLACE
+ * the import direction of the catalog is spelled out.
+ *
+ * ── Why it is a named function and not four lines inside the restore ────────────
+ * It was those four lines, in `JournalBackup.restore`, and that is the shape of the defect
+ * backlog.md §14.2 reports: a column added to [ExerciseEntity] had to be remembered in a
+ * constructor call buried in a transaction, and a forgotten one compiled and restored as its
+ * default. Out here it is a pure function of a [PortableExercise], so a test can run a fully
+ * populated row through both directions and fail when any column comes back different — see
+ * `BackupColumnCoverageTest`, which is the other half of this and the reason the extraction
+ * was worth doing.
+ *
+ * Two columns are deliberately not set here and neither is an oversight:
+ * - `protocolProgramId` is a LOCAL row number of a program that may still be waiting in the
+ *   file's own programs section, so the restore backfills it once that section is written;
+ * - `pictureId` names a file the format cannot carry (see [PortableExercise]).
+ *
+ * [createdAtFallback] stands in for a file that carries no creation time for the row — a
+ * restore's own "now", which the caller owns.
+ */
+fun PortableExercise.toEntity(createdAtFallback: String): ExerciseEntity = ExerciseEntity(
+    name = name,
+    form = form,
+    createdAt = createdAt.ifBlank { createdAtFallback },
+    defaultRestSec = defaultRestSec,
+    ledByProtocol = ledByProtocol,
+    uid = uid,
+    oneSided = oneSided,
+    bodyweightShare = bodyweightShare,
+    hidden = hidden,
+    // keyed on the uid STRING the file already carries, not on a local id, so it needs no
+    // wait for the programs section the way protocolProgramId does
+    identityKey = exerciseIdentityKey(name, form, protocolProgramUid),
+)

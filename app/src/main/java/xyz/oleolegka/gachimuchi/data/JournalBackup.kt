@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.withTransaction
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.EventEntity
-import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
@@ -21,7 +20,6 @@ import xyz.oleolegka.gachimuchi.domain.PortableSettings
 import xyz.oleolegka.gachimuchi.domain.PortableSlot
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
-import xyz.oleolegka.gachimuchi.domain.exerciseIdentityKey
 import xyz.oleolegka.gachimuchi.domain.mergeExercises
 import xyz.oleolegka.gachimuchi.domain.portableSettings
 import xyz.oleolegka.gachimuchi.domain.toTimerSettings
@@ -126,6 +124,7 @@ class JournalBackup(
                 exerciseUid = program.exerciseId?.let { uidOfExercise[it] },
                 position = program.position,
                 createdAt = program.createdAt,
+                hidden = program.hidden,
                 groups = groups[program.id].orEmpty().map { group ->
                     ProgramGroup(
                         name = group.name,
@@ -184,28 +183,12 @@ class JournalBackup(
                 file.exercises,
                 db.exercises().all().map { it.toPortable(it.protocolProgramId?.let(uidOfProgram::get)) },
             )
-            for (row in merge.toInsert) {
-                db.exercises().insert(
-                    ExerciseEntity(
-                        name = row.name,
-                        form = row.form,
-                        createdAt = row.createdAt.ifBlank { now() },
-                        // the local row id of the program this uid names cannot be known yet —
-                        // the program itself may still be waiting in file.programs, below — so
-                        // this is filled in afterwards by [setProtocolProgramId]; the identity
-                        // key needs no such wait, because it is keyed on the uid STRING the file
-                        // already carries, not on a local id (see
-                        // [xyz.oleolegka.gachimuchi.domain.PortableExercise])
-                        defaultRestSec = row.defaultRestSec,
-                        ledByProtocol = row.ledByProtocol,
-                        oneSided = row.oneSided,
-                        bodyweightShare = row.bodyweightShare,
-                        uid = row.uid,
-                        hidden = row.hidden,
-                        identityKey = exerciseIdentityKey(row.name, row.form, row.protocolProgramUid),
-                    )
-                )
-            }
+            // through the one mapper the import direction has (data/CatalogMapping.kt's
+            // [toEntity]) rather than a constructor call spelled out here: a column added to
+            // the table and forgotten in a hand-written constructor is exactly the silent
+            // default backlog.md §14.2 is about, and there is now one place to forget it and a
+            // test standing over that place
+            for (row in merge.toInsert) db.exercises().insert(row.toEntity(now()))
 
             // the catalog, now that it is complete, as the two number-carrying tables need it
             val idOfUid = db.exercises().all().associate { it.uid to it.id }
@@ -409,6 +392,7 @@ class JournalBackup(
                     exerciseId = exerciseId,
                     category = program.category.trim(),
                     uid = program.uid,
+                    hidden = program.hidden,
                 )
             )
             added++

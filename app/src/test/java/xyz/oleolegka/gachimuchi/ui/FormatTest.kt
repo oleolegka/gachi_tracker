@@ -86,6 +86,45 @@ class FormatTest {
     }
 
     /**
+     * A NUMBER DRAWN ON THE DATA NAMES ITS QUANTITY. The Y ticks stay bare (they are the scale,
+     * and the caption beside the chart title carries their unit); the value over a bar and the
+     * callout on the last point of a line do not, which is the defect backlog.md §14.2 reports
+     * as "a bare number on the chart, the unit only in the caption".
+     */
+    @Test
+    fun `a value drawn on a chart carries its unit, and a tick still does not`() {
+        assertEquals("2940 kg·s", fmtOnChart(2940.0, ValueFormat.KILOGRAM_SECONDS))
+        assertEquals("2940", fmtAxis(2940.0, ValueFormat.KILOGRAM_SECONDS))
+
+        assertEquals("108 kg", fmtOnChart(108.0, ValueFormat.KILOGRAMS))
+        assertEquals("5:00 /km", fmtOnChart(300.0, ValueFormat.PACE))
+        assertEquals("5 km", fmtOnChart(5_000.0, ValueFormat.DISTANCE))
+        assertEquals("800 m", fmtOnChart(800.0, ValueFormat.DISTANCE))
+        // seconds already spell themselves on the axis, and a count has no unit at all: neither
+        // grows a second one here
+        assertEquals("42m", fmtOnChart(2520.0, ValueFormat.SECONDS))
+        assertEquals("45s", fmtOnChart(45.0, ValueFormat.SECONDS))
+        assertEquals("12", fmtOnChart(12.0, ValueFormat.COUNT))
+    }
+
+    /**
+     * Every format either spells its unit into the number or has none to spell. Written as a
+     * sweep rather than as cases so that a [ValueFormat] added later cannot slip through
+     * printing bare on a chart.
+     */
+    @Test
+    fun `no format draws a bare magnitude on a chart`() {
+        for (format in ValueFormat.entries) {
+            val drawn = fmtOnChart(1234.0, format)
+            val unit = axisUnit(format, 1234.0)
+            val named = unit.isEmpty() || drawn.contains(unit) ||
+                // seconds are spelled "20m" on an axis while the caption says "min"
+                (format == ValueFormat.SECONDS && drawn.last().isLetter())
+            assert(named) { "$format draws \"$drawn\" with nothing to say what it measures" }
+        }
+    }
+
+    /**
      * Kilograms and kilogram-seconds are different quantities with no exchange rate, and the
      * printing must never let one pass for the other — a tonnage and an impulse of the same
      * number are not the same amount of anything.
