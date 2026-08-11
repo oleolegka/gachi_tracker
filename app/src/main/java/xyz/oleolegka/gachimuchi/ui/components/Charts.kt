@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.AxisSlot
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import xyz.oleolegka.gachimuchi.ui.fmtAxis
+import xyz.oleolegka.gachimuchi.ui.fmtOnChart
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.theme.GachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
@@ -47,6 +48,13 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
  * rather than drawing the data and hoping labels fit. Where labels genuinely cannot fit
  * (dozens of bars on a phone), [barLabelIndices] thins them down to the ones a reader
  * actually looks for instead of dropping all of them.
+ *
+ * ── And a number drawn on the data carries its unit ─────────────────────────────
+ * The Y ticks are the SCALE and stay bare — they repeat up the side of the card and the unit
+ * is stated once beside the chart's title. A value printed ON the data is the figure a reader
+ * quotes, and it goes out with its unit attached (`ui/Format.kt`'s `fmtOnChart`): "2940" over a
+ * bar of impulse names no quantity at all, and kilogram-seconds are an invention of this app
+ * rather than something a reader arrives already knowing.
  *
  * ── The X axis belongs to the SCREEN, not to the series ─────────────────────────
  * Both plot charts here take [AxisSlot]s off a shared
@@ -349,9 +357,10 @@ fun LineChart(
         drawCircle(lineColor, radius = 4.dp.toPx(), center = endPoint)
         drawCircle(colors.plane, radius = 4.dp.toPx(), center = endPoint, style = Stroke(2.dp.toPx()))
 
-        // the latest value in words, above its point: the number the screen is opened for
+        // the latest value in words, above its point: the number the screen is opened for, and
+        // therefore the one that carries its unit rather than borrowing it from the caption
         val lastPoint = endPoint
-        val text = fmtAxis(slots[filled.last()].value!!, format)
+        val text = fmtOnChart(slots[filled.last()].value!!, format)
         val style = valueTextStyle(colors.inkSecondary)
         val half = measurer.width(text, style) / 2f
         drawLabel(
@@ -441,8 +450,6 @@ fun BarChart(
                 color = colors.accent,
             )
             if (i in labelled) {
-                val text = fmtAxis(value, format)
-                val half = measurer.width(text, valueStyle) / 2f
                 // a number is allowed the empty slots on either side of its bar as well as its
                 // own: with a shared axis a lone session in a quiet fortnight sits in a narrow
                 // slot but has nothing anywhere near it, and dropping its number then would
@@ -450,9 +457,22 @@ fun BarChart(
                 val toPrevious = i - (filled.getOrNull(n - 1) ?: -1)
                 val toNext = (filled.getOrNull(n + 1) ?: slots.size) - i
                 val room = slot * minOf(toPrevious, toNext)
-                // a number that would not fit above its own bar is dropped rather than
-                // drawn over its neighbour
-                if (half * 2 <= room * 1.1f) {
+                fun fits(text: String) =
+                    measurer.width(text, valueStyle) <= room * 1.1f
+                /*
+                 * WITH ITS UNIT WHERE THERE IS ROOM, bare where there is not — and nothing at
+                 * all where even the bare number would run into its neighbour.
+                 *
+                 * "2940" over a bar of impulse is a number nobody can name the quantity of
+                 * ([fmtOnChart]), so the unit goes on the value itself. It is also the first
+                 * thing to lose when the bars crowd: the caption beside the chart title still
+                 * states the unit, so a bare number under a stated unit is a smaller loss than
+                 * a bar with no number over it at all.
+                 */
+                val text = fmtOnChart(value, format).takeIf { fits(it) }
+                    ?: fmtAxis(value, format).takeIf { fits(it) }
+                if (text != null) {
+                    val half = measurer.width(text, valueStyle) / 2f
                     drawLabel(
                         measurer, text, valueStyle,
                         x = centerX.coerceIn(plot.left + half, size.width - half),

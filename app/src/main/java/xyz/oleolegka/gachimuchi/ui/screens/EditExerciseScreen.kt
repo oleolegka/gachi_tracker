@@ -193,25 +193,42 @@ fun EditExerciseScreen(
                             scope.launch {
                                 val result = repo.editExercise(exercise.id, name.trim())
                                 /*
+                                 * THE SWITCH IS SAVED WHATEVER THE NAME DID, and that is the
+                                 * whole of this block.
+                                 *
                                  * The flag is its own column and its own write: correcting a
                                  * name and declaring the exercise one-handed are different
-                                 * claims, and neither may rewrite the other.
+                                 * claims, and neither may rewrite the other. It used to be
+                                 * written only when the name edit took, on the grounds that a
+                                 * refusal should leave the whole screen untouched — and that
+                                 * turned the refusal into a silent loss: the user flipped the
+                                 * switch, was told the NAME was taken, gave up on the rename
+                                 * and left, and the switch was back where it started. The
+                                 * refusal is about identity (name plus protocol); which limb
+                                 * the exercise is trained with is not part of it, so it has no
+                                 * business being refused along with it. Keeping the screen
+                                 * open only postpones the loss — it is still lost the moment
+                                 * the rename is abandoned, which is the case being reported.
                                  *
-                                 * It goes AFTER the identity edit and only when it took. A
-                                 * refused edit tells the user the exercise was left as it
-                                 * was, and that sentence has to be true of the whole screen
-                                 * and not only of the name.
+                                 * [ExerciseEdit.Gone] is the one outcome that stops it: the
+                                 * row is not in the catalog any more, so there is nothing left
+                                 * to set a column on.
+                                 *
+                                 * The refusal then says so out loud — a dialog that talked
+                                 * about the name while quietly writing a column would be the
+                                 * same silence from the other side.
                                  */
-                                if (result is ExerciseEdit.Saved) {
-                                    if (oneSided != exercise.oneSided) {
-                                        repo.setOneSided(exercise.id, oneSided)
-                                    }
-                                    onClose()
-                                }
+                                val sideSaved = oneSided != exercise.oneSided &&
+                                    result !is ExerciseEdit.Gone
+                                if (sideSaved) repo.setOneSided(exercise.id, oneSided)
+                                if (result is ExerciseEdit.Saved) onClose()
+                                val alsoSide = if (sideSaved) " $SIDE_SAVED_ANYWAY" else ""
                                 message = when (result) {
                                     is ExerciseEdit.Saved -> null
-                                    is ExerciseEdit.Blank ->
-                                        Refusal("Not saved", "An exercise needs a name.")
+                                    is ExerciseEdit.Blank -> Refusal(
+                                        "Name not saved",
+                                        "An exercise needs a name.$alsoSide",
+                                    )
                                     is ExerciseEdit.Gone -> Refusal(
                                         "Not saved",
                                         "That exercise is no longer in the catalog.",
@@ -220,7 +237,8 @@ fun EditExerciseScreen(
                                         "Name is taken",
                                         "\"${result.name}\" already exists at the same " +
                                             "protocol, and that pair is what an exercise is. " +
-                                            "Pick another name, or correct that one instead.",
+                                            "Pick another name, or correct that one instead." +
+                                            alsoSide,
                                     )
                                 }
                             }
@@ -442,6 +460,16 @@ fun EditExerciseScreen(
 
 /** What a refusal says: the thing that happened, and what to do about it. */
 private data class Refusal(val title: String, val text: String)
+
+/**
+ * The line a refusal adds when the side switch was moved and the name was not saved.
+ *
+ * Named after the switch's own label so the sentence points at a control on the screen behind
+ * the dialog rather than at "a setting". Only ever added when the write actually happened —
+ * see the Save handler for why the two are decided together.
+ */
+private const val SIDE_SAVED_ANYWAY =
+    "\"One side at a time\" was saved anyway - it is not part of the name."
 
 /** The eyebrow of a card on this screen: the label of a block, not a heading of its own. */
 @Composable

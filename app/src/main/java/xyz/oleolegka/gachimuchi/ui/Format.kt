@@ -197,6 +197,28 @@ fun fmtAxis(value: Double, format: ValueFormat): String = when (format) {
     ValueFormat.COUNT -> fmtCount(value)
 }
 
+/**
+ * A value drawn INSIDE the plot — the number over a bar, the callout on the last point of a
+ * line — WITH ITS UNIT: "2940 kg·s", "108 kg", "5:00 /km".
+ *
+ * ── Why this exists, and where the line between it and [fmtAxis] runs ───────────
+ * A tick on the Y axis is the SCALE: it repeats four or five times up the side of the card,
+ * and "kg" beside every one of them is noise, so the unit is stated once in the caption beside
+ * the chart's title ([axisUnit]). A number printed on the data itself is not the scale — it is
+ * the figure the reader takes away and quotes, and it was going out bare. An impulse is where
+ * that bites hardest: kilogram-seconds are this app's own construction
+ * ([xyz.oleolegka.gachimuchi.domain.holdImpulseKgSec] says so at length), so "2940" over a bar
+ * means nothing at all to anybody who has not just read the caption (backlog.md §14.2).
+ *
+ * Built on [fmtAxis] rather than on [fmtValueParts] so that a label and the ticks under it are
+ * spelled the same way. [ValueFormat.SECONDS] is left exactly as [fmtAxis] spells it — "45s",
+ * "42m", "1.2h" already carry their unit — and a [ValueFormat.COUNT] has none to carry.
+ */
+fun fmtOnChart(value: Double, format: ValueFormat): String = when (format) {
+    ValueFormat.SECONDS, ValueFormat.COUNT -> fmtAxis(value, format)
+    else -> "${fmtAxis(value, format)} ${axisUnit(format, value)}"
+}
+
 /** The unit an axis title should carry, or "" when the numbers speak for themselves. */
 fun axisUnit(format: ValueFormat, maxValue: Double): String = when (format) {
     ValueFormat.KILOGRAMS -> "kg"
