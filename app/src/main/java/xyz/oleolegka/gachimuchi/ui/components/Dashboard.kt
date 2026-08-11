@@ -152,10 +152,14 @@ fun HeroCard(
             Row(Modifier.padding(top = Spacing.Line), verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = TextSize.Display,
+                    // Figure, not Display: the owner compared the two side by side in the
+                    // design system (app-next/hero-size.html) and chose the quieter one.
+                    // Display stays what SYSTEM.md says it is - the conductor's clock, read
+                    // from two metres with wet hands - and this card is read at arm's length.
+                    fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = (-1.5).sp,
-                    lineHeight = TextSize.Display,
+                    lineHeight = TextSize.Figure,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(

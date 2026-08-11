@@ -185,11 +185,10 @@ data class WorkoutLogActions(
      * [side] names one CARD. A new exercise trained one limb at a time gets this called TWICE by
      * this screen, once per [HoldSide] — see [RestAsk.New] — and an existing card's own "set a
      * rest" calls it once, with that card's own side (null for an exercise that has only one).
-     */
-    /**
-     * Puts one card into the workout, or restates it: the rest between sets and how many sets
-     * are PLANNED (§18.17) are both answered in the one dialog that opens when an exercise is
-     * picked, and both are statements about this session rather than about the exercise.
+     *
+     * [plannedSets] is how many sets are PLANNED for this session (§18.17), answered in the same
+     * one dialog and, like the rest, a statement about today rather than about the exercise. It
+     * is null when nothing was planned, and outside a workout it has nowhere to land at all.
      */
     val addExercise: (exerciseId: Long, restSec: Int, side: HoldSide?, plannedSets: Int?) -> Unit,
 

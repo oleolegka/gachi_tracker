@@ -664,7 +664,12 @@ fun GachiApp(viewModel: MainViewModel) {
             }
             val looseActions = remember(day) {
                 WorkoutLogActions(
-                    addExercise = { exerciseId, restSec, side ->
+                    // the plan is dropped on purpose: how many sets are PLANNED (§18.17) is
+                    // written on the "exercise added to workout" event, and here there is no
+                    // workout to write it on. The dialog still asks - one question, one place -
+                    // and outside a workout the answer has nowhere to land, so the card counts
+                    // what was done and says nothing about what was intended.
+                    addExercise = { exerciseId, restSec, side, _ ->
                         viewModel.admitLooseExercise(exerciseId, restSec, side)
                     },
                     createExercise = { new, then -> viewModel.createExercise(new, then) },
@@ -685,8 +690,8 @@ fun GachiApp(viewModel: MainViewModel) {
                     // straight to the conductor, with no workout to promote on the way — the
                     // card that was tapped has already answered the side, exactly as it does
                     // inside a workout
-                    startProtocolSet = { exercise, addedKg, side ->
-                        viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                    startProtocolSet = { start ->
+                        viewModel.startProgramForExercise(start)
                         conductorOpen = true
                     },
                     openConductor = { conductorOpen = true },

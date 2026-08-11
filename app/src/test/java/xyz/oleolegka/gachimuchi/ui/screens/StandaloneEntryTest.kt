@@ -72,7 +72,9 @@ class StandaloneEntryTest : ScreenTest() {
                 settings = TimerSettings(),
                 floors = emptyList(),
                 actions = WorkoutLogActions(
-                    addExercise = { id, rest, side -> added += Triple(id, rest, side) },
+                    // the plan is not part of what a standalone card can hold: there is no
+                    // workout event to write it on, so this screen drops it (see GachiApp)
+                    addExercise = { id, rest, side, _ -> added += Triple(id, rest, side) },
                     createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = {},
@@ -82,7 +84,7 @@ class StandaloneEntryTest : ScreenTest() {
                     finishExercise = { _, _ -> },
                     unfinishExercise = {},
                     unfinishWorkout = {},
-                    startProtocolSet = { _, _, _ -> },
+                    startProtocolSet = { _ -> },
                     openConductor = {},
                     close = {},
                 ),
