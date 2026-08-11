@@ -48,6 +48,104 @@ class RunLogTest {
         assertEquals(StepKind.WORK, steps[37].kind)
     }
 
+    // --- a schedule whose efforts are not all the same length ---------------------------
+
+    /**
+     * "10 s on the 20 mm, then 7 s on the 15 mm, three of each, twice" — the shape §18.15's
+     * strict branch made reachable and the one this file used to write down wrong.
+     */
+    private val twoEdges = WorkoutProgram(
+        name = "Two edges",
+        prepareSec = 0,
+        groups = listOf(
+            ProgramGroup(
+                name = "Set",
+                blocks = listOf(
+                    ProgramBlock(name = "20 mm", workSec = 10, restSec = 5, repeats = 3),
+                    ProgramBlock(name = "15 mm", workSec = 7, restSec = 5, repeats = 3),
+                ),
+                repeats = 2,
+                restBetweenRepeatsSec = 120,
+            )
+        ),
+    )
+
+    /**
+     * The defect, in the one assertion that names it: every effort used to be reported at the
+     * length of the FIRST one in its set, so this run went into the journal as twelve hangs of
+     * ten seconds and six of them were never held that long.
+     */
+    @Test
+    fun `a set of two lengths is offered as two rows, each claiming its own length`() {
+        val sets = completedSets(twoEdges.flatten(), endedAtIndex = 0, finished = true)
+
+        assertEquals(4, sets.size)
+        assertEquals(listOf(10, 7, 10, 7), sets.map { it.workSec })
+        assertTrue("every row is three efforts", sets.all { it.reps == 3 && it.plannedReps == 3 })
+        assertEquals(listOf(1, 2, 3, 4), sets.map { it.setNumber })
+        // the 5 s inside a set, then the 125 s between them (5 + 120 merged), then 5 again;
+        // nothing follows the last effort
+        assertEquals(listOf(5, 125, 5), sets.dropLast(1).map { it.restAfterSec })
+        assertNull(sets.last().restAfterSec)
+    }
+
+    /** And what it writes: two journal rows, each with the length it was actually held for. */
+    @Test
+    fun `the journal gets one row per length, not one length for the whole set`() {
+        val sets = completedSets(twoEdges.flatten(), endedAtIndex = 0, finished = true)
+
+        val written = holdSetsFromRun(hangs, day, sets)
+
+        assertEquals(4, written.size)
+        assertEquals(listOf(10.0, 7.0, 10.0, 7.0), written.map { it.holdSec })
+        assertTrue("each row is still an ordinary hold set", written.all { it.reps == 3 })
+    }
+
+    /** Stopping part-way through the second half of a set keeps the two halves apart. */
+    @Test
+    fun `stopping inside the second length reports the first in full and the second short`() {
+        val steps = twoEdges.flatten()
+        // 0 W10, 1 R, 2 W10, 3 R, 4 W10, 5 R, 6 W7, 7 R, 8 W7 ... standing on 8 means one 7 s
+        // hang is behind us
+        val sets = completedSets(steps, endedAtIndex = 8, finished = false)
+
+        assertEquals(2, sets.size)
+        assertEquals(listOf(3, 1), sets.map { it.reps })
+        assertEquals(listOf(10, 7), sets.map { it.workSec })
+        assertEquals("the short row still says what it was meant to be", 3, sets.last().plannedReps)
+    }
+
+    /**
+     * The limit that stayed, pinned down so it is a known answer and not a surprise: two GROUPS
+     * sharing a name and a repeat number come out as ONE row, because a step says which group
+     * it belongs to by NAME and by nothing else. The pause between the two groups is swallowed
+     * with them. See [completedSets] for why lifting this needs a field that does not exist.
+     */
+    @Test
+    fun `two groups of the same name still come out as one row, and that is known`() {
+        val program = WorkoutProgram(
+            name = "Twice",
+            prepareSec = 0,
+            groups = listOf(
+                ProgramGroup(
+                    name = "Set",
+                    blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = 3)),
+                    restAfterSec = 120,
+                ),
+                ProgramGroup(
+                    name = "Set",
+                    blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = 3)),
+                ),
+            ),
+        )
+
+        val sets = completedSets(program.flatten(), endedAtIndex = 0, finished = true)
+
+        assertEquals(1, sets.size)
+        assertEquals(6, sets.single().reps)
+        assertNull("the pause between the two groups goes unreported", sets.single().restAfterSec)
+    }
+
     // --- a run that went to plan ---------------------------------------------------------
 
     @Test
@@ -442,5 +540,15 @@ class RunLogTest {
 
         assertEquals("Nothing was completed.", runSummaryLine(emptyList()))
         assertEquals("Nothing was completed.", runSummaryLine(full.map { it.copy(reps = 0) }))
+    }
+
+    /**
+     * "of 7 s" is a claim about every effort in the line, so it is only made when every effort
+     * agrees. When they do not, each row says its own length instead.
+     */
+    @Test
+    fun `a run of two lengths says both rather than stating the first one for all of them`() {
+        val mixed = completedSets(twoEdges.flatten(), endedAtIndex = 0, finished = true)
+        assertEquals("3 x 10 s + 3 x 7 s + 3 x 10 s + 3 x 7 s", runSummaryLine(mixed))
     }
 }
