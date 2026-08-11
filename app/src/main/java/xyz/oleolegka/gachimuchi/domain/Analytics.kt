@@ -232,13 +232,31 @@ internal fun bucketSlots(from: LocalDate, to: LocalDate, granularity: Granularit
 }
 
 /**
+ * The narrowest frame [Period.ALL] is allowed to draw, in days.
+ *
+ * "All history" takes its start from the data, and a journal holding ONE entry therefore
+ * asked for a window as wide as that entry — one bucket. The lone point was then drawn dead
+ * centre of the card on an axis captioned with a single date, and switching back to "30 days"
+ * threw it to the right-hand edge: the same measurement leaping across the card with every
+ * tap of the segment control, which is what "the scale goes mad with one point" was
+ * describing (reported from the phone, 2026-08-11).
+ *
+ * Four weeks is chosen to sit just under the 30-day window, so the shortest fixed window and
+ * "all" put a recent entry in roughly the same place instead of at opposite ends.
+ */
+private const val MIN_ALL_WINDOW_DAYS = 28
+
+/**
  * The axis of a screen showing [series] over [period], at [granularity].
  *
  * The span comes from the WINDOW, not from the data: 30 days is thirty slots even if two of
  * them were trained, which is what makes "showing: last 30 days" a true statement and what
  * stops a sparse series from stretching itself across the card.
  *
- * [Period.ALL] has no start of its own, so it takes the first day anything was logged on.
+ * [Period.ALL] has no start of its own, so it takes the first day anything was logged on — or
+ * [MIN_ALL_WINDOW_DAYS] back, whichever is earlier, so that a nearly empty journal still gets
+ * a frame rather than a single bucket.
+ *
  * Pass the series already narrowed with [inPeriod] — for every window but "all" that filter
  * has already dropped what falls outside, and this is only the frame around what is left.
  */
@@ -249,9 +267,10 @@ fun timeAxis(
     today: LocalDate,
 ): TimeAxis {
     val days = series.flatMap { it.points }.map { it.opDate }
+    val floor = today.minusDays((MIN_ALL_WINDOW_DAYS - 1).toLong())
     val from = period.startDate(today)
-        ?: days.minOrNull()?.let(LocalDate::parse)
-        ?: today
+        ?: days.minOrNull()?.let(LocalDate::parse)?.let { minOf(it, floor) }
+        ?: floor
     // an entry dated ahead of today is not dropped off the end of an all-time axis: the
     // fixed windows have already excluded it, and here it is the last thing there is
     val latest = days.maxOrNull()?.let(LocalDate::parse)

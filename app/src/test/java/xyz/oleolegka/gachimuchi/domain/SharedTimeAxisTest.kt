@@ -147,19 +147,41 @@ class SharedTimeAxisTest {
 
     @Test
     fun `an all-time axis starts at the first entry and runs to today`() {
-        val volume = series("2026-07-20" to 1.0)
+        val volume = series("2026-05-04" to 1.0)
         val axis = axisOf(Period.ALL, Granularity.WEEK, volume)
 
-        assertEquals("2026-07-20", axis.slots.first())   // itself a Monday
+        assertEquals("2026-05-04", axis.slots.first())   // itself a Monday
         assertEquals("2026-08-03", axis.slots.last())    // the Monday of today's week
-        assertEquals(3, axis.size)
+        assertEquals(14, axis.size)
     }
 
-    /** No data at all: one slot for today rather than an empty frame or a crash. */
+    /**
+     * A short history does not make a short axis.
+     *
+     * "All" takes its start from the data, so a journal of one entry used to ask for a frame
+     * one bucket wide: the point was drawn dead centre of the card under a single date, and
+     * going back to "30 days" threw it against the right-hand edge. The same measurement
+     * leaping across the card with every tap of the segment control is what "the scale goes
+     * mad with one point" meant (from the phone, 2026-08-11), so "all" now has a floor of four
+     * weeks and puts a recent entry roughly where the 30-day window does.
+     */
     @Test
-    fun `an all-time axis with nothing logged is today alone`() {
+    fun `an all-time axis of one recent entry is a frame, not a single bucket`() {
+        val volume = series("2026-08-06" to 1.0)
+        val axis = axisOf(Period.ALL, Granularity.WEEK, volume)
+
+        assertTrue("one entry must not collapse the axis: ${axis.slots}", axis.size >= 4)
+        assertEquals("2026-08-03", axis.slots.last())
+        // and the point sits in the last slot, where the 30-day window also puts it
+        assertEquals(axis.size - 1, volume.onAxis(axis).slots.indexOfFirst { it.value != null })
+    }
+
+    /** No data at all: the same four-week frame rather than an empty one or a crash. */
+    @Test
+    fun `an all-time axis with nothing logged is still a frame ending today`() {
         val axis = timeAxis(emptyList(), Period.ALL, Granularity.DAY, today)
-        assertEquals(listOf("2026-08-07"), axis.slots)
+        assertEquals(28, axis.size)
+        assertEquals("2026-08-07", axis.slots.last())
     }
 
     /**

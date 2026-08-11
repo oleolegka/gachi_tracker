@@ -296,38 +296,49 @@ fun LineChart(
             return Offset(slotX(index, slots.size, plot), y.coerceIn(plot.top, plot.bottom))
         }
 
-        val line = Path()
-        val area = Path()
-        for ((n, i) in filled.withIndex()) {
-            val p = pointAt(i)
-            if (n == 0) {
-                line.moveTo(p.x, p.y)
-                area.moveTo(p.x, plot.bottom)
-                area.lineTo(p.x, p.y)
-            } else {
-                line.lineTo(p.x, p.y)
-                area.lineTo(p.x, p.y)
+        /*
+         * ONE point is a dot, and the line and the wash are skipped outright.
+         *
+         * Not a saving: a path holding a single moveTo and an area closed back onto its own x
+         * are both zero-width shapes that happen to draw nothing today, so this used to work by
+         * accident — the kind that survives until a stroke cap or a join is added and a stray
+         * mark appears on a chart of one entry. The card above already says "only one entry in
+         * this window - not a trend yet"; this is the same statement in the drawing.
+         */
+        if (filled.size > 1) {
+            val line = Path()
+            val area = Path()
+            for ((n, i) in filled.withIndex()) {
+                val p = pointAt(i)
+                if (n == 0) {
+                    line.moveTo(p.x, p.y)
+                    area.moveTo(p.x, plot.bottom)
+                    area.lineTo(p.x, p.y)
+                } else {
+                    line.lineTo(p.x, p.y)
+                    area.lineTo(p.x, p.y)
+                }
             }
-        }
-        area.lineTo(pointAt(filled.last()).x, plot.bottom)
-        area.close()
+            area.lineTo(pointAt(filled.last()).x, plot.bottom)
+            area.close()
 
-        // a flat wash, not a gradient: the design system fills the area with the line's own
-        // colour at 9 % so it reads as shading rather than as a second series
-        clipRect(plot.left, plot.top, plot.right, plot.bottom) {
-            drawPath(area, color = lineColor.copy(alpha = AREA_ALPHA))
-        }
-        drawPath(line, lineColor, style = Stroke(width = 2.dp.toPx()))
+            // a flat wash, not a gradient: the design system fills the area with the line's own
+            // colour at 9 % so it reads as shading rather than as a second series
+            clipRect(plot.left, plot.top, plot.right, plot.bottom) {
+                drawPath(area, color = lineColor.copy(alpha = AREA_ALPHA))
+            }
+            drawPath(line, lineColor, style = Stroke(width = 2.dp.toPx()))
 
-        val bestIndex = if (lowerIsBetter) filled.minBy { slots[it].value!! }
-        else filled.maxBy { slots[it].value!! }
-        val marked = if (filled.size <= 24) filled.toSet()
-        else setOf(filled.first(), bestIndex, filled.last())
-        for (i in marked) {
-            val p = pointAt(i)
-            // the dot is filled with the card surface so the line does not show through it
-            drawCircle(colors.plane, radius = 3.dp.toPx(), center = p)
-            drawCircle(lineColor, radius = 3.dp.toPx(), center = p, style = Stroke(1.5.dp.toPx()))
+            val bestIndex = if (lowerIsBetter) filled.minBy { slots[it].value!! }
+            else filled.maxBy { slots[it].value!! }
+            val marked = if (filled.size <= 24) filled.toSet()
+            else setOf(filled.first(), bestIndex, filled.last())
+            for (i in marked) {
+                val p = pointAt(i)
+                // the dot is filled with the card surface so the line does not show through it
+                drawCircle(colors.plane, radius = 3.dp.toPx(), center = p)
+                drawCircle(lineColor, radius = 3.dp.toPx(), center = p, style = Stroke(1.5.dp.toPx()))
+            }
         }
         // the closing point is solid and larger, with a 2 px ring of the surface around it
         val endPoint = pointAt(filled.last())
