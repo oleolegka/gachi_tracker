@@ -22,8 +22,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,10 +34,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.time.LocalDate
 import kotlinx.coroutines.flow.first
 import xyz.oleolegka.gachimuchi.domain.Heatmap
 import xyz.oleolegka.gachimuchi.domain.HeatmapDay
@@ -45,7 +46,7 @@ import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtShortMonth
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
-import java.time.LocalDate
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * A year of activity as a grid of weeks: columns are weeks, rows are Monday to Sunday.
@@ -78,6 +79,17 @@ fun ActivityHeatmapView(
     val scroll = rememberScrollState()
     var selected by remember(heatmap) { mutableStateOf<HeatmapDay?>(null) }
 
+    /*
+     * BELOW THE FLOOR OF THE TYPE SCALE, and left there deliberately.
+     *
+     * TextSize.Caption (11 sp) is the smallest size anything in this app is allowed to be, and
+     * these two are 9. They are not type on a screen, they are labels pinned to a GRID: a
+     * weekday label has to fit inside one cell of the ribbon (HeatmapMetrics.cell) and a month
+     * label inside the width of one week's column. At 11 sp they overlap their neighbours and
+     * the ribbon stops reading as a calendar. Raising them is a change to the geometry of the
+     * chart — bigger cells, a taller ribbon, fewer weeks on the screen — and not a change of
+     * type size, so it is not made here by renaming a constant.
+     */
     val monthStyle = remember(colors) { TextStyle(fontSize = 9.sp, color = colors.inkMuted) }
     val dayStyle = remember(colors) { TextStyle(fontSize = 9.sp, color = colors.inkMuted) }
 
@@ -166,7 +178,7 @@ fun ActivityHeatmapView(
         Text(
             selected?.let { "${fmtShortDay(LocalDate.parse(it.opDate))} - ${activityCount(it.count)}" }
                 ?: "Tap a day to see what was logged",
-            fontSize = 11.sp,
+            fontSize = TextSize.Caption,
             color = colors.inkMuted,
             modifier = Modifier.padding(top = Spacing.Line),
         )
@@ -215,7 +227,13 @@ private fun WeekdayGutter(style: TextStyle) {
     }
 }
 
-/** "Less [][][][][] More" — the scale, right-aligned above the grid. */
+/**
+ * "Less [][][][][] More" — the scale, right-aligned above the grid.
+ *
+ * The two words are 10 sp, below the scale's floor of 11, for the same reason the ribbon labels
+ * are 9: they are set against the 11 dp swatches between them, and a word taller than the swatch
+ * it labels turns a scale into a sentence. Same trade as above — geometry, not type.
+ */
 @Composable
 private fun Legend(levels: Int) {
     val colors = LocalGachiColors.current
@@ -246,13 +264,13 @@ fun ActivityHeatmapCard(heatmap: Heatmap, today: LocalDate, modifier: Modifier =
         Column(Modifier.padding(Spacing.Inset)) {
             Text(
                 "Activity over the year",
-                fontSize = 14.sp,
+                fontSize = TextSize.Title,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
                 "all forms - tap a day",
-                fontSize = 11.sp,
+                fontSize = TextSize.Caption,
                 color = colors.inkMuted,
                 modifier = Modifier.padding(top = Spacing.Tight, bottom = Spacing.Inset),
             )
@@ -263,7 +281,7 @@ fun ActivityHeatmapCard(heatmap: Heatmap, today: LocalDate, modifier: Modifier =
                 Text(
                     "Empty at the start is normal. A couple of squares will light up with " +
                         "your first workouts.",
-                    fontSize = 12.sp,
+                    fontSize = TextSize.Meta,
                     color = colors.inkMuted,
                     lineHeight = 17.sp,
                     modifier = Modifier.padding(top = Spacing.Line),

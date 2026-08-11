@@ -31,6 +31,7 @@ import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
 import xyz.oleolegka.gachimuchi.domain.workStepCount
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * The timer as it appears on the logging screen: ONE compact row above the entry card.
@@ -160,7 +161,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
     ) {
         Text(
             formatClock(ceilSeconds(remainingMs)),
-            fontSize = 26.sp,
+            fontSize = TextSize.Figure,
             fontWeight = FontWeight.SemiBold,
             // work and rest never look alike, and the label below says which it is anyway
             color = if (step.kind.isEffort()) colors.accent else MaterialTheme.colorScheme.onSurface,

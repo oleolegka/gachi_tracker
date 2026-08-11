@@ -13,9 +13,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -27,6 +27,7 @@ import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * A length of time, typed as mm:ss with free entry — the one way this app asks "how long"
@@ -114,7 +115,7 @@ fun TimeField(
                 ),
             singleLine = true,
             isError = isError,
-            textStyle = TextStyle(fontSize = 22.sp, textAlign = TextAlign.Center),
+            textStyle = TextStyle(fontSize = TextSize.Figure, textAlign = TextAlign.Center),
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
                 imeAction = ImeAction.Done,
