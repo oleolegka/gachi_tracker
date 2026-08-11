@@ -75,8 +75,21 @@ data class ExerciseRef(
      */
     val schedule: WorkoutProgram? = null,
 ) {
-    /** Which of the three shapes this exercise's schedule is — see [ScheduleKind]. */
-    val scheduleKind: ScheduleKind = scheduleKindOf(schedule)
+    /**
+     * Which of the three shapes this exercise's schedule is — see [ScheduleKind].
+     *
+     * A ref built with the two numbers and no [schedule] behind them reads as
+     * [ScheduleKind.PAIR] rather than as [ScheduleKind.NONE], and that is not a convenience:
+     * [workSec]/[restSec] ARE a work:rest pair, which is precisely what that branch means. Such
+     * a ref is what the screens which only ever spoke the pair still build (and every fixture
+     * that predates schedules), and demoting them to "no schedule at all" would take the
+     * conductor away from exercises that have had it since the app had a timer.
+     */
+    val scheduleKind: ScheduleKind = when {
+        schedule != null -> scheduleKindOf(schedule)
+        workSec != null && workSec > 0 && restSec != null && restSec > 0 -> ScheduleKind.PAIR
+        else -> ScheduleKind.NONE
+    }
 
     /**
      * A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists),
