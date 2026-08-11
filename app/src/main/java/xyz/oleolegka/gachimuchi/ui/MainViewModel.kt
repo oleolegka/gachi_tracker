@@ -728,13 +728,27 @@ class MainViewModel(
      */
     fun createExercise(new: NewExercise, then: ((Long) -> Unit)? = null) {
         viewModelScope.launch {
+            /*
+             * A schedule built on the create form is written HERE, one step before the
+             * exercise that will reference it, and nowhere earlier. The form holds it as a
+             * plain value precisely so that backing out of creation leaves no orphan program
+             * in the library — the editor is opened and closed while the exercise does not
+             * exist yet, possibly several times, and every one of those passes would
+             * otherwise leave a row behind.
+             *
+             * `id = 0` is forced rather than assumed: the draft may have been seeded from a
+             * library program the user then modified, and saving it under that id would
+             * rewrite the original — which is the very thing §18.9 freezes against, arrived
+             * at from a screen that thought it was creating something new.
+             */
+            val builtProgramId = new.newProgram?.let { programRepo.save(it.copy(id = 0)) }
             val id = repo.ensureExercise(
                 name = new.name.trim(),
                 form = new.form,
                 workSec = new.workSec,
                 restSec = new.restSec,
                 oneSided = new.oneSided,
-                protocolProgramId = new.protocolProgramId,
+                protocolProgramId = builtProgramId ?: new.protocolProgramId,
             )
             _activeExerciseId.value = id
             then?.invoke(id)

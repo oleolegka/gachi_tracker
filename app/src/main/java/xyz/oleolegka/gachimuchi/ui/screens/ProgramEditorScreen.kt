@@ -88,6 +88,19 @@ fun ProgramEditorScreen(
     categories: List<String>,
     /** Whether [initial] is some exercise's protocol right now — see the KDoc above. */
     locked: Boolean = false,
+    /**
+     * This editor is building the SCHEDULE of an exercise that does not exist yet — opened in
+     * a dialog from the create form (§18.15), not from the library.
+     *
+     * Two things change, and neither is cosmetic in the way it looks. The words become the
+     * ones the create form uses ("Schedule", "Use this schedule"), because a form that spent
+     * three cards explaining what a schedule is must not hand over to a screen calling the
+     * same thing a program. And the "Logs as" field disappears: there is no exercise to link
+     * to yet, and the link is implied — this schedule is being built FOR the exercise being
+     * created — so the field could only offer a wrong answer or an empty list explaining that
+     * no hold exercise exists, to somebody in the middle of creating one.
+     */
+    asSchedule: Boolean = false,
     onSave: (WorkoutProgram) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -114,7 +127,11 @@ fun ProgramEditorScreen(
                 title = {
                     Column {
                         Text(
-                            if (initial == null) "New program" else "Edit program",
+                            when {
+                                asSchedule -> "Schedule"
+                                initial == null -> "New program"
+                                else -> "Edit program"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
@@ -134,7 +151,7 @@ fun ProgramEditorScreen(
                     TextButton(
                         onClick = { onSave(program) },
                         enabled = program.name.isNotBlank() && program.totalSec() > 0,
-                    ) { Text("Save") }
+                    ) { Text(if (asSchedule) "Use" else "Save") }
                 },
             )
         },
@@ -147,7 +164,7 @@ fun ProgramEditorScreen(
                 OutlinedTextField(
                     value = program.name,
                     onValueChange = { program = program.copy(name = it) },
-                    label = { Text("Program name") },
+                    label = { Text(if (asSchedule) "Schedule name" else "Program name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -182,12 +199,16 @@ fun ProgramEditorScreen(
                 )
             }
 
-            item {
-                ExerciseLinkField(
-                    candidates = candidates,
-                    selectedId = program.exerciseId,
-                    onSelect = { program = program.copy(exerciseId = it) },
-                )
+            // absent, not empty, while the exercise it belongs to is still being created
+            // — see [asSchedule]
+            if (!asSchedule) {
+                item {
+                    ExerciseLinkField(
+                        candidates = candidates,
+                        selectedId = program.exerciseId,
+                        onSelect = { program = program.copy(exerciseId = it) },
+                    )
+                }
             }
 
             itemsIndexedGroups(program) { index, group ->
@@ -232,7 +253,7 @@ fun ProgramEditorScreen(
                     onClick = { onSave(program) },
                     enabled = program.name.isNotBlank() && program.totalSec() > 0,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-                ) { Text("Save") }
+                ) { Text(if (asSchedule) "Use this schedule" else "Save") }
             }
 
             item { Spacer(Modifier.height(24.dp)) }
