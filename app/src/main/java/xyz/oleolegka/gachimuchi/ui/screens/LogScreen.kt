@@ -31,6 +31,7 @@ import xyz.oleolegka.gachimuchi.domain.lastBodyweight
 import xyz.oleolegka.gachimuchi.domain.lastCardio
 import xyz.oleolegka.gachimuchi.domain.lastDuration
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
+import xyz.oleolegka.gachimuchi.domain.ScheduleKind
 import xyz.oleolegka.gachimuchi.domain.lastStrengthSet
 import xyz.oleolegka.gachimuchi.domain.parseCount
 import xyz.oleolegka.gachimuchi.domain.parseDurationText

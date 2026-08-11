@@ -87,6 +87,8 @@ import xyz.oleolegka.gachimuchi.domain.lastTimeOf
 import xyz.oleolegka.gachimuchi.domain.ledByProtocol
 import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseNumber
+import xyz.oleolegka.gachimuchi.domain.ProgramStart
+import xyz.oleolegka.gachimuchi.domain.ScheduleKind
 import xyz.oleolegka.gachimuchi.domain.progressAt
 import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.startsRest
@@ -184,7 +186,12 @@ data class WorkoutLogActions(
      * this screen, once per [HoldSide] — see [RestAsk.New] — and an existing card's own "set a
      * rest" calls it once, with that card's own side (null for an exercise that has only one).
      */
-    val addExercise: (exerciseId: Long, restSec: Int, side: HoldSide?) -> Unit,
+    /**
+     * Puts one card into the workout, or restates it: the rest between sets and how many sets
+     * are PLANNED (§18.17) are both answered in the one dialog that opens when an exercise is
+     * picked, and both are statements about this session rather than about the exercise.
+     */
+    val addExercise: (exerciseId: Long, restSec: Int, side: HoldSide?, plannedSets: Int?) -> Unit,
 
     /**
      * Create a catalog exercise, and hand its id back.
@@ -243,16 +250,15 @@ data class WorkoutLogActions(
     /**
      * Begin a protocol-led set and give the screen to the conductor.
      *
-     * [addedKg] is what was hung off the belt, answered BEFORE the set rather than after it
-     * (§13.5): the plate goes on before you get under the cable, so that is when the app can
-     * ask without being in the way. Null means nothing was asked — see [WorkoutLogScreen] for
-     * the rule that decides.
-     *
-     * [side] names the CARD that was tapped, the same as [addExercise] does — a one-sided
-     * exercise led by its protocol still draws two cards, and this is what stops both of them
-     * leading to one run that cannot say which hand it counted.
+     * ── One value rather than three loose arguments, and now four ───────────────
+     * [ProgramStart] carries the exercise, the CARD that was tapped ([ProgramStart.side]), the
+     * plate answered on the way in (§13.5), and — since the simple pair started asking — the
+     * holds and sets the user chose for this run. It was three positional parameters, two of
+     * them nullable; adding two more of the same shape is how a caller ends up passing the plate
+     * where the sets go. See that type's own KDoc for what each of them means and when it is
+     * null.
      */
-    val startProtocolSet: (exercise: ExerciseRef, addedKg: Double?, side: HoldSide?) -> Unit,
+    val startProtocolSet: (start: ProgramStart) -> Unit,
 
     /**
      * Mark one CARD done — see `ActivityRepository.finishWorkoutExercise` (§14.2).
@@ -342,6 +348,23 @@ fun WorkoutLogScreen(
      */
     liveExerciseId: Long? = null,
     /**
+     * Which CARD of [liveExerciseId] that run belongs to — [HoldSide.code], or null when the
+     * exercise has only one card (and for a run started from the timer tab, which is no card's).
+     *
+     * ── Without it, one run makes BOTH hands look busy ──────────────────────────
+     * A one-sided exercise draws two cards, and "is this card running?" used to be answered by
+     * the exercise id alone. So a set conducted on the left hand marked the RIGHT hand's card as
+     * running too: it said so in words, and its tap led to the left hand's conductor instead of
+     * starting anything. Reported from the phone as "it turns out the timer is going for the
+     * right hand as well — it is glued together for the two hands".
+     *
+     * The run has carried the answer since [RunSnapshot.side] existed; this screen simply never
+     * asked for it. Note what this does NOT fix, because it is not a drawing problem: the two
+     * hands still share ONE conductor, so starting the right hand while the left one is mid-run
+     * replaces that run rather than joining it. See the report accompanying this change.
+     */
+    liveSide: String? = null,
+    /**
      * What matured while a protocol-led set had the rests muted, as one sentence, or null.
      *
      * Computed and spoken already (domain/Floors.kt, `floorSummaryText`); this is the only
@@ -408,6 +431,17 @@ fun WorkoutLogScreen(
     var weighingFor by rememberSaveable { mutableStateOf<Long?>(null) }
     /** Which CARD [weighingFor] was raised from — the same idea as [entrySide], for the other tap. */
     var weighingSide by rememberSaveable { mutableStateOf<String?>(null) }
+    /**
+     * The exercise whose SIMPLE PAIR run is waiting on "how many holds, how many sets", or null.
+     *
+     * A separate pair of fields from [weighingFor] rather than a mode on it, because the two
+     * questions belong to different branches: a strict schedule is asked only about the plate,
+     * and a pair is asked about the plate as one field among three. See §18.15.
+     */
+    var planningFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    var planningSide by rememberSaveable { mutableStateOf<String?>(null) }
+    /** A protocol card was tapped while another one already has the conductor. See its dialog. */
+    var conductorBusy by rememberSaveable { mutableStateOf(false) }
     /**
      * The card whose removal is being confirmed, by [WorkoutExercise.cardKey] rather than by
      * catalog id: a block can be there for an exercise this phone has no catalog row for, and
@@ -618,11 +652,13 @@ fun WorkoutLogScreen(
                 // an exercise this phone has no catalog row for cannot have a form built
                 // for it, so it is shown and not offered — see WorkoutExercise.exerciseId
                 val ref = state.refById(id)
-                val running = id != null && id == liveExerciseId
+                // the CARD is running, not the exercise — see [liveSide]
+                val running = id != null && id == liveExerciseId && exercise.side?.code == liveSide
                 ExerciseCard(
                     name = exerciseName(state, exercise),
                     restSec = exercise.restSec,
                     sets = exercise.sets.map { it.form },
+                    plannedSets = exercise.plannedSets,
                     running = running,
                     floor = id?.let { e -> floors.firstOrNull { it.exerciseId == e && it.side == exercise.side?.code } },
                     nowMs = nowMs,
@@ -652,17 +688,55 @@ fun WorkoutLogScreen(
                          */
                         ledByProtocol(ref) && ref.canBeConducted -> {
                             {
-                                /*
-                                 * ASK ONLY IF THERE WAS A PLATE LAST TIME (§13.5). Asking
-                                 * unconditionally would put a question in front of every
-                                 * bodyweight protocol — a set that used to start with one tap
-                                 * and no screens at all.
-                                 */
-                                if (lastAddedKg(state, ref) == null) {
-                                    actions.startProtocolSet(ref, null, exercise.side)
-                                } else {
-                                    weighingFor = ref.id
-                                    weighingSide = exercise.side?.code
+                                when {
+                                    /*
+                                     * ANOTHER CARD IS UNDER THE CONDUCTOR, and there is only one
+                                     * conductor in the app (§13.2: "exactly one at any moment, and
+                                     * it owns the screen and the sound").
+                                     *
+                                     * This branch is new because the card above it is new. Until
+                                     * the running check learned about sides, a one-sided exercise's
+                                     * other card counted as running and led back to the conductor,
+                                     * so this could not be reached. Now it can, and what lies
+                                     * underneath is `TimerController.start`, which replaces a run
+                                     * "without ceremony" — it would take the sets the other hand
+                                     * had already done with it, silently, and it does not even
+                                     * leave them as an offer.
+                                     *
+                                     * So the tap SAYS SO instead. Not a fix for the two hands
+                                     * working at once — that needs the rest between sets to stop
+                                     * being a step of the conductor's program, which is a decision
+                                     * about the model and not about this screen. It is the honest
+                                     * report of the state the app is actually in, in place of
+                                     * losing a set to find out.
+                                     */
+                                    liveExerciseId != null -> conductorBusy = true
+                                    /*
+                                     * A SIMPLE PAIR DOES NOT KNOW HOW LONG THE RUN IS (§18.15).
+                                     * Its schedule fixes the shape of one effort and nothing
+                                     * else, so the holds and the sets are this run's to choose —
+                                     * and until now they were not chosen but derived, four sets
+                                     * appearing out of a setting the owner had never seen. The
+                                     * plate rides along in the same dialog when there was one
+                                     * last time, so this is one question screen and not two.
+                                     */
+                                    ref.scheduleKind == ScheduleKind.SIMPLE_PAIR -> {
+                                        planningFor = ref.id
+                                        planningSide = exercise.side?.code
+                                    }
+                                    /*
+                                     * ASK ONLY IF THERE WAS A PLATE LAST TIME (§13.5). Asking
+                                     * unconditionally would put a question in front of every
+                                     * bodyweight protocol — a set that used to start with one tap
+                                     * and no screens at all.
+                                     */
+                                    lastAddedKg(state, ref) == null ->
+                                        actions.startProtocolSet(ProgramStart(ref, exercise.side, null))
+
+                                    else -> {
+                                        weighingFor = ref.id
+                                        weighingSide = exercise.side?.code
+                                    }
                                 }
                             }
                         }
@@ -811,13 +885,19 @@ fun WorkoutLogScreen(
             // order of the rest (the catalog column, then what was actually rested)
             initialSec = already?.restSec?.takeIf { it >= MIN_STEP_SEC }
                 ?: restHintSec(settings, state.events, ref),
+            /*
+             * A FRESH card opens on the default; a card already in the workout opens on what it
+             * actually plans, which for one that never planned anything is an empty box. Coming
+             * back to change a rest must not hand a card a plan it was never given.
+             */
+            initialSets = already?.plannedSets ?: DEFAULT_PLANNED_SETS.takeIf { askingRestIsNew },
             // the same question either way; only the name of the place it lands differs
             confirmLabel = when {
                 already != null -> "Save"
                 standalone -> "Add"
                 else -> "Add to workout"
             },
-            onConfirm = { sec ->
+            onConfirm = { sec, plannedSets ->
                 /*
                  * A one-sided exercise picked fresh gets BOTH its cards, at this same rest, in
                  * one answer to one question — the two-card rule holds regardless of which of
@@ -826,10 +906,10 @@ fun WorkoutLogScreen(
                  * it is never null for a card that came from a real left/right split.
                  */
                 if (askingRestIsNew && ref.oneSided) {
-                    actions.addExercise(id, sec, HoldSide.LEFT)
-                    actions.addExercise(id, sec, HoldSide.RIGHT)
+                    actions.addExercise(id, sec, HoldSide.LEFT, plannedSets)
+                    actions.addExercise(id, sec, HoldSide.RIGHT, plannedSets)
                 } else {
-                    actions.addExercise(id, sec, askingRestSide?.let(HoldSide::fromCode))
+                    actions.addExercise(id, sec, askingRestSide?.let(HoldSide::fromCode), plannedSets)
                 }
                 askingRestFor = null
             },
@@ -842,11 +922,52 @@ fun WorkoutLogScreen(
             exerciseName = ref.name,
             initialKg = lastAddedKg(state, ref),
             onConfirm = { kg ->
-                actions.startProtocolSet(ref, kg, weighingSide?.let(HoldSide::fromCode))
+                actions.startProtocolSet(ProgramStart(ref, weighingSide?.let(HoldSide::fromCode), kg))
                 weighingFor = null
                 weighingSide = null
             },
             onDismiss = { weighingFor = null; weighingSide = null },
+        )
+    } }
+
+    if (conductorBusy) {
+        AlertDialog(
+            onDismissRequest = { conductorBusy = false },
+            title = { Text("A set is already being conducted") },
+            text = {
+                Text(
+                    "The app calls out one protocol at a time - it has one screen and one voice. " +
+                        "Finish or stop the set that is running, and this one can start.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { conductorBusy = false; actions.openConductor() }) {
+                    Text("Go to it")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { conductorBusy = false }) { Text("Stay here") }
+            },
+        )
+    }
+
+    planningFor?.let { id -> state.refById(id)?.let { ref ->
+        RunPlanDialog(
+            exerciseName = ref.name,
+            // what was done last time, which for a second set of the same session is the set
+            // just recorded — the same "one tap to repeat" rule the entry form follows
+            initialHolds = lastHoldSet(state.events, ref.link)?.reps ?: DEFAULT_RUN_HOLDS,
+            // null keeps the plate off the dialog entirely, the same test §13.5 already applies
+            initialKg = lastAddedKg(state, ref),
+            onConfirm = { holds, kg ->
+                actions.startProtocolSet(
+                    ProgramStart(ref, planningSide?.let(HoldSide::fromCode), kg, holds)
+                )
+                planningFor = null
+                planningSide = null
+            },
+            onDismiss = { planningFor = null; planningSide = null },
         )
     } }
 
@@ -1194,6 +1315,14 @@ private fun ExerciseCard(
     sets: List<ActivityForm>,
     /** Singular and plural of what this card counts. Sets, unless the card holds something else. */
     countNoun: Pair<String, String> = "set" to "sets",
+    /**
+     * How many sets this card PLANNED (§18.17), or null when nobody said.
+     *
+     * It rides on the counter the card already draws rather than becoming a second number
+     * beside it: the owner asked for a count of sets done, this is the same count read against
+     * a target, and two counters saying nearly the same thing is how a card stops being read.
+     */
+    plannedSets: Int? = null,
     /** Anything else the meta line should carry after the count and the protocol. */
     metaNote: String? = null,
     /** A protocol-led set of this exercise is being conducted right now. */
@@ -1363,9 +1492,16 @@ private fun ExerciseCard(
              * because they are sets; which of them were ramp-ups is what the badges say. The
              * protocol stands here too when every set shares it, instead of once per set.
              */
+            val noun = if (sets.size == 1) countNoun.first else countNoun.second
             Text(
                 listOfNotNull(
-                    "${sets.size} ${if (sets.size == 1) countNoun.first else countNoun.second}",
+                    when {
+                        plannedSets == null -> "${sets.size} $noun"
+                        // the plan is not a limit, so going past it is reported and not hidden;
+                        // "7 of 5" would read as an arithmetic error rather than a good session
+                        sets.size > plannedSets -> "${sets.size} $noun, $plannedSets planned"
+                        else -> "${sets.size} of $plannedSets $noun"
+                    },
                     table.commonProtocol,
                     metaNote,
                 ).joinToString(" · "),
@@ -1473,9 +1609,27 @@ private fun RestBar(floor: RestFloor, nowMs: Long, modifier: Modifier = Modifier
     }
 }
 
+/** The plan a card opens on when nothing better is known. Three is a workmanlike session. */
+private const val DEFAULT_PLANNED_SETS = 3
+
+/** Past this the plan is a typo, the same sanity rail the holds have. */
+private const val MAX_PLANNED_SETS = 30
+
 /**
- * The rest between sets, asked once when the exercise joins the workout and changed from the
- * card afterwards.
+ * How this exercise goes today: the rest between sets, and how many sets are PLANNED — asked
+ * once when the exercise joins the workout and changed from the card afterwards.
+ *
+ * ── Why the plan is here and not before each run (§18.17) ───────────────────────
+ * The set count used to be a field of the "before this run" dialog, which asked it again before
+ * every single set and turned the answer into group repeats of the conductor's program — the
+ * pauses between those sets then held the one conductor the app has, and the other hand could
+ * not start. A run is one set now, so the count is a PLAN: stated once, drawn on the card as
+ * "2 of 5", and enforced nowhere. A sixth set of a card that planned five is recorded without a
+ * word, because the journal records what happened and the plan is only what was intended.
+ *
+ * The two questions belong together because they are the same kind of statement — about THIS
+ * session, as opposed to what the exercise is (the catalog) or what was done (the sets) — and
+ * because this dialog already opens, so the plan costs no extra screen.
  *
  * ── Prefilled so that agreeing is one tap ───────────────────────────────────────
  * The offer is what was chosen last time (§13.2), and the point of asking at all is that it
@@ -1490,8 +1644,17 @@ private fun RestBar(floor: RestFloor, nowMs: Long, modifier: Modifier = Modifier
 private fun RestDialog(
     exerciseName: String,
     initialSec: Int,
+    /**
+     * What the plan box opens on, or null for an empty box.
+     *
+     * NULL IS NOT "the default": a card already in the workout that never had a plan opens
+     * blank, so that changing its rest cannot quietly give it one it was never asked for. The
+     * default belongs to the caller, which is the only place that knows whether this is a fresh
+     * card or a second look at one.
+     */
+    initialSets: Int?,
     confirmLabel: String,
-    onConfirm: (Int) -> Unit,
+    onConfirm: (restSec: Int, plannedSets: Int?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
@@ -1499,6 +1662,17 @@ private fun RestDialog(
     // remembered answer) and typed as mm:ss from there — see ui/components/TimeField.kt (§13.9)
     var draft by remember(exerciseName, initialSec) { mutableStateOf(formatDurationSec(initialSec)) }
     val seconds = parseDurationText(draft)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
+    var setsDraft by remember(exerciseName, initialSets) {
+        mutableStateOf(initialSets?.toString().orEmpty())
+    }
+    /*
+     * BLANK IS A LEGITIMATE ANSWER, and it means "no plan" rather than an error: the owner logs
+     * sessions where how many sets there will be is decided on the bar. So an empty box confirms
+     * fine and the card then counts sets without a target, exactly as it did before this field
+     * existed. Only a number that is present and out of range holds the button.
+     */
+    val planBlank = setsDraft.isBlank()
+    val plannedSets = parseNumber(setsDraft)?.toInt()?.takeIf { it in 1..MAX_PLANNED_SETS }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1537,12 +1711,150 @@ private fun RestDialog(
                         textAlign = TextAlign.Center,
                     )
                 }
+                StepperField(
+                    label = "Sets planned",
+                    value = setsDraft,
+                    onValueChange = { setsDraft = it },
+                    steps = listOf(1.0),
+                    decimal = false,
+                    stacked = true,
+                )
+                Text(
+                    if (!planBlank && plannedSets == null) {
+                        "A plan is a whole number of sets, or nothing at all."
+                    } else {
+                        "The card counts against this. Nothing stops you doing more."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkSecondary,
+                )
             }
         },
         confirmButton = {
-            TextButton(onClick = { seconds?.let(onConfirm) }, enabled = seconds != null) {
+            val ok = seconds != null && (planBlank || plannedSets != null)
+            TextButton(
+                onClick = { if (ok) seconds?.let { onConfirm(it, plannedSets) } },
+                enabled = ok,
+            ) {
                 Text(confirmLabel)
             }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * What the holds box opens on when the journal has no previous set of this exercise to copy.
+ *
+ * Six, because six is the hangboard repeater set this app was built around and a number in the
+ * box beats an empty one — the whole point of the dialog is that the run's length is visible and
+ * changeable, not that it has to be typed from scratch every time.
+ */
+private const val DEFAULT_RUN_HOLDS = 6
+
+/**
+ * Ceiling on what the run plan will accept, a sanity rail rather than an opinion about
+ * training: past it the number is a typo, and a run of six hundred holds is a phone counting
+ * until the battery goes.
+ */
+private const val MAX_RUN_HOLDS = 60
+
+/**
+ * How long this ONE set is: the holds, and the plate when there is one.
+ *
+ * ── The question that was missing entirely ──────────────────────────────────────
+ * §18.15 defines the simple pair as the branch whose schedule says only "work this long, rest
+ * this long" — so how many holds go in a set is the run's own to choose, and the document says
+ * it is asked before every one. Nothing asked; the holds were copied off the last set in the
+ * journal.
+ *
+ * ── The set count has left this dialog (§18.17) ─────────────────────────────────
+ * It used to be the second field here, and it was the wrong question in the wrong place: a run
+ * is ONE set now, so asking before each set how many sets there will be in total asks the same
+ * thing over and over and gets a countdown out of it either way. The plan lives on the card
+ * instead, answered once when the exercise enters the workout, and the card reads "2 of 5"
+ * against the sets actually recorded.
+ *
+ * ── Why the plate is in HERE rather than in a second dialog ─────────────────────
+ * §13.5 wants the weight answered on the way into the set, and it already is ([WeightDialog]).
+ * Putting it in this dialog for the branch that has one anyway makes the run's whole answer one
+ * screen and one confirm, instead of two dialogs in a row before a set that used to need none.
+ * It is drawn only when the last set carried a plate — the same test [WeightDialog] is raised
+ * by, so a bodyweight protocol still sees one field and not two.
+ *
+ * A STRICT schedule never reaches here: it fixes the holds itself, and the only thing left to
+ * ask it is the plate (§18.15). That branching is at the tap, and [ProgramStart.holds] restates
+ * it where the value is consumed.
+ */
+@Composable
+internal fun RunPlanDialog(
+    exerciseName: String,
+    initialHolds: Int,
+    /** The plate last hung on this exercise, or null when there has never been one (§13.5). */
+    initialKg: Double?,
+    onConfirm: (holds: Int, addedKg: Double?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    var holdsDraft by remember(exerciseName, initialHolds) { mutableStateOf(initialHolds.toString()) }
+    var kgDraft by remember(exerciseName, initialKg) {
+        mutableStateOf(initialKg?.let { formatNumber(it) }.orEmpty())
+    }
+
+    val holds = parseNumber(holdsDraft)?.toInt()?.takeIf { it in 1..MAX_RUN_HOLDS }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Before this set") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Block)) {
+                Text(
+                    exerciseName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                /*
+                 * THE WORD IS "HOLDS", not a bare number and not "reps". §18.15 names this as a
+                 * defect of the run offer — "Set 1" and then a naked figure, with nothing saying
+                 * that the figure counts the hangs INSIDE the set — and the question on the way in
+                 * would have inherited it. A hold is what this exercise records one of.
+                 */
+                StepperField(
+                    label = "Holds in this set",
+                    value = holdsDraft,
+                    onValueChange = { holdsDraft = it },
+                    steps = listOf(1.0),
+                    decimal = false,
+                    stacked = true,
+                )
+                // only when there was a plate last time — the same test the weight dialog applies,
+                // so a bodyweight protocol is not given a field it never uses
+                if (initialKg != null) {
+                    StepperField(
+                        label = "Added weight, kg",
+                        value = kgDraft,
+                        onValueChange = { kgDraft = it },
+                        steps = listOf(2.5, 5.0),
+                        stacked = true,
+                    )
+                }
+                Text(
+                    if (holds == null) {
+                        "Holds is a whole number, at least one."
+                    } else {
+                        "The schedule sets the rhythm. This is one set of it - the rest after " +
+                            "it runs under the card."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkSecondary,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (holds != null) onConfirm(holds, parseNumber(kgDraft)) },
+                enabled = holds != null,
+            ) { Text("Start the set") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -1567,6 +1879,10 @@ private fun RestDialog(
  * `internal` rather than `private`: [LogScreen] raises the exact same dialog before its own
  * one-tap program starts, on the same §13.5 rule — see [lastAddedKg]'s own note on why that
  * has to stay one question asked one way rather than two that can drift apart.
+ *
+ * THE STRICT BRANCH ONLY, since §18.15. A simple pair is asked about its holds and sets as
+ * well, all three in [RunPlanDialog], because for that branch the plate is one answer out of
+ * three rather than the only one.
  */
 @Composable
 internal fun WeightDialog(

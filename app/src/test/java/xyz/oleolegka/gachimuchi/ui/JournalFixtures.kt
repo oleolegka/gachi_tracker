@@ -92,9 +92,15 @@ class Journal {
         restSec: Int,
         at: String = "09:01",
         side: HoldSide? = null,
+        /** How many sets are planned for this card, or null when nobody said — see §18.17. */
+        plannedSets: Int? = null,
     ) = add(
         TYPE_WORKOUT_EXERCISE_ADDED,
-        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec, side = side?.code)),
+        payloadJson.encodeToString(
+            WorkoutExerciseAdded(
+                workoutId, exercise.id, restSec, side = side?.code, plannedSets = plannedSets,
+            )
+        ),
         "${day}T$at:00",
         workoutId,
     )

@@ -530,8 +530,10 @@ fun GachiApp(viewModel: MainViewModel) {
             val workoutActions = remember(workoutBeingLogged) {
                 if (workoutBeingLogged != null) {
                     WorkoutLogActions(
-                        addExercise = { exerciseId, restSec, side ->
-                            viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec, side)
+                        addExercise = { exerciseId, restSec, side, plannedSets ->
+                            viewModel.addExerciseToWorkout(
+                                workoutBeingLogged, exerciseId, restSec, side, plannedSets,
+                            )
                         },
                         createExercise = { new, then -> viewModel.createExercise(new, then) },
                         /*
@@ -563,8 +565,8 @@ fun GachiApp(viewModel: MainViewModel) {
                         },
                         unfinishExercise = viewModel::unfinishWorkoutExercise,
                         unfinishWorkout = viewModel::unfinishWorkout,
-                        startProtocolSet = { exercise, addedKg, side ->
-                            viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                        startProtocolSet = { start ->
+                            viewModel.startProgramForExercise(start)
                             conductorOpen = true
                         },
                         openConductor = { conductorOpen = true },
@@ -583,8 +585,8 @@ fun GachiApp(viewModel: MainViewModel) {
                      * just created.
                      */
                     WorkoutLogActions(
-                        addExercise = { exerciseId, restSec, side ->
-                            viewModel.updateDraftCard(exerciseId, restSec, side)
+                        addExercise = { exerciseId, restSec, side, plannedSets ->
+                            viewModel.updateDraftCard(exerciseId, restSec, side, plannedSets)
                         },
                         createExercise = { new, then -> viewModel.createExercise(new, then) },
                         addSet = { form ->
@@ -603,10 +605,10 @@ fun GachiApp(viewModel: MainViewModel) {
                         finishExercise = { _, _ -> }, // no card of a draft can be finished
                         unfinishExercise = {},
                         unfinishWorkout = {},
-                        startProtocolSet = { exercise, addedKg, side ->
+                        startProtocolSet = { start ->
                             viewModel.promoteDraft { id ->
                                 loggingWorkoutId = id
-                                viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                                viewModel.startProgramForExercise(start)
                                 conductorOpen = true
                             }
                         },
@@ -635,6 +637,7 @@ fun GachiApp(viewModel: MainViewModel) {
                 floors = restFloors,
                 actions = workoutActions,
                 liveExerciseId = timerRun?.exerciseId,
+                liveSide = timerRun?.side,
                 readySummary = floorSummary,
                 onDismissSummary = viewModel::dismissFloorSummary,
             )

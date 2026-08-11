@@ -467,10 +467,28 @@ fun restProgram(restSec: Int, label: String = "Rest"): WorkoutProgram = WorkoutP
  * EXERCISE.
  *
  * A hangboard exercise already carries its work:rest protocol (§12-A puts it on the
- * exercise, not on the set), so "Hangs - 7:3" plus a rep count, a set count and a pause
- * between sets is a complete interval program with nothing left to ask.
- * That is the whole point: the numbers are already in the catalog and in the journal, so
- * starting the right timer costs one tap instead of building a program by hand.
+ * exercise, not on the set), so "Hangs - 7:3" plus a hold count is a complete interval
+ * program with nothing left to ask. That is the whole point: the numbers are already in the
+ * catalog and in the journal, so starting the right timer costs one tap instead of building
+ * a program by hand.
+ *
+ * ── ONE SET, and the sets that used to be in here (§18.17) ──────────────────────
+ * This used to take a SET COUNT and a PAUSE BETWEEN SETS as well, and wrapped the block in a
+ * group repeated that many times with those pauses expanded into [StepKind.REST] steps. The
+ * document contradicted itself about that and the owner settled it: §13.4 wins — "the rest
+ * between sets of a protocol exercise is a FLOOR, not part of the protocol".
+ *
+ * The cost of the old shape was not theoretical. The conductor is SINGULAR — one screen, one
+ * voice, one foreground service — so while the left hand sat out its pause between sets, that
+ * pause WAS the conductor: the floors stayed silent by construction, and starting the right
+ * hand went through `TimerController.start`, which replaces a running run without ceremony and
+ * would have taken the left hand's already-counted sets with it. One-sided work exists exactly
+ * so the two hands can alternate, and the model made that impossible.
+ *
+ * So a run is now one set of [reps] holds and it ends. The pause that follows is a floor keyed
+ * by (exercise, side) — several of those run at once — started when the offer is answered
+ * ([xyz.oleolegka.gachimuchi.ui.MainViewModel.startRestAfterRun]). How many sets are planned is
+ * no longer a countdown scenario at all; it lives on the workout card as a plan (§18.17).
  *
  * Returns null when the exercise has no protocol — there is no work duration to count
  * down, and inventing one would be worse than offering a plain rest timer instead.
@@ -478,8 +496,6 @@ fun restProgram(restSec: Int, label: String = "Rest"): WorkoutProgram = WorkoutP
 fun programFromExercise(
     exercise: ExerciseRef,
     reps: Int,
-    sets: Int,
-    restBetweenSetsSec: Int,
     prepareSec: Int = PREPARE_DEFAULT_SEC,
 ): WorkoutProgram? {
     val protocol = exercise.protocol ?: return null
@@ -501,8 +517,6 @@ fun programFromExercise(
                         repeats = reps.coerceAtLeast(1),
                     )
                 ),
-                repeats = sets.coerceAtLeast(1),
-                restBetweenRepeatsSec = restBetweenSetsSec.coerceAtLeast(0),
             )
         ),
     )
@@ -534,6 +548,31 @@ data class ProgramStart(
     val exercise: ExerciseRef,
     val side: HoldSide?,
     val addedKg: Double?,
+    /**
+     * How many holds this ONE set is, ANSWERED BY THE USER before this run — or null for a
+     * caller that did not ask.
+     *
+     * ── Why it is on the way in at all ──────────────────────────────────────────
+     * §18.15 defines the simple pair as the branch whose schedule fixes the SHAPE of the effort
+     * and nothing else: how many holds go in a set is the run's own to choose, because the
+     * schedule does not say. It was not asked. The holds came from the last set of this exercise
+     * in the journal, silently.
+     *
+     * Null rather than a default, and that distinction carries the meaning: null is "nobody was
+     * asked", which is the timer tab and the strict branch, and it keeps the old derivation. A
+     * value is an answer, and an answer wins over anything derived.
+     *
+     * ── The set count that used to sit beside it is gone (§18.17) ───────────────
+     * A run is ONE set now, so "how many sets" is not a question this run can answer and asking
+     * it before every set was asking the same thing over and over. It became a PLAN on the
+     * workout card, answered once when the exercise enters the workout
+     * ([xyz.oleolegka.gachimuchi.domain.WorkoutExerciseAdded.plannedSets]).
+     *
+     * IGNORED by a strict schedule, which fixes the whole scenario itself (§18.15) — the caller
+     * does not put the question in front of a strict exercise, and this is the second line of
+     * that rather than its only one.
+     */
+    val holds: Int? = null,
 )
 
 // --- the two programs that ship with the app ------------------------------------------

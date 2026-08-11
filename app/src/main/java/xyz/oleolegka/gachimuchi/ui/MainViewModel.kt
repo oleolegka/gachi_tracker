@@ -414,10 +414,15 @@ class MainViewModel(
     }
 
     /** Stages an exercise into the draft, or — called again for one already there — changes its rest. */
-    fun updateDraftCard(exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+    fun updateDraftCard(
+        exerciseId: Long,
+        restSec: Int,
+        side: HoldSide? = null,
+        plannedSets: Int? = null,
+    ) {
         val current = _draft.value ?: return
         val without = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side }
-        _draft.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side))
+        _draft.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side, plannedSets))
     }
 
     /** Takes a card off the draft. There is nothing to undo in the journal — it was never written. */
@@ -522,7 +527,9 @@ class MainViewModel(
         _draft.value = null
         viewModelScope.launch {
             val id = repo.startWorkout(current.day.toString(), current.slotId, current.name)
-            current.cards.forEach { card -> repo.addExerciseToWorkout(id, card.exerciseId, card.restSec, card.side) }
+            current.cards.forEach { card ->
+                repo.addExerciseToWorkout(id, card.exerciseId, card.restSec, card.side, card.plannedSets)
+            }
             then(id)
         }
     }
@@ -541,8 +548,16 @@ class MainViewModel(
      * [side] names one CARD of a one-sided exercise. Adding both is two calls — see
      * [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen] for where they are made.
      */
-    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int, side: HoldSide? = null) {
-        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec, side) }
+    fun addExerciseToWorkout(
+        workoutId: Long,
+        exerciseId: Long,
+        restSec: Int,
+        side: HoldSide? = null,
+        plannedSets: Int? = null,
+    ) {
+        viewModelScope.launch {
+            repo.addExerciseToWorkout(workoutId, exerciseId, restSec, side, plannedSets)
+        }
     }
 
     /**
@@ -721,14 +736,19 @@ class MainViewModel(
         exerciseId: Long?,
         side: HoldSide? = null,
     ) {
-        exerciseId?.let { timer.floors.dismiss(it, side?.code) }
+        exerciseId?.let {
+            timer.floors.dismiss(it, side?.code)
+            // and the conductor, but ONLY when it is this card's run — the whole point of
+            // (exerciseId, side) is that the other hand goes on working while this one is gone
+            timer.stopFor(it, side, exactSide = true)
+        }
         viewModelScope.launch {
             if (eventIds.isNotEmpty()) repo.deleteEntries(eventIds)
             if (exerciseId != null) {
                 val stillThere = buildWorkout(repo.allEvents(), workoutId)
                     ?.exercises.orEmpty()
                     .any { it.exerciseId == exerciseId }
-                if (!stillThere) timer.floors.dismissAllOf(exerciseId)
+                if (!stillThere) stopCountdownsFor(exerciseId)
             }
         }
     }
@@ -762,9 +782,21 @@ class MainViewModel(
              * alarm), so deleting the workout without this leaves the phone counting, and
              * eventually speaking, for a session that is no longer in the log (§23.A2).
              */
-            buildWorkout(events, workoutId)?.exercises?.forEach { exercise ->
-                exercise.exerciseId?.let { timer.floors.dismiss(it, exercise.side?.code) }
-            }
+            /*
+             * By EXERCISE and not by card, and including the conductor. Two reasons, both of
+             * them reports from the phone:
+             *
+             *  - a floor is keyed by the side of the SET that started it and a card by the side
+             *    of the row that added it, and a journal where those disagree (a sideless set on
+             *    a one-sided exercise) left the card's own `dismiss` missing the floor entirely.
+             *    `removeWorkoutExercise` already carries this belt; this path did not.
+             *  - the whole workout is going, so there is no card of it whose countdown could be
+             *    worth keeping — which is what makes the blunt key the right one here.
+             */
+            buildWorkout(events, workoutId)?.exercises
+                ?.mapNotNull { it.exerciseId }
+                ?.distinct()
+                ?.forEach { stopCountdownsFor(it) }
             repo.deleteEntries(workoutEventIds(events, workoutId))
         }
     }
@@ -904,6 +936,28 @@ class MainViewModel(
     fun dismissFloorsOf(exerciseId: Long) = timer.floors.dismissAllOf(exerciseId)
 
     /**
+     * EVERY countdown that names [exerciseId], taken down at once: the rests of both its cards
+     * and the conductor, when the conductor happens to be running for it.
+     *
+     * ── One question, asked in one place ────────────────────────────────────────
+     * "Is anything still counting for this?" has two answers in this app — a floor and a run —
+     * and the delete paths used to ask only the first. Each of them then had to remember, on its
+     * own, that a protocol run is a second kind of countdown living in a foreground service that
+     * no database write can reach; none of them did. So the two answers are joined here and the
+     * callers ask once. See [TimerController.stopFor] for what the run half costs if it is left
+     * out.
+     *
+     * Deliberately synchronous and NOT inside the coroutine that does the deleting: the
+     * countdowns are in-memory state plus a preference file, and taking them down before the
+     * journal write means there is no window, however short, in which the phone is counting for
+     * rows that are already gone.
+     */
+    fun stopCountdownsFor(exerciseId: Long) {
+        timer.floors.dismissAllOf(exerciseId)
+        timer.stopFor(exerciseId)
+    }
+
+    /**
      * Removes a whole SINGLE-entry card of a day: its rows, and the rest its exercise may still
      * be counting.
      *
@@ -912,7 +966,7 @@ class MainViewModel(
      * beep for something the log no longer contains.
      */
     fun deleteSingleEntries(eventIds: List<Long>, exerciseId: Long?) {
-        exerciseId?.let { dismissFloorsOf(it) }
+        exerciseId?.let { stopCountdownsFor(it) }
         deleteEntries(eventIds)
     }
 
@@ -1012,12 +1066,19 @@ class MainViewModel(
 
             val events = repo.allEvents()
             val settings = timerSettings.value
-            val reps = lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
+            /*
+             * THE ANSWER FIRST, the guess only when there was no question (see [ProgramStart.holds]).
+             * The holds used to be derived unconditionally, off the last set in the journal.
+             *
+             * ONE SET, and no pause after it (§18.17). The set count and the rest between sets
+             * used to be multiplied into the program here; the pause that follows this set is a
+             * floor now, started by [startRestAfterRun] when the offer is answered, so that the
+             * conductor is free the moment the holds are done and the other hand can have it.
+             */
+            val reps = start.holds ?: lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
                 exercise = start.exercise,
                 reps = reps,
-                sets = settings.defaultSets,
-                restBetweenSetsSec = resolveRestSec(settings, events, start.exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch
             timer.start(program, start.exercise.id, RunOrigin.EXERCISE, start.side)
@@ -1097,9 +1158,9 @@ class MainViewModel(
      * Writes the confirmed sets, one journal event per set, through the same repository and
      * the same domain builders the entry card uses.
      *
-     * Deliberately NOT through [addSet]: that starts a rest timer, which is right after a
-     * set done by hand and wrong here — the run has just ended and there is nothing left to
-     * rest between.
+     * Deliberately NOT through [addSet]: that path also evaluates records, fires a celebration
+     * and measures the rest that just ended, none of which a run's own sets want. The REST it
+     * starts is wanted, and is started here instead — see [startRestAfterRun].
      *
      * The day comes from the OUTCOME, not from today. An offer now survives the process
      * (timer/TimerController.kt), so it can be answered the morning after the session it
@@ -1135,6 +1196,7 @@ class MainViewModel(
                 outcome?.programId?.takeIf { it != 0L && outcome.exerciseId != exercise.id }
                     ?.let { runCatching { programRepo.linkExercise(it, exercise.id) } }
                 timer.clearOutcome()
+                startRestAfterRun(exercise, day, outcome?.sideOf)
             }
             /*
              * The failure is REPORTED AS A FAILURE. It used to be flattened into
@@ -1153,6 +1215,43 @@ class MainViewModel(
                 failed = !ok,
             )
         }
+    }
+
+    /**
+     * Starts the rest under the CARD a conducted set was just written for.
+     *
+     * ── The missing bar, and why nothing was drawn at all ───────────────────────
+     * §13.4 says it plainly: "the rest between sets of a protocol exercise is a FLOOR, not part
+     * of the protocol", and §13.3 step 11 walks it — the offer is answered, and the fingerboard's
+     * four-minute rest starts. It never did. [logRunSets] deliberately avoided [addSet], and the
+     * rest went with everything else it was avoiding, so a set done under the conductor left its
+     * card with no countdown on it whatsoever. Reported from the phone as "there is no indicator
+     * over the left hand's card at all, and no way to tell whether the timer is even running".
+     *
+     * A floor and not a step of anything: it is keyed by (exerciseId, side), so it belongs to
+     * the card that earned it and leaves the other hand free — which is the entire reason the
+     * side is on a floor at all.
+     *
+     * ── The four conditions are the same four [addSet] applies ──────────────────
+     * A run answered the next morning must not start a countdown ([day] against today, §13.6);
+     * a timer switched off stays off; `autoStartRest` is the setting that governs exactly this;
+     * and a form that is not followed by another set of itself gets no rest ([startsRest]).
+     * Copied in behaviour rather than in code because the two callers differ in what they have
+     * to hand — this one has the exercise already and does not re-read the journal for it.
+     */
+    private suspend fun startRestAfterRun(exercise: ExerciseRef, day: String, side: HoldSide?) {
+        if (day != LocalDate.now().toString()) return
+        if (!timer.enabled.value) return
+        val settings = timer.settings.value
+        if (!settings.autoStartRest || !startsRest(exercise.form)) return
+        timer.floors.start(
+            exerciseId = exercise.id,
+            // named by hand as well as by card: the summary line and the shade notification
+            // have only the name to tell one hand's rest from the other's
+            exerciseName = if (side != null) "${exercise.name} - ${side.label()}" else exercise.name,
+            orderedMs = restHintSec(settings, repo.allEvents(), exercise) * 1000L,
+            side = side?.code,
+        )
     }
 
     // --- saying what was written -------------------------------------------------------

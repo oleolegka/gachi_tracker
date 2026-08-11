@@ -30,7 +30,7 @@ import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
-import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.multiSetProgram
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.flatten
 import xyz.oleolegka.gachimuchi.domain.totalSec
@@ -147,7 +147,7 @@ class RunLoggingChainTest {
     @Test
     fun `an exercise, a program built from it, a run on the clock, and a set in the journal`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(
+        val program = multiSetProgram(
             exercise = exercise, reps = 2, sets = 2, restBetweenSetsSec = 60, prepareSec = 10,
         )!!
         val timer = newController()
@@ -186,7 +186,7 @@ class RunLoggingChainTest {
         val exercise = hangs()
         // saved in the editor and linked to the exercise, which is what the timer tab runs
         val id = programs.save(
-            programFromExercise(exercise, reps = 3, sets = 2, restBetweenSetsSec = 30, prepareSec = 5)!!
+            multiSetProgram(exercise, reps = 3, sets = 2, restBetweenSetsSec = 30, prepareSec = 5)!!
                 .copy(name = "Repeaters 7:3", category = "Hangboard")
         )
         val stored = programs.programById(id)!!
@@ -209,7 +209,7 @@ class RunLoggingChainTest {
     fun `an unlinked program leaves an offer that names no exercise, and the answer sticks`() = runTest {
         val exercise = hangs()
         val id = programs.save(
-            programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+            multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
                 .copy(name = "Repeaters", exerciseId = null)
         )
         val stored = programs.programById(id)!!
@@ -240,7 +240,7 @@ class RunLoggingChainTest {
     @Test
     fun `an offer survives the process that produced it`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+        val program = multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
 
         val timer = newController()
         timer.start(program, exercise.id, RunOrigin.EXERCISE)
@@ -259,7 +259,7 @@ class RunLoggingChainTest {
     @Test
     fun `answering the offer clears the stored copy too, so it cannot come back`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(exercise, reps = 2, sets = 1, restBetweenSetsSec = 0, prepareSec = 0)!!
+        val program = multiSetProgram(exercise, reps = 2, sets = 1, restBetweenSetsSec = 0, prepareSec = 0)!!
 
         val timer = newController()
         timer.start(program, exercise.id, RunOrigin.EXERCISE)
@@ -298,7 +298,7 @@ class RunLoggingChainTest {
         // 2. a saved program that is linked to an exercise
         val linked = programs.programById(
             programs.save(
-                programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+                multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
                     .copy(name = "Linked")
             )
         )!!
@@ -562,7 +562,7 @@ class RunLoggingChainTest {
         val timer = newController()
         val viewModel = MainViewModel(repo, programs, timer)
         val programId = programs.save(
-            programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+            multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
                 .copy(name = "Repeaters", exerciseId = null)
         )
 
@@ -601,10 +601,143 @@ class RunLoggingChainTest {
         assertEquals("the undo never landed", 0, buildSessionSetCount(outcome.opDate))
     }
 
+    /**
+     * ANSWERING A RUN'S OFFER STARTS THE REST UNDER ITS CARD — §13.3 step 11 and §13.4, which
+     * says it in as many words: "the rest between sets of a protocol exercise is a FLOOR, not
+     * part of the protocol".
+     *
+     * It never did. [MainViewModel.logRunSets] avoided [MainViewModel.addSet] on purpose, and
+     * the rest went with everything else it was avoiding, so a set done under the conductor left
+     * its card with no countdown drawn on it at all. Reported from the phone: "there is no
+     * indicator over the left hand's card, and there is no way to tell how much rest is left or
+     * whether the timer is even running".
+     *
+     * The floor's SIDE is the half worth checking rather than assuming: it is what puts the bar
+     * under the hand that just worked and leaves the other hand's card alone.
+     */
+    @Test
+    fun `answering a run's offer starts the rest under the card that earned it`() = runTest {
+        val exercise = hangs()
+        repo.setOneSided(exercise.id, true)
+        val oneSided = repo.toRef(repo.exercise(exercise.id)!!)
+
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        viewModel.startProgramForExercise(ProgramStart(oneSided, HoldSide.LEFT, null))
+        settle()
+        elapse(timer, timer.run.value!!.steps.sumOf { it.durationSec } + 1)
+
+        val outcome = viewModel.runOutcome.value!!
+        assertTrue("nothing to answer, so nothing this test can be about", outcome.offersLogging)
+        assertEquals(
+            "the rest cannot start before the sets are confirmed",
+            emptyList<Any>(),
+            timer.floors.floors.value,
+        )
+
+        viewModel.logRunSets(oneSided, outcome.sets)
+        settle()
+
+        val floor = timer.floors.floors.value.single()
+        assertEquals(oneSided.id, floor.exerciseId)
+        assertEquals("the rest belongs to the hand that worked", HoldSide.LEFT.code, floor.side)
+        // named by hand as well, because the summary line and the shade have only the name to
+        // tell one hand's rest from the other's
+        assertTrue(floor.exerciseName.contains("Left"))
+        assertTrue("and it is actually counting", floor.readyAtMs > SystemClock.elapsedRealtime())
+    }
+
+    /**
+     * THE POINT OF §18.17, walked end to end: the left hand rests while the right hand works.
+     *
+     * This is the scenario one-sided exercises exist for and the one the model made impossible.
+     * A conducted run used to be every set of the exercise, with the pauses between them
+     * expanded into steps — so while the left hand sat out its four minutes, that pause WAS the
+     * single conductor: it held the screen, the voice, the service and the wake lock, the floors
+     * were silent by construction, and a tap on the right card went into
+     * `TimerController.start`, which replaces a run without ceremony and would have taken the
+     * left hand's finished sets with it.
+     *
+     * With a run cut down to one set the conductor is free the moment the holds are over, and
+     * the pause is a floor keyed by (exercise, side) — of which any number run at once. So:
+     * left set, confirmed, left rest counting; right set STARTS while it counts, and the left
+     * rest is still counting when the right set is over.
+     */
+    @Test
+    fun `the left hand rests while the right hand works, and neither wipes out the other`() = runTest {
+        val exercise = hangs()
+        repo.setOneSided(exercise.id, true)
+        val oneSided = repo.toRef(repo.exercise(exercise.id)!!)
+
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        // --- the left hand -------------------------------------------------------------
+        viewModel.startProgramForExercise(ProgramStart(oneSided, HoldSide.LEFT, null))
+        settle()
+        val leftRun = checkNotNull(timer.run.value)
+        // one set, and the rest between sets is not in it: that is the whole change
+        assertTrue(leftRun.steps.all { it.groupRepeats == 1 })
+        assertTrue(leftRun.steps.none { it.name == "Rest between sets" })
+
+        elapse(timer, leftRun.steps.sumOf { it.durationSec } + 1)
+        assertNull("the conductor must let go when the set is over", timer.run.value)
+
+        viewModel.logRunSets(oneSided, timer.outcome.value!!.sets)
+        settle()
+
+        val leftFloor = timer.floors.floors.value.single()
+        assertEquals(HoldSide.LEFT.code, leftFloor.side)
+        val leftReadyAt = leftFloor.readyAtMs
+        assertTrue("the left rest must be counting", leftReadyAt > SystemClock.elapsedRealtime())
+
+        // --- the right hand, WHILE the left one is still resting ------------------------
+        viewModel.startProgramForExercise(ProgramStart(oneSided, HoldSide.RIGHT, null))
+        settle()
+
+        assertNotNull("the right hand must get the conductor while the left one rests", timer.run.value)
+        val rightRun = checkNotNull(timer.run.value)
+        assertEquals(HoldSide.RIGHT.code, rightRun.side)
+
+        val stillResting = timer.floors.floors.value.single()
+        assertEquals(
+            "the left hand's rest must survive the right hand starting",
+            HoldSide.LEFT.code,
+            stillResting.side,
+        )
+        assertEquals(
+            "and it must not be restarted or shortened by it",
+            leftReadyAt,
+            stillResting.readyAtMs,
+        )
+
+        elapse(timer, rightRun.steps.sumOf { it.durationSec } + 1)
+        viewModel.logRunSets(oneSided, timer.outcome.value!!.sets)
+        settle()
+
+        // both hands are resting now, each under its own card
+        assertEquals(
+            listOf(HoldSide.LEFT.code, HoldSide.RIGHT.code),
+            timer.floors.floors.value.map { it.side }.sortedBy { it },
+        )
+
+        // and the journal has one set per hand, neither of them lost to the other's start
+        val written = buildSession(repo.allEvents(), LocalDate.now().toString()).groups
+            .flatMap { it.sets }.map { it.form as HoldSet }
+        assertEquals(2, written.size)
+        assertEquals(
+            listOf(HoldSide.LEFT, HoldSide.RIGHT),
+            written.mapNotNull { it.sideOf }.sortedBy { it.code },
+        )
+    }
+
     @Test
     fun `a run interrupted by the user is offered for the part that ran`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(exercise, reps = 2, sets = 3, restBetweenSetsSec = 30, prepareSec = 0)!!
+        val program = multiSetProgram(exercise, reps = 2, sets = 3, restBetweenSetsSec = 30, prepareSec = 0)!!
 
         val timer = newController()
         timer.start(program, exercise.id, RunOrigin.EXERCISE)

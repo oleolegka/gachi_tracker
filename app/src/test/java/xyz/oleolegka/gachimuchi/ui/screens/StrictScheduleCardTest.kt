@@ -76,7 +76,7 @@ class StrictScheduleCardTest : ScreenTest() {
                 settings = TimerSettings(),
                 floors = emptyList(),
                 actions = WorkoutLogActions(
-                    addExercise = { _, _, _ -> },
+                    addExercise = { _, _, _, _ -> },
                     createExercise = { _, _ -> },
                     addSet = {},
                     undoSet = {},
@@ -86,7 +86,7 @@ class StrictScheduleCardTest : ScreenTest() {
                     finishExercise = { _, _ -> },
                     unfinishExercise = {},
                     unfinishWorkout = {},
-                    startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
+                    startProtocolSet = { start -> started += Triple(start.exercise.name, start.addedKg, start.side) },
                     openConductor = {},
                     close = {},
                 ),

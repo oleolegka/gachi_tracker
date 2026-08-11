@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -125,8 +126,14 @@ class StrictScheduleStartTest {
         assertEquals(StepKind.PREPARE, run.steps.first().kind)
     }
 
+    /**
+     * The pair branch still derives its hold count from the journal when nobody was asked — and
+     * since §18.17 it derives NOTHING about sets, because a run is one set. The setting the old
+     * code multiplied by is deliberately left at three here: if it ever reached the program
+     * again, this would count eighteen efforts instead of two.
+     */
     @Test
-    fun `a plain pair still asks the journal and the settings, exactly as before`() = runTest {
+    fun `a plain pair takes its holds from the journal and runs exactly one set`() = runTest {
         val id = repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
         val exercise = repo.toRef(repo.exercise(id)!!)
         assertEquals(ScheduleKind.SIMPLE_PAIR, exercise.scheduleKind)
@@ -141,9 +148,9 @@ class StrictScheduleStartTest {
         settle()
 
         val run = checkNotNull(timer.run.value)
-        // two efforts (the last logged set) times three sets (the setting): the derived
-        // numbers still decide here, which is what §18.15 keeps for this branch
-        assertEquals(6, run.steps.count { it.kind == StepKind.WORK })
+        // two efforts: the last logged set, once. The settings' three sets are not consulted.
+        assertEquals(2, run.steps.count { it.kind == StepKind.WORK })
+        assertTrue(run.steps.none { it.name == "Rest between sets" })
         assertEquals(5, run.steps.first().durationSec)
     }
 }
