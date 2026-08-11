@@ -71,6 +71,16 @@ object Radius {
  * card — so that even those land on the scale.
  */
 object TextSize {
+    /**
+     * The countdown of a running protocol, and nothing else.
+     *
+     * SYSTEM.md names this an exception to its own rule that 22 is the one large size: a
+     * running count is read from two metres away with wet hands, off a fingerboard, and 22 sp
+     * does not survive that. The same note reduces the 52 and 56 that were in the code to this
+     * one number, so there is one oversized figure rather than two nobody chose.
+     */
+    val Display = 48.sp
+
     /** The one large number of a screen: the clock on the timer, the value of a hero card. */
     val Figure = 22.sp
 
