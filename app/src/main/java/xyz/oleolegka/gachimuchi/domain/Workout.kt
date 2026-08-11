@@ -1145,8 +1145,14 @@ fun restHintSec(settings: TimerSettings, events: List<JournalEvent>, exercise: E
  * inside the set — or are simply followed by a pause.
  *
  * The catalog column decides when it has been set; otherwise it is inferred from whether the
- * exercise has a work:rest protocol at all. That inference is right for repeaters and wrong
- * for a maximum-weight hang, which carries a protocol only because §12-A makes it part of
- * hangboard identity — which is precisely why the column can override it.
+ * exercise has a SCHEDULE at all. That inference is right for repeaters and wrong for a
+ * maximum-weight hang, which carries a protocol only because §12-A makes it part of hangboard
+ * identity — which is precisely why the column can override it.
+ *
+ * The inference used to read the work:rest PAIR instead of the schedule, and that quietly
+ * excluded the strictest exercises there are (§18.15): a schedule whose opening block has no
+ * rest of its own — because the pause in it comes later — has no pair to read, so it inferred
+ * "not led by the protocol" for an exercise that is nothing BUT its protocol.
  */
-fun ledByProtocol(exercise: ExerciseRef): Boolean = exercise.ledByProtocolFlag ?: (exercise.protocol != null)
+fun ledByProtocol(exercise: ExerciseRef): Boolean =
+    exercise.ledByProtocolFlag ?: (exercise.scheduleKind != ScheduleKind.NONE)
