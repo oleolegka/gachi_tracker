@@ -52,6 +52,7 @@ import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.BarChart
 import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.EmptyState
+import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.IdentityChip
@@ -102,6 +103,13 @@ fun FormDetailScreen(
     today: LocalDate,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * Opens the correction screen on this exercise. A callback and not a dialog raised in
+     * here: correcting an exercise is a MODE of its own now (`ui/screens/EditExerciseScreen.kt`),
+     * drawn over this screen by [xyz.oleolegka.gachimuchi.ui.GachiApp] so that back closes it
+     * and lands here rather than leaving the app.
+     */
+    onEditExercise: (ExerciseEntity) -> Unit = {},
 ) {
     var period by remember(exerciseId) { mutableStateOf(Period.MONTH) }
     var menuOpen by remember(exerciseId) { mutableStateOf(false) }
@@ -199,7 +207,7 @@ fun FormDetailScreen(
                             text = { Text("Edit exercise") },
                             onClick = {
                                 menuOpen = false
-                                editor.edit(entity)
+                                onEditExercise(entity)
                             },
                         )
                         DropdownMenuItem(
