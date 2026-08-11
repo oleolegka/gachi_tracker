@@ -534,6 +534,29 @@ data class ProgramStart(
     val exercise: ExerciseRef,
     val side: HoldSide?,
     val addedKg: Double?,
+    /**
+     * How many holds inside each set, and how many sets, ANSWERED BY THE USER before this run —
+     * or null for a caller that did not ask.
+     *
+     * ── Why these two are on the way in at all ──────────────────────────────────
+     * §18.15 defines the simple pair as the branch whose schedule fixes the SHAPE of the effort
+     * and nothing else: "how many holds and how many sets is asked before every run, because the
+     * schedule does not say". It was not asked. The holds came from the last set of this exercise
+     * in the journal and the sets came from [TimerSettings.defaultSets], both silently, so a
+     * fresh exercise with a 7:3 pair started a run of four sets that the owner never chose and
+     * could not see. From the phone: "there is no question about the number of sets anywhere, it
+     * puts four by default, and that is a plain bug".
+     *
+     * Null rather than a default, and that distinction carries the meaning: null is "nobody was
+     * asked", which is the timer tab and the strict branch, and it keeps the old derivation. A
+     * value is an answer, and an answer wins over anything derived.
+     *
+     * They are IGNORED by a strict schedule, which fixes both itself (§18.15) — the caller does
+     * not put the question in front of a strict exercise, and this is the second line of that
+     * rather than its only one.
+     */
+    val holds: Int? = null,
+    val sets: Int? = null,
 )
 
 // --- the two programs that ship with the app ------------------------------------------

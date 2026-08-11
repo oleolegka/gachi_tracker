@@ -560,8 +560,8 @@ fun GachiApp(viewModel: MainViewModel) {
                         },
                         unfinishExercise = viewModel::unfinishWorkoutExercise,
                         unfinishWorkout = viewModel::unfinishWorkout,
-                        startProtocolSet = { exercise, addedKg, side ->
-                            viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                        startProtocolSet = { start ->
+                            viewModel.startProgramForExercise(start)
                             conductorOpen = true
                         },
                         openConductor = { conductorOpen = true },
@@ -600,10 +600,10 @@ fun GachiApp(viewModel: MainViewModel) {
                         finishExercise = { _, _ -> }, // no card of a draft can be finished
                         unfinishExercise = {},
                         unfinishWorkout = {},
-                        startProtocolSet = { exercise, addedKg, side ->
+                        startProtocolSet = { start ->
                             viewModel.promoteDraft { id ->
                                 loggingWorkoutId = id
-                                viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                                viewModel.startProgramForExercise(start)
                                 conductorOpen = true
                             }
                         },

@@ -86,7 +86,7 @@ class StrictScheduleCardTest : ScreenTest() {
                     finishExercise = { _, _ -> },
                     unfinishExercise = {},
                     unfinishWorkout = {},
-                    startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
+                    startProtocolSet = { start -> started += Triple(start.exercise.name, start.addedKg, start.side) },
                     openConductor = {},
                     close = {},
                 ),

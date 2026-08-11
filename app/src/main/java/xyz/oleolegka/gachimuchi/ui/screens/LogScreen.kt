@@ -60,6 +60,7 @@ import xyz.oleolegka.gachimuchi.domain.lastBodyweight
 import xyz.oleolegka.gachimuchi.domain.lastCardio
 import xyz.oleolegka.gachimuchi.domain.lastDuration
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
+import xyz.oleolegka.gachimuchi.domain.ScheduleKind
 import xyz.oleolegka.gachimuchi.domain.lastStrengthSet
 import xyz.oleolegka.gachimuchi.domain.parseCount
 import xyz.oleolegka.gachimuchi.domain.parseDurationText
@@ -160,13 +161,31 @@ fun LogScreen(
     var choosingSideFor by remember { mutableStateOf<ExerciseRef?>(null) }
     var weighingProgramFor by remember { mutableStateOf<ExerciseRef?>(null) }
     var weighingProgramSide by remember { mutableStateOf<HoldSide?>(null) }
+    /** The simple pair's third question — how much of the schedule this run is. See [RunPlanDialog]. */
+    var planningProgramFor by remember { mutableStateOf<ExerciseRef?>(null) }
+    var planningProgramSide by remember { mutableStateOf<HoldSide?>(null) }
 
     fun beginProgram(exercise: ExerciseRef, side: HoldSide?) {
-        if (lastAddedKg(state, exercise) == null) {
-            onStartExerciseProgram(ProgramStart(exercise, side, null))
-        } else {
-            weighingProgramFor = exercise
-            weighingProgramSide = side
+        when {
+            /*
+             * A SIMPLE PAIR IS ASKED HOW LONG THE RUN IS (§18.15), on this screen as well as
+             * inside a workout. The same question in the same dialog rather than the workout
+             * screen having it and this one not: an exercise run from here used to take four
+             * sets out of the settings just as silently, and "the tap that starts a run" is one
+             * behaviour however the user got to it.
+             */
+            exercise.scheduleKind == ScheduleKind.SIMPLE_PAIR -> {
+                planningProgramFor = exercise
+                planningProgramSide = side
+            }
+
+            lastAddedKg(state, exercise) == null ->
+                onStartExerciseProgram(ProgramStart(exercise, side, null))
+
+            else -> {
+                weighingProgramFor = exercise
+                weighingProgramSide = side
+            }
         }
     }
 
@@ -288,7 +307,27 @@ fun LogScreen(
             onDismiss = { weighingProgramFor = null; weighingProgramSide = null },
         )
     }
+
+    planningProgramFor?.let { exercise ->
+        RunPlanDialog(
+            exerciseName = exercise.name,
+            initialHolds = lastHoldSet(state.events, exercise.link)?.reps ?: DEFAULT_LOG_RUN_HOLDS,
+            initialSets = timer.settings.defaultSets,
+            initialKg = lastAddedKg(state, exercise),
+            onConfirm = { holds, sets, kg ->
+                onStartExerciseProgram(
+                    ProgramStart(exercise, planningProgramSide, kg, holds, sets)
+                )
+                planningProgramFor = null
+                planningProgramSide = null
+            },
+            onDismiss = { planningProgramFor = null; planningProgramSide = null },
+        )
+    }
 }
+
+/** The same fallback [RunPlanDialog]'s other caller uses when the journal has nothing to copy. */
+private const val DEFAULT_LOG_RUN_HOLDS = 6
 
 /**
  * The tape of what has been done today: exercises in the order they first appeared, sets

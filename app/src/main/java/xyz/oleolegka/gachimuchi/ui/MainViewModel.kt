@@ -989,11 +989,17 @@ class MainViewModel(
 
             val events = repo.allEvents()
             val settings = timerSettings.value
-            val reps = lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
+            /*
+             * THE ANSWER FIRST, the guess only when there was no question (see [ProgramStart.holds]).
+             * Both of these used to be derived unconditionally — the holds off the last set in the
+             * journal, the sets off a setting the owner had never opened — which is how a run came
+             * to have four sets nobody chose.
+             */
+            val reps = start.holds ?: lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
                 exercise = start.exercise,
                 reps = reps,
-                sets = settings.defaultSets,
+                sets = start.sets ?: settings.defaultSets,
                 restBetweenSetsSec = resolveRestSec(settings, events, start.exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch

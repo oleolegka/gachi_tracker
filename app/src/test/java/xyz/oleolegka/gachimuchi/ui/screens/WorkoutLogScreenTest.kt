@@ -139,6 +139,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         workoutId: Long,
         floors: List<RestFloor> = emptyList(),
         liveExerciseId: Long? = null,
+        /** Which CARD of [liveExerciseId] the run belongs to — see [WorkoutLogScreen]'s own param. */
+        liveSide: String? = null,
         readySummary: String? = null,
     ) {
         val state = UiState(
@@ -167,11 +169,12 @@ class WorkoutLogScreenTest : ScreenTest() {
                     finishExercise = { exercise, side -> finishedCards += exercise.uid to side },
                     unfinishExercise = { eventId -> unfinished += eventId },
                     unfinishWorkout = { eventId -> unfinishedWorkout += eventId },
-                    startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
+                    startProtocolSet = { start -> started += Triple(start.exercise.name, start.addedKg, start.side) },
                     openConductor = { conductorOpened++ },
                     close = { closed++ },
                 ),
                 liveExerciseId = liveExerciseId,
+                liveSide = liveSide,
                 readySummary = readySummary,
                 onDismissSummary = { summaryDismissed++ },
                 nowMs = now,
@@ -204,7 +207,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                     finishExercise = { exercise, side -> finishedCards += exercise.uid to side },
                     unfinishExercise = { eventId -> unfinished += eventId },
                     unfinishWorkout = { eventId -> unfinishedWorkout += eventId },
-                    startProtocolSet = { exercise, kg, side -> started += Triple(exercise.name, kg, side) },
+                    startProtocolSet = { start -> started += Triple(start.exercise.name, start.addedKg, start.side) },
                     openConductor = { conductorOpened++ },
                     close = { closed++ },
                 ),
@@ -682,12 +685,12 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("One-arm hangs - Left").performClick()
         settle()
-        compose.onNodeWithText("Start the set").performClick()
+        compose.onNodeWithText("Start the run").performClick()
         settle()
 
         compose.onNodeWithText("One-arm hangs - Right").performClick()
         settle()
-        compose.onNodeWithText("Start the set").performClick()
+        compose.onNodeWithText("Start the run").performClick()
         settle()
 
         assertEquals(
@@ -866,21 +869,66 @@ class WorkoutLogScreenTest : ScreenTest() {
      * The whole point of the card being the tap target for two different things: for a hang
      * the app is not taking a report, it is about to call out seven seconds on and three off,
      * and a form asking for numbers that do not exist yet is in the way.
+     *
+     * What it raises instead is the RUN PLAN (§18.15), not the entry form: a simple pair's
+     * schedule says how long one effort is and nothing about how many, so the holds and the
+     * sets belong to this run and are asked for.
      */
     @Test
-    fun `tapping a protocol-led card starts the set instead of raising the form`() {
+    fun `tapping a protocol-led card asks how long the run is instead of raising the form`() {
         val journal = Journal()
         show(journal, hangWorkout(journal))
 
         compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        assertEquals(listOf(Triple("Hangs", null, null)), started)
-        // no form and no question: a bodyweight protocol used to start with one tap and
-        // still does
-        compose.onAllNodesWithText("Added weight").assertCountEquals(0)
+        compose.onNodeWithText("Before this run").assertExists()
+        compose.onNodeWithText("Holds in each set").assertExists()
+        compose.onNodeWithText("Sets").assertExists()
+        // and the entry form is still not what a hang gets
         compose.onAllNodesWithText("Repeat set").assertCountEquals(0)
+        // nothing has started until the plan is confirmed
+        assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
+
+        compose.onNodeWithText("Start the run").performClick()
+        assertEquals(listOf(Triple("Hangs", null, null)), started)
     }
+
+    /**
+     * THE REPORT, in one test: "there is no question about the number of sets anywhere, it puts
+     * four by default, and that is a plain bug".
+     *
+     * The number is on the screen, it is the default the settings carry rather than a hidden
+     * one, and what is typed over it is what the run is started with. The default arriving
+     * visibly is half the fix: the complaint was not that four is wrong, it was that four was
+     * never shown or offered.
+     */
+    @Test
+    fun `the set count is shown before a simple pair run and what is chosen is what starts`() {
+        val journal = Journal()
+        show(journal, hangWorkout(journal))
+
+        compose.onNodeWithText("Hangs").performClick()
+        settle()
+
+        // TimerSettings().defaultSets, drawn rather than applied behind the user's back
+        compose.onNodeWithText("4").assertExists()
+
+        // one press of the sets stepper's plus. Both steppers offer "+1", so the SECOND one
+        // on the screen is the sets field — holds is drawn above it
+        compose.onAllNodesWithText("+1")[1].performClick()
+        settle()
+        compose.onNodeWithText("5").assertExists()
+
+        compose.onNodeWithText("Start the run").performClick()
+        assertEquals(listOf(Triple("Hangs", null, null)), started)
+    }
+
+    // The NEGATIVE half of the rule — a strict schedule fixes both numbers itself (§18.15) and
+    // must never be asked — is held down by StrictScheduleCardTest, which has a catalog with a
+    // real strict schedule in it. It cannot be written here: this file's `show` carries a fixed
+    // catalog of simple pairs, so a strict ref built inline would resolve to nothing, the card
+    // would have no tap at all, and the assertion would pass for the wrong reason.
 
     /** And the ordinary exercise on the same screen still gets the form it always had. */
     @Test
@@ -909,12 +957,14 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        compose.onNodeWithText("Added weight").assertExists()
+        // for a simple pair the plate is one field of the run plan rather than a dialog of its
+        // own — same rule (§13.5), one screen instead of two before a set that used to need none
+        compose.onNodeWithText("Added weight, kg").assertExists()
         compose.onNodeWithText("15").assertExists()
         // nothing has started yet: the question is in front of the set, not beside it
         assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
 
-        compose.onNodeWithText("Start the set").performClick()
+        compose.onNodeWithText("Start the run").performClick()
         assertEquals(listOf(Triple("Hangs", 15.0, null)), started)
     }
 
@@ -931,7 +981,11 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        compose.onAllNodesWithText("Added weight").assertCountEquals(0)
+        // the run plan is up (a pair always owes its length) and carries no weight field at all
+        compose.onNodeWithText("Before this run").assertExists()
+        compose.onAllNodesWithText("Added weight, kg").assertCountEquals(0)
+
+        compose.onNodeWithText("Start the run").performClick()
         assertEquals(listOf(Triple("Hangs", null, null)), started)
     }
 
@@ -953,6 +1007,43 @@ class WorkoutLogScreenTest : ScreenTest() {
         assertEquals(1, conductorOpened)
         // and nothing was started a second time on top of the set already running
         assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
+    }
+
+    /**
+     * THE REPORT: "it turns out the timer is going for the right hand as well — it is glued
+     * together for the two hands."
+     *
+     * "Is this card running?" was answered by the exercise id alone, so a set conducted on the
+     * left hand marked BOTH cards of a one-sided exercise as running: the right one said so in
+     * words, and its tap led back to the left hand's conductor instead of doing anything of its
+     * own. The run has carried its side since `RunSnapshot.side` existed; this screen never
+     * asked for it.
+     *
+     * ── What this does NOT prove, and it is the larger half ─────────────────────
+     * That the two hands can genuinely work at once. They cannot yet: there is ONE conductor for
+     * the whole app, and for a simple pair the rest between sets is a step of that conductor's
+     * program rather than a rest of its own card — so starting the right hand while the left is
+     * mid-run replaces that run. This test is about what the screen SAYS, which was wrong on its
+     * own terms; the architecture behind it is reported separately.
+     */
+    @Test
+    fun `a run on the left hand does not make the right hand's card claim to be running`() {
+        val journal = Journal()
+        show(
+            journal,
+            twoCardWorkout(journal, oneArmHangs),
+            liveExerciseId = oneArmHangs.id,
+            liveSide = HoldSide.LEFT.code,
+        )
+
+        // exactly one card says it, not two
+        compose.onAllNodesWithText("Set running · tap to go back to it").assertCountEquals(1)
+
+        // and the right hand's card still starts its own thing rather than reopening the left's
+        compose.onNodeWithText("One-arm hangs - Right").performClick()
+        settle()
+        assertEquals("the right card must not lead to the left hand's conductor", 0, conductorOpened)
+        compose.onNodeWithText("Before this run").assertExists()
     }
 
     // --- taking a set back ------------------------------------------------------------------
