@@ -189,7 +189,7 @@ class CalendarScreenTest : ScreenTest() {
         compose.onNodeWithText("SELECTED DAY").assertExists()
         compose.onNodeWithText(fmtWeekdayDay(today)).assertExists()
         compose.onNodeWithText(
-            "Nothing planned and nothing recorded. Start a workout below, or log a single entry."
+            "Nothing planned or recorded for today."
         ).assertExists()
     }
 
@@ -365,6 +365,7 @@ class CalendarScreenTest : ScreenTest() {
         calendar(journal = journal)
 
         // started today and never closed, so it is the workout in progress
-        compose.onNodeWithText("in progress - 1 exercise, 1 set").assertExists()
+        compose.onNodeWithText("in progress").assertExists()
+        compose.onNodeWithText("1 exercise · 1 set").assertExists()
     }
 }
