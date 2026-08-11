@@ -440,6 +440,68 @@ class MainViewModel(
         _draft.value = null
     }
 
+    // --- recording with no workout around it -------------------------------------------------
+    //
+    // A SINGLE ENTRY is an exercise of a workout with the workout taken away, and it is drawn by
+    // the same screen (see domain/Workout.kt, `looseWorkout`). What it cannot have is the rows a
+    // workout owns: an "exercise added" event names a workout, so an exercise admitted here and
+    // not yet recorded against is staged in memory, exactly the way a draft's cards are. What it
+    // CAN have, and does, is the rest between sets — that answer is a preference of the exercise
+    // and lives on the catalog row, which is the same place a workout's own question writes it
+    // (see [ActivityRepository.addExerciseToWorkout]).
+
+    /** Cards admitted on the standalone entry screen for [day], not yet recorded against. */
+    data class LooseEntry(val day: LocalDate, val cards: List<DraftCard> = emptyList())
+
+    private val _loose = MutableStateFlow<LooseEntry?>(null)
+    val loose: StateFlow<LooseEntry?> = _loose.asStateFlow()
+
+    /**
+     * Opens the standalone entry screen on [day].
+     *
+     * Staged cards are dropped when the day changes and KEPT when it does not, so leaving the
+     * screen and coming back to the same day does not lose an exercise that was admitted and
+     * not yet done — the one thing a workout gets for free from having a row in the journal.
+     */
+    fun beginLoose(day: LocalDate) {
+        if (_loose.value?.day != day) _loose.value = LooseEntry(day)
+    }
+
+    /**
+     * Admits an exercise to the standalone screen at this rest, or — called again for one
+     * already there — changes it. The twin of [addExerciseToWorkout], and it makes the same two
+     * writes minus the one that needs a workout: the card is staged here, and the rest goes onto
+     * the catalog row so the NEXT time this exercise is admitted anywhere the answer is offered
+     * back (see [restHintSec]).
+     */
+    fun admitLooseExercise(exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+        val current = _loose.value ?: return
+        val without = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side }
+        _loose.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side))
+        viewModelScope.launch { repo.setDefaultRest(exerciseId, restSec) }
+    }
+
+    /** Takes a staged card off the standalone screen — see [removeDraftCard], same nothing to undo. */
+    fun removeLooseCard(exerciseId: Long, side: HoldSide? = null) {
+        val current = _loose.value ?: return
+        _loose.value = current.copy(cards = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side })
+    }
+
+    /**
+     * Takes a standalone card out ROWS AND ALL: the staged card, and every entry named.
+     *
+     * The rest countdown of that card goes with them, on the same grounds
+     * [removeWorkoutExercise] dismisses one — a card that is no longer on the screen has
+     * nothing left for a beep to be about.
+     */
+    fun removeLooseExercise(eventIds: List<Long>, exerciseId: Long?, side: HoldSide? = null) {
+        exerciseId?.let { timer.floors.dismiss(it, side?.code) }
+        if (exerciseId != null) removeLooseCard(exerciseId, side)
+        // one transaction, the same way [removeWorkoutExercise] does it — a journal read back
+        // half-removed would draw a card with some of its sets gone and the rest still there
+        if (eventIds.isNotEmpty()) viewModelScope.launch { repo.deleteEntries(eventIds) }
+    }
+
     /**
      * Turns the draft into a real workout: the start event, then every staged card's own
      * "added" row — the two writes [ActivityRepository.startWorkout] and
