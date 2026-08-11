@@ -499,15 +499,26 @@ private fun SectionHeader(
 }
 
 /**
- * One row of the library.
+ * One row of the library: a name, a line of meta, ONE button, and a menu behind three dots.
  *
- * [scheduleFor] non-empty means this program is some exercise's schedule (decisions §18.15):
- * the row then says WHOSE it is and that its times are fixed, and it carries no delete button
- * at all. The first two belong on the row and not only in the editor, because the freeze was
- * only ever discoverable by opening the program and finding the fields turned into text — by
- * which point the owner had already gone looking for a program he had not written. The third
- * is the working agreement's own rule: a forbidden action loses the control that STARTS it,
- * not the one that finishes it.
+ * ── Why the five actions are not five buttons ───────────────────────────────────
+ * They were, in one `Row`, with "Run" on a `weight(1f)`. Edit, Export, Hide and Delete want
+ * something like 245-270 dp of the 312 a 360 dp phone leaves inside the card, so "Run" — the
+ * only thing on the card anybody comes here to press — was handed 26 to 51 dp, below a Material
+ * button's own 58 dp minimum, with its label clipped. It is now the full width of the card, and
+ * the other four are in the menu, where they have room for the words that say what they do
+ * ("Export to a file" rather than "Export"). SYSTEM.md rules 1 and 8.
+ *
+ * ── The schedules (decisions §18.15) ────────────────────────────────────────────
+ * [scheduleFor] non-empty means this program is some exercise's schedule: the row says WHOSE it
+ * is, and its menu carries no deletion at all. The name belongs on the row and not only in the
+ * editor, because the freeze was otherwise discoverable only by opening the program and finding
+ * its fields turned into text — by which point the owner had already gone looking for a program
+ * he never wrote. The missing delete is the working agreement's own rule: a forbidden action
+ * loses the control that STARTS it, not the one that finishes it.
+ *
+ * That the times are fixed is said ONCE, in the note under the section heading, rather than on
+ * every row and again at the foot of every card (rule 5: an explanation is not a paragraph).
  */
 @Composable
 private fun ProgramCard(
