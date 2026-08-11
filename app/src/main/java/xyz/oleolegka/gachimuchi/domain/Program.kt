@@ -389,53 +389,6 @@ fun WorkoutProgram.flatten(): List<WorkoutStep> {
 fun WorkoutProgram.firstBlock(): ProgramBlock? = groups.firstOrNull()?.blocks?.firstOrNull()
 
 /**
- * Which of the three shapes a hold exercise's SCHEDULE is (§18.15).
- *
- * "Schedule" is the owner's own word for the timed scenario of a hold, and in code it is a
- * [WorkoutProgram] — there is no separate entity. The three shapes are already distinguishable
- * in the data, which is why this is a function over what is stored and not a new column: a
- * migration for a fact the rows already state would be a second copy of it to keep in step.
- *
- * *The one thing this cannot tell apart, stated rather than hidden:* a schedule typed by hand
- * into the program editor as one group of one block with no repeats is indistinguishable from a
- * plain work:rest pair, because it IS one. Such an exercise takes the [PAIR] road.
- */
-enum class ScheduleKind {
-    /** No schedule at all: a free hold, written by hand, no conductor involved. */
-    NONE,
-
-    /**
-     * One group, one block, no repeats on either — the plain "work : rest" pair the exercise
-     * form has always spoken. The run is BUILT around it from the rep count, the set count and
-     * the pause, none of which the pair itself fixes ([programFromExercise]).
-     */
-    PAIR,
-
-    /**
-     * Anything richer. It fixes every temporal thing there is — which efforts, how long, in
-     * what order, with what pauses, how many repeats, how many sets — so a run PLAYS IT AS
-     * WRITTEN ([scheduledRun]) and the only variable left before starting is the plate.
-     */
-    STRICT,
-}
-
-/**
- * Reads a resolved schedule as one of [ScheduleKind].
- *
- * A schedule with nothing to count — no groups, or groups whose blocks are all empty — is
- * [ScheduleKind.NONE] rather than [ScheduleKind.STRICT]: it would flatten to no work step at
- * all, and calling it strict would put a "start" button on a run that ends the instant it
- * begins.
- */
-fun scheduleKindOf(schedule: WorkoutProgram?): ScheduleKind {
-    if (schedule == null) return ScheduleKind.NONE
-    if (schedule.groups.none { it.blocks.any { block -> block.workSec > 0 } }) return ScheduleKind.NONE
-    val group = schedule.groups.singleOrNull() ?: return ScheduleKind.STRICT
-    val block = group.blocks.singleOrNull() ?: return ScheduleKind.STRICT
-    return if (group.repeats <= 1 && block.repeats <= 1) ScheduleKind.PAIR else ScheduleKind.STRICT
-}
-
-/**
  * The run a STRICT schedule performs: the schedule itself, not a program rebuilt out of it.
  *
  * ── The defect this replaces ────────────────────────────────────────────────────
@@ -456,10 +409,22 @@ fun scheduleKindOf(schedule: WorkoutProgram?): ScheduleKind {
  * setting: the lead-in is a stretch of time inside the scenario, and the scenario is the thing
  * that is strict. Returns null for anything that is not [ScheduleKind.STRICT].
  */
-fun scheduledRun(exercise: ExerciseRef): WorkoutProgram? {
-    val schedule = exercise.schedule ?: return null
-    if (scheduleKindOf(schedule) != ScheduleKind.STRICT) return null
-    return schedule.copy(name = exercise.name, exerciseId = exercise.id)
+fun scheduledRun(exercise: ExerciseRef): WorkoutProgram? =
+    scheduledRunOf(exercise.schedule, exercise.name, exercise.id)
+
+/**
+ * The same thing for a caller holding the schedule itself rather than an [ExerciseRef] that
+ * carries it — the backstop in
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise], which resolves the
+ * program out of the database when the ref arrived without one.
+ *
+ * It exists so that the two paths cannot drift: both the branch test and the renaming happen
+ * here, once, instead of the second caller starting the stored program as-is and getting a run
+ * named after a schedule two twins share.
+ */
+fun scheduledRunOf(schedule: WorkoutProgram?, name: String, exerciseId: Long): WorkoutProgram? {
+    if (schedule == null || scheduleKindOf(schedule) != ScheduleKind.STRICT) return null
+    return schedule.copy(name = name, exerciseId = exerciseId)
 }
 
 /** Total length of a program once expanded, in seconds. */

@@ -1155,4 +1155,4 @@ fun restHintSec(settings: TimerSettings, events: List<JournalEvent>, exercise: E
  * "not led by the protocol" for an exercise that is nothing BUT its protocol.
  */
 fun ledByProtocol(exercise: ExerciseRef): Boolean =
-    exercise.ledByProtocolFlag ?: (exercise.scheduleKind != ScheduleKind.NONE)
+    exercise.ledByProtocolFlag ?: (exercise.scheduleKind != ScheduleKind.FREE)

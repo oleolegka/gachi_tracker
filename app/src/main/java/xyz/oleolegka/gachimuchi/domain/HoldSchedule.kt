@@ -54,9 +54,37 @@ fun WorkoutProgram.isSimplePair(): Boolean {
     return group.repeats <= 1 && block.repeats <= 1
 }
 
-/** Which branch an exercise pointing at [program] (or at nothing) belongs to. */
+/**
+ * True when there is no effort in here to count at all: no groups, or a group with no blocks,
+ * or blocks whose work time is zero. The library editor will store such a program — nothing
+ * validates a program into being runnable — and [flatten] turns it into an empty list of steps.
+ */
+private fun WorkoutProgram.countsNothing(): Boolean =
+    groups.none { group -> group.blocks.any { it.workSec > 0 } }
+
+/**
+ * Which branch an exercise pointing at [program] (or at nothing) belongs to. THE one classifier:
+ * the create form and the run path both come here, because an exercise created as one branch and
+ * conducted as another is the worst failure this file can have.
+ *
+ * ── The empty schedule is [FREE], not [STRICT] ──────────────────────────────────
+ * This rule was settled by comparing two independently written classifiers that met in a merge
+ * (2026-08-11). They agreed everywhere a schedule has any work in it — repeats on the block,
+ * repeats on the group, a second block, a second group, a block with no rest — and disagreed
+ * only on schedules with nothing to count, which the shape test alone calls [STRICT]: a program
+ * with no groups has no single group, so it is "not a simple pair", so it falls to the last
+ * branch.
+ *
+ * [STRICT] is the wrong answer there, and it is wrong in a way that reaches the screen.
+ * [ScheduleKind.STRICT] is what makes `ExerciseRef.canBeConducted` true, which is what draws the
+ * button that hands the screen to the conductor — and `TimerController.start` drops a run whose
+ * steps are empty. The tap would have done nothing at all, with no message. [FREE] is also the
+ * truthful answer: a schedule that counts nothing does not count time for this exercise, which
+ * is exactly what the free branch means.
+ */
 fun scheduleKindOf(program: WorkoutProgram?): ScheduleKind = when {
     program == null -> ScheduleKind.FREE
+    program.countsNothing() -> ScheduleKind.FREE
     program.isSimplePair() -> ScheduleKind.SIMPLE_PAIR
     else -> ScheduleKind.STRICT
 }

@@ -7,16 +7,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The three shapes a hold's schedule can have (§18.15), and the one that used to be quietly
- * flattened.
+ * What a hold's schedule turns into when it is RUN, and what an [ExerciseRef] carrying one says
+ * about itself.
  *
- * The defect being pinned down here: every protocol-led run went through
- * [programFromExercise], which reads [WorkoutProgram.firstBlock] and rebuilds a program around
- * it. For a plain pair that is the whole schedule. For anything richer — a second block, a
- * group repeat, a pause between groups — everything past the first block was thrown away, and
- * the run that played was not the schedule the exercise says it has.
+ * The branch rule itself lives one file over ([HoldScheduleTest] over domain/HoldSchedule.kt) and
+ * is not re-tested here — one classifier, one place that pins it down. What is here is the
+ * consequence: [scheduledRun] for the strict branch, and the two derived answers on the ref
+ * ([ExerciseRef.scheduleKind], [ExerciseRef.canBeConducted]) that decide whether a tap reaches
+ * the conductor at all.
+ *
+ * The defect being pinned down: every protocol-led run went through [programFromExercise], which
+ * reads [WorkoutProgram.firstBlock] and rebuilds a program around it. For a plain pair that is
+ * the whole schedule. For anything richer — a second block, a group repeat, a pause between
+ * groups — everything past the first block was thrown away, and the run that played was not the
+ * schedule the exercise says it has.
  */
-class ScheduleKindTest {
+class ScheduledRunTest {
 
     private fun hold(name: String, schedule: WorkoutProgram?) = ExerciseRef(
         id = 1,
@@ -67,23 +73,19 @@ class ScheduleKindTest {
     )
 
     @Test
-    fun `no schedule at all is a free hold`() {
-        assertEquals(ScheduleKind.NONE, scheduleKindOf(null))
-        assertFalse(hold("Free hang", null).canBeConducted)
+    fun `a hold with no schedule offers no conducted run`() {
+        val exercise = hold("Free hang", null)
+        assertEquals(ScheduleKind.FREE, exercise.scheduleKind)
+        assertFalse(exercise.canBeConducted)
+        assertNull(scheduledRun(exercise))
     }
 
     @Test
-    fun `one group, one block, no repeats is the plain pair`() {
-        assertEquals(ScheduleKind.PAIR, scheduleKindOf(pair))
-        assertTrue(hold("Hangs", pair).canBeConducted)
-        // and the pair road is the one that builds a program rather than playing one
-        assertNull(scheduledRun(hold("Hangs", pair)))
-    }
-
-    @Test
-    fun `repeats make it strict, and more than one block makes it strict`() {
-        assertEquals(ScheduleKind.STRICT, scheduleKindOf(repeaters))
-        assertEquals(ScheduleKind.STRICT, scheduleKindOf(twoBlocks))
+    fun `a plain pair is conducted by being rebuilt, so it plays no schedule of its own`() {
+        val exercise = hold("Hangs", pair)
+        assertEquals(ScheduleKind.SIMPLE_PAIR, exercise.scheduleKind)
+        assertTrue(exercise.canBeConducted)
+        assertNull(scheduledRun(exercise))
     }
 
     @Test
@@ -97,6 +99,20 @@ class ScheduleKindTest {
         assertEquals(15, run.prepareSec)
         // 6 hangs x 4 sets, which is what the schedule says and nothing else decides
         assertEquals(24, run.workStepCount())
+    }
+
+    /**
+     * The same for a caller holding the program rather than a ref that carries it — the
+     * database backstop in `MainViewModel.startProgramForExercise`. It must agree with the
+     * road above on both questions: whether this is strict at all, and what the run is called.
+     */
+    @Test
+    fun `the ref road and the stored-program road build the same run`() {
+        val fromRef = scheduledRun(hold("Hang 20 mm", repeaters))
+        val fromStore = scheduledRunOf(repeaters, "Hang 20 mm", exerciseId = 1)
+        assertEquals(fromRef, fromStore)
+        assertNull(scheduledRunOf(pair, "Hangs", exerciseId = 1))
+        assertNull(scheduledRunOf(null, "Hangs", exerciseId = 1))
     }
 
     @Test
@@ -133,10 +149,31 @@ class ScheduleKindTest {
         assertTrue(exercise.canBeConducted)
     }
 
+    /**
+     * A schedule that counts nothing must not draw the conductor's button: the run it would
+     * start has no steps and is dropped, so the tap would do nothing and say nothing.
+     */
     @Test
-    fun `a schedule with nothing to count is not strict, it is nothing`() {
+    fun `a schedule with nothing to count offers no conducted run`() {
         val empty = WorkoutProgram(name = "Empty", groups = emptyList())
-        assertEquals(ScheduleKind.NONE, scheduleKindOf(empty))
-        assertFalse(hold("Empty", empty).canBeConducted)
+        val exercise = hold("Empty", empty)
+        assertEquals(ScheduleKind.FREE, exercise.scheduleKind)
+        assertFalse(exercise.canBeConducted)
+        assertNull(scheduledRun(exercise))
+    }
+
+    /**
+     * A ref built with the two numbers and no resolved schedule behind them — what the screens
+     * that only ever spoke the pair still hand around. It reads as the pair it is, rather than
+     * losing the conductor it has had since the app had a timer.
+     */
+    @Test
+    fun `a ref carrying only the two numbers still reads as a pair`() {
+        val exercise = ExerciseRef(
+            id = 2, name = "Hangs", form = ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0,
+        )
+        assertEquals(ScheduleKind.SIMPLE_PAIR, exercise.scheduleKind)
+        assertTrue(exercise.canBeConducted)
+        assertTrue(ledByProtocol(exercise))
     }
 }

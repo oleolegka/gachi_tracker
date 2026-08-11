@@ -129,7 +129,7 @@ class StrictScheduleStartTest {
     fun `a plain pair still asks the journal and the settings, exactly as before`() = runTest {
         val id = repo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
         val exercise = repo.toRef(repo.exercise(id)!!)
-        assertEquals(ScheduleKind.PAIR, exercise.scheduleKind)
+        assertEquals(ScheduleKind.SIMPLE_PAIR, exercise.scheduleKind)
 
         repo.record(holdSetOf(exercise, opDate = "2026-08-10", reps = 2, holdSec = 7.0))
         TimerStore(context).update(TimerSettings(defaultSets = 3, prepareSec = 5))

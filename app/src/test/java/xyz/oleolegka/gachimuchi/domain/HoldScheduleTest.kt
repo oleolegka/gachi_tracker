@@ -91,6 +91,40 @@ class HoldScheduleTest {
         assertEquals(ScheduleKind.SIMPLE_PAIR, scheduleKindOf(handBuilt))
     }
 
+    /*
+     * ── The three degenerate schedules, and why they are FREE ──────────────────────
+     * The one place two independently written classifiers disagreed before they were merged
+     * (2026-08-11). A shape test alone calls all three STRICT — a program with no single group
+     * is "not a simple pair", so it falls to the last branch — and STRICT is what makes
+     * `ExerciseRef.canBeConducted` true, which draws the button that hands the screen to the
+     * conductor. `TimerController.start` then drops a run with no steps, so the tap does
+     * nothing at all and says nothing about it.
+     */
+
+    @Test
+    fun `a schedule with no groups counts nothing and is free`() {
+        assertEquals(ScheduleKind.FREE, scheduleKindOf(WorkoutProgram(name = "Empty", groups = emptyList())))
+    }
+
+    @Test
+    fun `a group with no blocks counts nothing and is free`() {
+        val program = pair().let { it.copy(groups = listOf(it.groups[0].copy(blocks = emptyList()))) }
+        assertEquals(ScheduleKind.FREE, scheduleKindOf(program))
+    }
+
+    @Test
+    fun `a block with no work time counts nothing and is free`() {
+        assertEquals(ScheduleKind.FREE, scheduleKindOf(pair(work = 0, rest = 3)))
+        // and the shape test on its own would have called it a pair, which is the divergence
+        assertTrue(pair(work = 0, rest = 3).isSimplePair())
+    }
+
+    /** A block with no REST of its own is a different matter: there is work in it, so it counts. */
+    @Test
+    fun `a block with no rest is classified on its shape like any other`() {
+        assertEquals(ScheduleKind.SIMPLE_PAIR, scheduleKindOf(pair(work = 7, rest = 0)))
+    }
+
     @Test
     fun `the summary names the pair, the effort count and the length`() {
         val program = starterPrograms().first() // 7:3 x 6, four sets, 180 s between

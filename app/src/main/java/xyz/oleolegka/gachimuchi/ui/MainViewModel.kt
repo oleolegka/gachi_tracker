@@ -56,10 +56,10 @@ import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
 import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
-import xyz.oleolegka.gachimuchi.domain.isSimplePair
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.scheduledRun
+import xyz.oleolegka.gachimuchi.domain.scheduledRunOf
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restHintSec
@@ -929,9 +929,21 @@ class MainViewModel(
              * Its own `prepareSec` is kept rather than overridden from the settings for the
              * same reason: the lead-in is one of the timings the strict branch promises to fix.
              */
-            val schedule = repo.exercise(start.exercise.id)?.protocolProgramId
+            /*
+             * THE SAME TEST as the one above, asked of the database rather than of the ref.
+             *
+             * The two exist because the ref may not carry a resolved schedule — a caller that
+             * built one by hand, or a catalog whose library has not been read into
+             * `programsById` yet — and this is the backstop for exactly that. They must never
+             * disagree about which branch an exercise is on, so both ask `scheduleKindOf`
+             * (domain/HoldSchedule.kt) and neither carries a rule of its own. This one used to
+             * ask `!isSimplePair()` instead, which is the same answer for every schedule with
+             * any work in it and a different one for an empty schedule — see that function's
+             * own note on why an empty schedule is not strict.
+             */
+            val stored = repo.exercise(start.exercise.id)?.protocolProgramId
                 ?.let { programRepo.programById(it) }
-            if (schedule != null && !schedule.isSimplePair()) {
+            scheduledRunOf(stored, start.exercise.name, start.exercise.id)?.let { schedule ->
                 timer.start(schedule, start.exercise.id, RunOrigin.EXERCISE, start.side)
                 return@launch
             }
