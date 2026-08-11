@@ -153,6 +153,80 @@ class RunnerTest {
         assertTrue(skipStep(steps, onLast, t0 + 71_000).finished)
     }
 
+    // --- what was held, as opposed to what was passed (§18.20) ------------------------
+
+    @Test
+    fun `a skipped step is marked, so being past it is not the same as having held it`() {
+        val skipped = skipStep(steps, startRun(steps, t0), t0 + 2_000)
+        assertEquals(setOf(0), skipped.skipped)
+    }
+
+    @Test
+    fun `a step the clock carries the run through leaves no mark`() {
+        val settled = settleRun(steps, startRun(steps, t0), t0 + 45_000)
+        assertTrue(settled.skipped.isEmpty())
+    }
+
+    @Test
+    fun `skipping the last step marks it before the run reports itself finished`() {
+        val onLast = settleRun(steps, startRun(steps, t0), t0 + 71_000)
+        val ended = skipStep(steps, onLast, t0 + 71_000)
+
+        assertTrue(ended.finished)
+        // `finished` is what makes every step count; without the mark the last hang of the
+        // session would be written by the act of skipping it
+        assertEquals(setOf(steps.lastIndex), ended.skipped)
+    }
+
+    @Test
+    fun `a skipped step held to its end the second time counts again`() {
+        val skipped = skipStep(steps, startRun(steps, t0), t0 + 2_000)
+        val back = previousStep(steps, skipped, t0 + 3_000)
+        assertEquals(0, back.stepIndex)
+        assertEquals(setOf(0), back.skipped)
+
+        val heldThrough = settleRun(steps, back, t0 + 3_000 + 10_000)
+        assertEquals(1, heldThrough.stepIndex)
+        assertTrue(heldThrough.skipped.isEmpty())
+    }
+
+    @Test
+    fun `two skips in one run are both remembered`() {
+        val first = skipStep(steps, startRun(steps, t0), t0 + 2_000)
+        val onSecond = settleRun(steps, first, t0 + 2_000 + 20_000)
+        assertEquals(2, onSecond.stepIndex)
+
+        val second = skipStep(steps, onSecond, t0 + 22_000)
+        assertEquals(setOf(0, 2), second.skipped)
+    }
+
+    @Test
+    fun `the mark travels in the snapshot, so a rebuilt process still knows what was skipped`() {
+        val skipped = skipStep(steps, startRun(steps, t0), t0 + 2_000)
+        val snapshot = RunSnapshot(
+            programId = 1,
+            programName = "test",
+            steps = steps,
+            state = skipped,
+            bootRef = 0,
+        )
+        val json = kotlinx.serialization.json.Json.encodeToString(RunSnapshot.serializer(), snapshot)
+        val back = kotlinx.serialization.json.Json.decodeFromString(RunSnapshot.serializer(), json)
+
+        assertEquals(setOf(0), back.state.skipped)
+    }
+
+    @Test
+    fun `a snapshot written before the mark existed still reads, as a run that skipped nothing`() {
+        val old = """{"program_id":1,"program_name":"test","steps":[],"state":{"step_index":3,""" +
+            """"running":true,"step_end_at_ms":500},"boot_ref":7}"""
+        val parsed = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString(RunSnapshot.serializer(), old)
+
+        assertEquals(3, parsed.state.stepIndex)
+        assertTrue(parsed.state.skipped.isEmpty())
+    }
+
     @Test
     fun `going back restarts the previous step from its beginning`() {
         val onSecond = settleRun(steps, startRun(steps, t0), t0 + 15_000)

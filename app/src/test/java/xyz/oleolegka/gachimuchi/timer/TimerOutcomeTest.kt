@@ -12,6 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
 import xyz.oleolegka.gachimuchi.data.TimerStore
 import xyz.oleolegka.gachimuchi.domain.CompletedSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
@@ -21,6 +22,8 @@ import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.RunOutcome
 import xyz.oleolegka.gachimuchi.domain.multiSetProgram
 import xyz.oleolegka.gachimuchi.domain.restProgram
+import xyz.oleolegka.gachimuchi.domain.totalSec
+import java.time.Duration
 
 /**
  * Whether a run that ends actually leaves an offer behind, and whether the right ones do.
@@ -30,8 +33,14 @@ import xyz.oleolegka.gachimuchi.domain.restProgram
  * that a rest and a plain program produce none, and that an offer cannot outlive the run
  * it belongs to and turn up attached to the next one.
  *
- * The runs here are advanced with Skip rather than by waiting, which is also the case the
- * feature is weakest at: skipping counts the skipped effort as done (see domain/RunLog.kt).
+ * ── Why these advance the CLOCK now, and used to press Skip ────────────────────
+ * Skip was the convenient way to walk a run to its end, and the note here used to say so
+ * while admitting that skipping counted the skipped effort as done. Since §18.20 it does not:
+ * a step the run jumped is a step it did not hold, so a program skipped end to end holds
+ * nothing and offers nothing. Every assertion below about "the sets it counted" was therefore
+ * an assertion about the defect rather than about the offer, and they now advance time, which
+ * is what they meant all along. The Skip button keeps one test of its own, stating the new
+ * rule instead of depending on the old one.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -53,6 +62,12 @@ class TimerOutcomeTest {
     private fun newController(): TimerController =
         TimerController(context).also { controllers += it }
 
+    /** Lets [seconds] of the run elapse and delivers the backstop alarm that notices it. */
+    private fun elapse(timer: TimerController, seconds: Int) {
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(seconds.toLong()))
+        timer.onAlarm()
+    }
+
     @After
     fun tearDown() {
         controllers.forEach { it.stop() }
@@ -67,7 +82,7 @@ class TimerOutcomeTest {
         timer.start(program, exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
         assertEquals(7, timer.run.value!!.steps.size)
 
-        repeat(7) { timer.skip() }
+        elapse(timer, program.totalSec() + 1)
 
         assertNull("the run is over", timer.run.value)
         val outcome = timer.outcome.value
@@ -82,7 +97,8 @@ class TimerOutcomeTest {
         val timer = newController()
         timer.start(program, exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
 
-        repeat(3) { timer.skip() } // through both hangs of set 1 and into the pause
+        // through both hangs of set 1 (7 + 3 + 7) and a second into the pause after it
+        elapse(timer, 18)
         timer.stop()
 
         val outcome = timer.outcome.value
@@ -91,6 +107,22 @@ class TimerOutcomeTest {
         assertEquals(listOf(2), outcome.sets.map { it.reps })
         // the pause was cut short, so it is not offered as a fact
         assertNull(outcome.sets.single().restAfterSec)
+    }
+
+    /**
+     * The rule §18.20 put in place, from the button that broke it: what the run jumped over is
+     * not what the run did, so a program held down Skip from one end to the other has nothing
+     * to write down. It used to offer the whole session.
+     */
+    @Test
+    fun `a program skipped from end to end offers nothing to write down`() {
+        val timer = newController()
+        timer.start(program, exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
+
+        repeat(7) { timer.skip() }
+
+        assertNull("the run is over", timer.run.value)
+        assertNull("not one effort was held to its end", timer.outcome.value)
     }
 
     @Test
@@ -115,7 +147,7 @@ class TimerOutcomeTest {
         val timer = newController()
 
         timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
-        timer.skip() // one step, so this finishes the run
+        elapse(timer, 121) // one step, so letting it run out finishes the run
 
         val outcome = timer.outcome.value
         assertNotNull(outcome)
@@ -128,7 +160,7 @@ class TimerOutcomeTest {
         val timer = newController()
         timer.start(program) // no exercise, default origin
 
-        repeat(7) { timer.skip() }
+        elapse(timer, program.totalSec() + 1)
 
         // this is the case the user hit twice: a saved protocol, run from the timer tab,
         // counting a whole session and then offering nothing at all
@@ -143,7 +175,7 @@ class TimerOutcomeTest {
     fun `answering the offer clears it`() {
         val timer = newController()
         timer.start(program, exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
-        repeat(7) { timer.skip() }
+        elapse(timer, program.totalSec() + 1)
         assertNotNull(timer.outcome.value)
 
         timer.clearOutcome()
@@ -198,7 +230,7 @@ class TimerOutcomeTest {
     fun `starting the next run drops an offer that was never answered`() {
         val timer = newController()
         timer.start(program, exerciseId = hangs.id, origin = RunOrigin.EXERCISE)
-        repeat(7) { timer.skip() }
+        elapse(timer, program.totalSec() + 1)
         assertNotNull(timer.outcome.value)
 
         timer.start(restProgram(120), exerciseId = hangs.id, origin = RunOrigin.EXERCISE)

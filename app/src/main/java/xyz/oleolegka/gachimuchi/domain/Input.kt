@@ -65,8 +65,15 @@ fun formatNumber(x: Double): String {
 
 /**
  * Applies a +/- step button to the current field contents. An empty (or unreadable)
- * field counts as zero, and the result is clamped at [min] — the buttons must never
- * produce a negative weight, which the form validators would reject anyway.
+ * field counts as zero, and the result is clamped at [min].
+ *
+ * [min] defaults to zero because most of what these buttons drive — reps, seconds, body
+ * weight, the load on a bar — has no negative half at all, and walking below zero would only
+ * produce a value the form validators reject. ADDED WEIGHT is the exception and it is a large
+ * one: it is a signed axis ([StrengthSet.addedKg]), its negative half is a band taking load off
+ * a hang, and a floor of zero meant the minus button silently did nothing on exactly the field
+ * whose most common real value on a fingerboard is below zero. Those callers pass
+ * [Double.NEGATIVE_INFINITY] — see `StepperField`'s `signed`.
  */
 fun applyStep(text: String, delta: Double, min: Double = 0.0): String =
     formatNumber(max(min, (parseNumber(text) ?: 0.0) + delta))

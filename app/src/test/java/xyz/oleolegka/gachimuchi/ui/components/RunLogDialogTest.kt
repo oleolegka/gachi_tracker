@@ -114,4 +114,25 @@ class RunLogDialogTest : ScreenTest() {
 
         assertNull(logged?.third)
     }
+
+    /**
+     * The other half of keeping the sign, and the half that decides whether it can be entered
+     * at all: this field takes [androidx.compose.ui.text.input.KeyboardType.Decimal], which
+     * asks for a numeric pad and not for a signed one, so whether a minus key exists is up to
+     * the installed keyboard. On this form the four step buttons ARE the control — they sit
+     * under the field, a quarter of the width each — and they used to clamp at zero, so
+     * pressing minus at zero did nothing at all and said nothing about why.
+     *
+     * A prefill of 2 is deliberate: the value it walks to (-3) is not the label of any button
+     * on the form, so the node this asserts on cannot be one of the buttons themselves.
+     */
+    @Test
+    fun `the minus button walks the weight below zero instead of stopping there`() {
+        dialog(prefill = 2.0)
+        compose.onNodeWithText("-5").performClick()
+        settle()
+        tapLog()
+
+        assertEquals(-3.0, logged?.third)
+    }
 }

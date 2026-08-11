@@ -298,6 +298,9 @@ internal fun StrengthEntry(
         value = weight,
         onValueChange = { weight = it },
         steps = listOf(2.5, 5.0),
+        // the same field is two different quantities: added weight is signed (a band, an
+        // assist machine), the load on a bar is not and cannot be
+        signed = ownWeight,
     )
     StepperField(
         label = "Reps",
@@ -407,6 +410,7 @@ internal fun HoldEntry(
         value = weight,
         onValueChange = { weight = it },
         steps = listOf(0.5, 1.0),
+        signed = true,
     )
     StepperField(
         label = "Reps",
@@ -439,8 +443,11 @@ internal fun HoldEntry(
     SideMissingNote(sideMissing)
     SubmitButton(
         repeat = untouched,
+        // "is anything filled in", and added weight is SIGNED: an assisted hang entered as
+        // -15 with the reps left blank used to leave this button dead, which is the same
+        // positivity test that used to drop the sign on the run offer
         enabled = !sideMissing &&
-            ((weightValue != null && weightValue > 0) || (repsValue != null && repsValue > 0)),
+            ((weightValue != null && weightValue != 0.0) || (repsValue != null && repsValue > 0)),
     ) {
         onAddSet(
             holdSetOf(

@@ -1835,6 +1835,8 @@ internal fun RunPlanDialog(
                         onValueChange = { kgDraft = it },
                         steps = listOf(2.5, 5.0),
                         stacked = true,
+                        // signed: below zero is a band taking load off, not an impossible plate
+                        signed = true,
                     )
                 }
                 Text(
@@ -1911,6 +1913,7 @@ internal fun WeightDialog(
                     value = draft,
                     onValueChange = { draft = it },
                     steps = listOf(2.5, 5.0),
+                    signed = true,
                 )
                 Text(
                     "Hang it before you start. Leave it empty for none.",
