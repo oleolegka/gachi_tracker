@@ -6,9 +6,11 @@ import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.robolectric.annotation.Config
+import xyz.oleolegka.gachimuchi.ui.Journal
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.exerciseEntity
+import xyz.oleolegka.gachimuchi.ui.exerciseRef
 import java.time.LocalDate
 
 /**
@@ -108,6 +110,54 @@ class OverviewScreenTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Exercise catalog").assertDoesNotExist()
+    }
+
+    // --- the hero's meta line ----------------------------------------------------------
+
+    /**
+     * A week holding only a session that wrote nothing down — the owner logs climbing on rock
+     * that way. The hero counts it (it is a day of training), and the phrase counting ENTRIES
+     * has nothing to say about it, so the phrase goes rather than the count being stretched to
+     * cover a set nobody wrote.
+     */
+    @Test
+    fun `the entry count disappears from the hero when nothing was written down`() {
+        val journal = Journal()
+        journal.startWorkout("2026-08-08")
+
+        screen {
+            OverviewScreen(
+                state = UiState(events = journal.events, loading = false),
+                today = today,
+                onOpenForm = {},
+            )
+        }
+
+        // the whole phrase, separator included - not "0 entries" in a quieter colour
+        compose.onNodeWithText("entries", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("1 more than the week before").assertExists()
+        // and the session itself is still counted, which is the reason the line looked odd
+        compose.onNodeWithText("days with training").assertExists()
+    }
+
+    @Test
+    fun `the entry count is untouched when something was written down`() {
+        val journal = Journal()
+        journal.strengthSet(exerciseRef(2, "Overhead press"), "2026-08-08")
+
+        screen {
+            OverviewScreen(
+                state = UiState(
+                    events = journal.events,
+                    exercises = listOf(exerciseEntity(2, "Overhead press")),
+                    loading = false,
+                ),
+                today = today,
+                onOpenForm = {},
+            )
+        }
+
+        compose.onNodeWithText("1 entry - 1 more than the week before").assertExists()
     }
 
     @Test

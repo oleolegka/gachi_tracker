@@ -147,9 +147,22 @@ fun OverviewScreen(
     }
 }
 
-/** Meta line of the hero: what the number is made of and how it compares with last week. */
+/**
+ * Meta line of the hero: what the number is made of and how it compares with last week.
+ *
+ * ── "0 entries" is not printed, the phrase is dropped ───────────────────────────
+ * An ENTRY is a set somebody wrote down. A workout started and left empty — the owner logs a
+ * session of climbing on rock that way — is a day of training with no entries in it, and since
+ * the hero's own number counts DAYS (domain/Analytics.kt's `trainingDays`) a week holding only
+ * such a session read "1 workout ... 0 entries".
+ *
+ * The fix is not to let an empty session count as an entry. Owner's ruling, 2026-08-11:
+ * stretching the word to flatter a counter would be lying in the definition of the metric. The
+ * count is honestly zero; a phrase with nothing to say is simply not shown, separator and all.
+ */
 private fun heroMeta(entries: Int, previous: Int, current: Int): String {
-    val parts = mutableListOf("$entries ${if (entries == 1) "entry" else "entries"}")
+    val parts = mutableListOf<String>()
+    if (entries > 0) parts += "$entries ${if (entries == 1) "entry" else "entries"}"
     parts += when {
         current > previous -> "${current - previous} more than the week before"
         current < previous -> "${previous - current} fewer than the week before"

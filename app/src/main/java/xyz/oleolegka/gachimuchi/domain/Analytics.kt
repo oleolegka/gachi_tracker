@@ -976,8 +976,9 @@ fun workingSetTally(
  *
  * [entries] is the exception and it is deliberate: it counts what was WRITTEN DOWN, which is a
  * different question from whether the day happened, and an empty workout genuinely contributes
- * nothing to it. A week holding only such a session therefore reads "1 workout ... 0 entries",
- * which is true but does look odd; changing it would mean redefining what an entry is.
+ * nothing to it. Stretching the word to make the counter look better would be lying in the
+ * definition of the metric, so the number stays honest and the SCREEN drops the phrase when it
+ * is zero — see `ui/screens/OverviewScreen.kt`'s `heroMeta`.
  */
 data class HeroStats(
     val windowDays: Int,
