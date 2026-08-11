@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -261,11 +262,28 @@ private fun WeekdayGutter(style: TextStyle) {
     ) {
         labels.forEach { label ->
             Box(
-                Modifier.height(HeatmapMetrics.cell).padding(bottom = 0.dp),
+                Modifier.height(HeatmapMetrics.cell),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (label.isNotEmpty()) {
-                    Text(label, fontSize = style.fontSize, color = style.color, maxLines = 1)
+                    Text(
+                        label,
+                        fontSize = style.fontSize,
+                        color = style.color,
+                        maxLines = 1,
+                        /*
+                         * Allowed to PAINT taller than the row it belongs to.
+                         *
+                         * The row is one cell tall - 11 dp - and the label is 11 sp, which
+                         * needs about 14 dp of line box. Left constrained, the glyphs were
+                         * shaved top and bottom: reported from the phone as "the weekdays are
+                         * cut off". The row height cannot grow, because it is what keeps the
+                         * ribbon in step with the grid beside it, so the TEXT is let out of
+                         * it instead. It overflows into the blank row above and below, which
+                         * is free: only every other day is labelled.
+                         */
+                        modifier = Modifier.wrapContentHeight(unbounded = true),
+                    )
                 }
             }
             Box(Modifier.height(HeatmapMetrics.gap))

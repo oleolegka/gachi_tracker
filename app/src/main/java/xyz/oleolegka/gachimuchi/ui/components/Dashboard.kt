@@ -163,7 +163,22 @@ fun HeroCard(
                 style = EyebrowStyle,
                 color = colors.inkMuted,
             )
-            Row(Modifier.padding(top = Spacing.Line), verticalAlignment = Alignment.Bottom) {
+            /*
+             * Aligned by BASELINE, not by the bottom of the boxes.
+             *
+             * Reported from the phone: the number sat oddly high against its unit. Two
+             * causes, both left over from when this figure was 52 sp. `lineHeight` equal to
+             * the font size squeezes the line box tighter than the glyph's own ascent and
+             * descent, so the digit floats inside it; and `Alignment.Bottom` lines up the
+             * BOXES, which for two texts with different line boxes is not the same as lining
+             * up what the eye reads - the baseline. At 52 sp the error was a fraction of a
+             * large number and invisible; at 22 it is most of the gap.
+             *
+             * Line height and tracking now match app-next/hero-size.html, the page the owner
+             * picked 22 from: 1.05x the size, and -0.02em rather than the -1.5 sp that was
+             * tuned for a figure more than twice as tall.
+             */
+            Row(Modifier.padding(top = Spacing.Line)) {
                 Text(
                     value,
                     // Figure, not Display: the owner compared the two side by side in the
@@ -172,16 +187,17 @@ fun HeroCard(
                     // from two metres with wet hands - and this card is read at arm's length.
                     fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-1.5).sp,
-                    lineHeight = TextSize.Figure,
+                    letterSpacing = (-0.44).sp,
+                    lineHeight = TextSize.Figure * 1.05f,
                     color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.alignByBaseline(),
                 )
                 Text(
                     " $unit",
-                    fontSize = TextSize.Figure,
+                    fontSize = TextSize.Meta,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.inkSecondary,
-                    modifier = Modifier.padding(bottom = Spacing.Tight),
+                    modifier = Modifier.alignByBaseline(),
                 )
             }
             Text(
