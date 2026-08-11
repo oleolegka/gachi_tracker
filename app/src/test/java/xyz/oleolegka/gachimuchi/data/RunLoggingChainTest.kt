@@ -649,6 +649,91 @@ class RunLoggingChainTest {
         assertTrue("and it is actually counting", floor.readyAtMs > SystemClock.elapsedRealtime())
     }
 
+    /**
+     * THE POINT OF §18.17, walked end to end: the left hand rests while the right hand works.
+     *
+     * This is the scenario one-sided exercises exist for and the one the model made impossible.
+     * A conducted run used to be every set of the exercise, with the pauses between them
+     * expanded into steps — so while the left hand sat out its four minutes, that pause WAS the
+     * single conductor: it held the screen, the voice, the service and the wake lock, the floors
+     * were silent by construction, and a tap on the right card went into
+     * `TimerController.start`, which replaces a run without ceremony and would have taken the
+     * left hand's finished sets with it.
+     *
+     * With a run cut down to one set the conductor is free the moment the holds are over, and
+     * the pause is a floor keyed by (exercise, side) — of which any number run at once. So:
+     * left set, confirmed, left rest counting; right set STARTS while it counts, and the left
+     * rest is still counting when the right set is over.
+     */
+    @Test
+    fun `the left hand rests while the right hand works, and neither wipes out the other`() = runTest {
+        val exercise = hangs()
+        repo.setOneSided(exercise.id, true)
+        val oneSided = repo.toRef(repo.exercise(exercise.id)!!)
+
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        // --- the left hand -------------------------------------------------------------
+        viewModel.startProgramForExercise(ProgramStart(oneSided, HoldSide.LEFT, null))
+        settle()
+        val leftRun = checkNotNull(timer.run.value)
+        // one set, and the rest between sets is not in it: that is the whole change
+        assertTrue(leftRun.steps.all { it.groupRepeats == 1 })
+        assertTrue(leftRun.steps.none { it.name == "Rest between sets" })
+
+        elapse(timer, leftRun.steps.sumOf { it.durationSec } + 1)
+        assertNull("the conductor must let go when the set is over", timer.run.value)
+
+        viewModel.logRunSets(oneSided, timer.outcome.value!!.sets)
+        settle()
+
+        val leftFloor = timer.floors.floors.value.single()
+        assertEquals(HoldSide.LEFT.code, leftFloor.side)
+        val leftReadyAt = leftFloor.readyAtMs
+        assertTrue("the left rest must be counting", leftReadyAt > SystemClock.elapsedRealtime())
+
+        // --- the right hand, WHILE the left one is still resting ------------------------
+        viewModel.startProgramForExercise(ProgramStart(oneSided, HoldSide.RIGHT, null))
+        settle()
+
+        assertNotNull("the right hand must get the conductor while the left one rests", timer.run.value)
+        val rightRun = checkNotNull(timer.run.value)
+        assertEquals(HoldSide.RIGHT.code, rightRun.side)
+
+        val stillResting = timer.floors.floors.value.single()
+        assertEquals(
+            "the left hand's rest must survive the right hand starting",
+            HoldSide.LEFT.code,
+            stillResting.side,
+        )
+        assertEquals(
+            "and it must not be restarted or shortened by it",
+            leftReadyAt,
+            stillResting.readyAtMs,
+        )
+
+        elapse(timer, rightRun.steps.sumOf { it.durationSec } + 1)
+        viewModel.logRunSets(oneSided, timer.outcome.value!!.sets)
+        settle()
+
+        // both hands are resting now, each under its own card
+        assertEquals(
+            listOf(HoldSide.LEFT.code, HoldSide.RIGHT.code),
+            timer.floors.floors.value.map { it.side }.sortedBy { it },
+        )
+
+        // and the journal has one set per hand, neither of them lost to the other's start
+        val written = buildSession(repo.allEvents(), LocalDate.now().toString()).groups
+            .flatMap { it.sets }.map { it.form as HoldSet }
+        assertEquals(2, written.size)
+        assertEquals(
+            listOf(HoldSide.LEFT, HoldSide.RIGHT),
+            written.mapNotNull { it.sideOf }.sortedBy { it.code },
+        )
+    }
+
     @Test
     fun `a run interrupted by the user is offered for the part that ran`() = runTest {
         val exercise = hangs()
