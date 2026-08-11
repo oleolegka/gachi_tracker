@@ -110,8 +110,8 @@ val LocalGachiColors = staticCompositionLocalOf { LightGachiColors }
  *   inverseSurface / inverseOnSurface   a snackbar, a plain tooltip
  *   scrim                    the dim behind a modal sheet
  *
- * Values come from `design-system/app-next/calendar.html` section F. Two deliberate
- * departures, both recorded there or forced by it:
+ * Values come from `design-system/app-next/calendar.html` section F. Three deliberate
+ * departures, each recorded there or forced by it:
  *
  * 1. The dark theme has ONE tone above the card (#242422), so sheet, menu, dialog and tab
  *    bar all get it. Section F says as much: the palette is closed, and the levels are told
@@ -120,11 +120,20 @@ val LocalGachiColors = staticCompositionLocalOf { LightGachiColors }
  *    (black at 32 %), but Material's `scrim` role is the base colour to which the component
  *    applies its own 0.32 alpha — handing it a colour that is already 32 % would dim the
  *    plane by ten per cent instead of thirty-two.
+ * 3. Section F contradicts itself once, and the COMPONENT it names wins over the role it
+ *    names: one line gives the dialog and the menu #FCFCFB under `surface`, the next gives
+ *    `surfaceContainerHigh` — the role an AlertDialog actually reads — #F0EFEC. Dialogs are
+ *    #FCFCFB here, because on #F0EFEC an unselected chip inside a dialog (the plan editor is
+ *    full of them) is exactly the same colour as the dialog behind it and loses its fill.
  *
- * Section F contradicts itself once, and the role names win over its prose: it calls the
- * dialog `surface` (#FCFCFB) in one line and maps `surfaceContainerHigh` — the role an
- * AlertDialog actually reads — to #F0EFEC in the next. Dialogs therefore come out on the
- * recessed tone, a hair darker than a card, which is also what the lavender it replaces was.
+ *    Where the same conflict has no way out, the chrome wins: a dropdown menu and the tab
+ *    bar BOTH read `surfaceContainer`, and the tab bar has to separate from the plane it
+ *    sits on, so it takes #F0EFEC and the menu comes along. A menu is a floating surface
+ *    with a shadow; a tab bar three levels off the plane would simply not read as a bar.
+ *
+ * In the dark theme the chip and the dialog do collide, at #242422, and section F says so
+ * outright: the palette has one tone above the card, and the levels are told apart by the
+ * hairline border and the shadow rather than by fill.
  */
 private val LightScheme = lightColorScheme(
     primary = AccentLight,
@@ -151,7 +160,8 @@ private val LightScheme = lightColorScheme(
     surfaceContainerLowest = PlaneLight,
     surfaceContainerLow = SurfaceLight,
     surfaceContainer = SurfaceRecessedLight,
-    surfaceContainerHigh = SurfaceRecessedLight,
+    // the dialog: a card, not a recessed block — see the note on section F above
+    surfaceContainerHigh = SurfaceLight,
     surfaceContainerHighest = GridLight,
     surfaceDim = GridLight,
     inverseSurface = InkLight,
