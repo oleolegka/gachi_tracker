@@ -186,7 +186,12 @@ data class WorkoutLogActions(
      * this screen, once per [HoldSide] — see [RestAsk.New] — and an existing card's own "set a
      * rest" calls it once, with that card's own side (null for an exercise that has only one).
      */
-    val addExercise: (exerciseId: Long, restSec: Int, side: HoldSide?) -> Unit,
+    /**
+     * Puts one card into the workout, or restates it: the rest between sets and how many sets
+     * are PLANNED (§18.17) are both answered in the one dialog that opens when an exercise is
+     * picked, and both are statements about this session rather than about the exercise.
+     */
+    val addExercise: (exerciseId: Long, restSec: Int, side: HoldSide?, plannedSets: Int?) -> Unit,
 
     /**
      * Create a catalog exercise, and hand its id back.
@@ -627,6 +632,7 @@ fun WorkoutLogScreen(
                     name = exerciseName(state, exercise),
                     restSec = exercise.restSec,
                     sets = exercise.sets.map { it.form },
+                    plannedSets = exercise.plannedSets,
                     running = running,
                     floor = id?.let { e -> floors.firstOrNull { it.exerciseId == e && it.side == exercise.side?.code } },
                     nowMs = nowMs,
@@ -846,8 +852,10 @@ fun WorkoutLogScreen(
             // order of the rest (the catalog column, then what was actually rested)
             initialSec = already?.restSec?.takeIf { it >= MIN_STEP_SEC }
                 ?: restHintSec(settings, state.events, ref),
+            // what this card already plans, if anything; a fresh card opens on the default
+            initialSets = already?.plannedSets,
             confirmLabel = if (already == null) "Add to workout" else "Save",
-            onConfirm = { sec ->
+            onConfirm = { sec, plannedSets ->
                 /*
                  * A one-sided exercise picked fresh gets BOTH its cards, at this same rest, in
                  * one answer to one question — the two-card rule holds regardless of which of
@@ -856,10 +864,10 @@ fun WorkoutLogScreen(
                  * it is never null for a card that came from a real left/right split.
                  */
                 if (askingRestIsNew && ref.oneSided) {
-                    actions.addExercise(id, sec, HoldSide.LEFT)
-                    actions.addExercise(id, sec, HoldSide.RIGHT)
+                    actions.addExercise(id, sec, HoldSide.LEFT, plannedSets)
+                    actions.addExercise(id, sec, HoldSide.RIGHT, plannedSets)
                 } else {
-                    actions.addExercise(id, sec, askingRestSide?.let(HoldSide::fromCode))
+                    actions.addExercise(id, sec, askingRestSide?.let(HoldSide::fromCode), plannedSets)
                 }
                 askingRestFor = null
             },
@@ -1256,6 +1264,14 @@ private fun ExerciseCard(
     sets: List<ActivityForm>,
     /** Singular and plural of what this card counts. Sets, unless the card holds something else. */
     countNoun: Pair<String, String> = "set" to "sets",
+    /**
+     * How many sets this card PLANNED (§18.17), or null when nobody said.
+     *
+     * It rides on the counter the card already draws rather than becoming a second number
+     * beside it: the owner asked for a count of sets done, this is the same count read against
+     * a target, and two counters saying nearly the same thing is how a card stops being read.
+     */
+    plannedSets: Int? = null,
     /** Anything else the meta line should carry after the count and the protocol. */
     metaNote: String? = null,
     /** A protocol-led set of this exercise is being conducted right now. */
@@ -1419,9 +1435,16 @@ private fun ExerciseCard(
              * because they are sets; which of them were ramp-ups is what the badges say. The
              * protocol stands here too when every set shares it, instead of once per set.
              */
+            val noun = if (sets.size == 1) countNoun.first else countNoun.second
             Text(
                 listOfNotNull(
-                    "${sets.size} ${if (sets.size == 1) countNoun.first else countNoun.second}",
+                    when {
+                        plannedSets == null -> "${sets.size} $noun"
+                        // the plan is not a limit, so going past it is reported and not hidden;
+                        // "7 of 5" would read as an arithmetic error rather than a good session
+                        sets.size > plannedSets -> "${sets.size} $noun, $plannedSets planned"
+                        else -> "${sets.size} of $plannedSets $noun"
+                    },
                     table.commonProtocol,
                     metaNote,
                 ).joinToString(" · "),
@@ -1529,9 +1552,27 @@ private fun RestBar(floor: RestFloor, nowMs: Long, modifier: Modifier = Modifier
     }
 }
 
+/** The plan a card opens on when nothing better is known. Three is a workmanlike session. */
+private const val DEFAULT_PLANNED_SETS = 3
+
+/** Past this the plan is a typo, the same sanity rail the holds have. */
+private const val MAX_PLANNED_SETS = 30
+
 /**
- * The rest between sets, asked once when the exercise joins the workout and changed from the
- * card afterwards.
+ * How this exercise goes today: the rest between sets, and how many sets are PLANNED — asked
+ * once when the exercise joins the workout and changed from the card afterwards.
+ *
+ * ── Why the plan is here and not before each run (§18.17) ───────────────────────
+ * The set count used to be a field of the "before this run" dialog, which asked it again before
+ * every single set and turned the answer into group repeats of the conductor's program — the
+ * pauses between those sets then held the one conductor the app has, and the other hand could
+ * not start. A run is one set now, so the count is a PLAN: stated once, drawn on the card as
+ * "2 of 5", and enforced nowhere. A sixth set of a card that planned five is recorded without a
+ * word, because the journal records what happened and the plan is only what was intended.
+ *
+ * The two questions belong together because they are the same kind of statement — about THIS
+ * session, as opposed to what the exercise is (the catalog) or what was done (the sets) — and
+ * because this dialog already opens, so the plan costs no extra screen.
  *
  * ── Prefilled so that agreeing is one tap ───────────────────────────────────────
  * The offer is what was chosen last time (§13.2), and the point of asking at all is that it
@@ -1546,8 +1587,10 @@ private fun RestBar(floor: RestFloor, nowMs: Long, modifier: Modifier = Modifier
 private fun RestDialog(
     exerciseName: String,
     initialSec: Int,
+    /** The plan this card already carries, or null when it has none yet. */
+    initialSets: Int?,
     confirmLabel: String,
-    onConfirm: (Int) -> Unit,
+    onConfirm: (restSec: Int, plannedSets: Int?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
@@ -1555,6 +1598,17 @@ private fun RestDialog(
     // remembered answer) and typed as mm:ss from there — see ui/components/TimeField.kt (§13.9)
     var draft by remember(exerciseName, initialSec) { mutableStateOf(formatDurationSec(initialSec)) }
     val seconds = parseDurationText(draft)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
+    var setsDraft by remember(exerciseName, initialSets) {
+        mutableStateOf((initialSets ?: DEFAULT_PLANNED_SETS).toString())
+    }
+    /*
+     * BLANK IS A LEGITIMATE ANSWER, and it means "no plan" rather than an error: the owner logs
+     * sessions where how many sets there will be is decided on the bar. So an empty box confirms
+     * fine and the card then counts sets without a target, exactly as it did before this field
+     * existed. Only a number that is present and out of range holds the button.
+     */
+    val planBlank = setsDraft.isBlank()
+    val plannedSets = parseNumber(setsDraft)?.toInt()?.takeIf { it in 1..MAX_PLANNED_SETS }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1593,10 +1647,31 @@ private fun RestDialog(
                         textAlign = TextAlign.Center,
                     )
                 }
+                StepperField(
+                    label = "Sets planned",
+                    value = setsDraft,
+                    onValueChange = { setsDraft = it },
+                    steps = listOf(1.0),
+                    decimal = false,
+                    stacked = true,
+                )
+                Text(
+                    if (!planBlank && plannedSets == null) {
+                        "A plan is a whole number of sets, or nothing at all."
+                    } else {
+                        "The card counts against this. Nothing stops you doing more."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkSecondary,
+                )
             }
         },
         confirmButton = {
-            TextButton(onClick = { seconds?.let(onConfirm) }, enabled = seconds != null) {
+            val ok = seconds != null && (planBlank || plannedSets != null)
+            TextButton(
+                onClick = { if (ok) seconds?.let { onConfirm(it, plannedSets) } },
+                enabled = ok,
+            ) {
                 Text(confirmLabel)
             }
         },

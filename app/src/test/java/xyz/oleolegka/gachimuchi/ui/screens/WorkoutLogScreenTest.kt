@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTouchInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -111,6 +112,8 @@ class WorkoutLogScreenTest : ScreenTest() {
 
     /** Which exercise, at which rest, for which card — the third element is the side asked for. */
     private val added = mutableListOf<Triple<Long, Int, HoldSide?>>()
+    /** The plan each `addExercise` carried, in the same order — see §18.17. */
+    private val addedPlans = mutableListOf<Int?>()
     private val logged = mutableListOf<ActivityForm>()
     private val undone = mutableListOf<Long>()
     /** The rows an exercise removed from the workout took with it. */
@@ -159,7 +162,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 settings = TimerSettings(),
                 floors = floors,
                 actions = WorkoutLogActions(
-                    addExercise = { id, rest, side -> added += Triple(id, rest, side) },
+                    addExercise = { id, rest, side, plan -> added += Triple(id, rest, side); addedPlans += plan },
                     createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
@@ -197,7 +200,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 settings = TimerSettings(),
                 floors = emptyList(),
                 actions = WorkoutLogActions(
-                    addExercise = { id, rest, side -> added += Triple(id, rest, side) },
+                    addExercise = { id, rest, side, plan -> added += Triple(id, rest, side); addedPlans += plan },
                     createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
@@ -756,6 +759,57 @@ class WorkoutLogScreenTest : ScreenTest() {
     }
 
     /**
+     * §18.17: how many sets are planned is asked HERE, once, next to the rest — and no longer
+     * before every conducted set, where the answer used to become group repeats of the
+     * conductor's own program and pin the one conductor down for the whole rest between sets.
+     */
+    @Test
+    fun `adding an exercise asks how many sets are planned, next to the rest`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        show(journal, workout)
+
+        compose.onNodeWithText("Add exercise").performClick()
+        settle()
+        settle()
+        compose.onNodeWithText("Abs").performClick()
+        settle()
+
+        compose.onNodeWithText("Sets planned").assertExists()
+        compose.onNodeWithText("+1").performClick()
+        settle()
+
+        compose.onNodeWithText("Add to workout").performClick()
+        assertEquals(listOf(Triple(2L, 90, null)), added)
+        assertEquals(listOf(4), addedPlans)
+    }
+
+    /**
+     * A plan is not a requirement. The owner logs sessions where how many sets there will be is
+     * decided on the bar, so an empty box confirms and the card counts without a target.
+     */
+    @Test
+    fun `the plan can be left empty and the card is added without one`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        show(journal, workout)
+
+        compose.onNodeWithText("Add exercise").performClick()
+        settle()
+        settle()
+        compose.onNodeWithText("Abs").performClick()
+        settle()
+
+        // the field itself, addressed by what it holds: the default plan of three
+        compose.onNodeWithText("3").performTextClearance()
+        settle()
+
+        compose.onNodeWithText("Add to workout").performClick()
+        assertEquals(listOf(Triple(2L, 90, null)), added)
+        assertEquals(listOf<Int?>(null), addedPlans)
+    }
+
+    /**
      * Changing the rest is the same write as adding the exercise — in an append-only journal
      * they are one event, and the last rest wins.
      */
@@ -777,6 +831,55 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Save").performClick()
         assertEquals(listOf(Triple(1L, 150, null)), added)
+    }
+
+    /**
+     * The counter the owner asked for, now read against the plan (§18.17): one number, not two.
+     */
+    @Test
+    fun `the card counts the sets done against the sets planned`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150, plannedSets = 5)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+        journal.strengthSet(bench, iso, at = "18:14", workoutId = workout)
+        show(journal, workout)
+
+        compose.onNodeWithText("2 of 5 sets", substring = true).assertExists()
+    }
+
+    /**
+     * A plan is not a limit — §18.17 says so outright, and nothing refuses the sixth set of a
+     * card that planned five. What the card must not do is report it as "6 of 5", which reads
+     * as broken arithmetic rather than as a good session.
+     */
+    @Test
+    fun `going past the plan is reported rather than hidden or made to look like an error`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150, plannedSets = 1)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+        journal.strengthSet(bench, iso, at = "18:14", workoutId = workout)
+        show(journal, workout)
+
+        compose.onNodeWithText("2 sets, 1 planned", substring = true).assertExists()
+    }
+
+    /** A card nobody planned counts exactly as it always did. */
+    @Test
+    fun `a card with no plan still says how many sets it has`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+        show(journal, workout)
+
+        // the day's own header says "1 set" too, so this is a presence check and not a count
+        assertTrue(
+            compose.onAllNodesWithText("1 set", substring = true).fetchSemanticsNodes().isNotEmpty()
+        )
+        // and nothing anywhere reads it against a target it does not have
+        compose.onAllNodesWithText("1 of", substring = true).assertCountEquals(0)
     }
 
     // --- finishing --------------------------------------------------------------------------

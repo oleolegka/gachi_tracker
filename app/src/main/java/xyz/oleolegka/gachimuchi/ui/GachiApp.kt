@@ -527,8 +527,10 @@ fun GachiApp(viewModel: MainViewModel) {
             val workoutActions = remember(workoutBeingLogged) {
                 if (workoutBeingLogged != null) {
                     WorkoutLogActions(
-                        addExercise = { exerciseId, restSec, side ->
-                            viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec, side)
+                        addExercise = { exerciseId, restSec, side, plannedSets ->
+                            viewModel.addExerciseToWorkout(
+                                workoutBeingLogged, exerciseId, restSec, side, plannedSets,
+                            )
                         },
                         createExercise = { new, then -> viewModel.createExercise(new, then) },
                         /*
@@ -580,8 +582,8 @@ fun GachiApp(viewModel: MainViewModel) {
                      * just created.
                      */
                     WorkoutLogActions(
-                        addExercise = { exerciseId, restSec, side ->
-                            viewModel.updateDraftCard(exerciseId, restSec, side)
+                        addExercise = { exerciseId, restSec, side, plannedSets ->
+                            viewModel.updateDraftCard(exerciseId, restSec, side, plannedSets)
                         },
                         createExercise = { new, then -> viewModel.createExercise(new, then) },
                         addSet = { form ->

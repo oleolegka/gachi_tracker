@@ -422,6 +422,12 @@ class ActivityRepository(private val db: AppDatabase) {
         exerciseId: Long,
         restSec: Int,
         side: HoldSide? = null,
+        /**
+         * How many sets are planned for this card (§18.17), or null for a caller with nothing
+         * to say. Unlike the rest, it is NOT also written onto the catalog row: how many sets
+         * of a thing you do is a decision about today's session, not a property of the exercise.
+         */
+        plannedSets: Int? = null,
     ): Long {
         val workoutUid = db.events().byId(workoutId)?.uid
         val exerciseUid = db.exercises().byId(exerciseId)?.uid
@@ -436,6 +442,7 @@ class ActivityRepository(private val db: AppDatabase) {
                         WorkoutExerciseAdded(
                             workoutId = workoutId, exerciseId = exerciseId, restSec = restSec,
                             workoutUid = workoutUid, exerciseUid = exerciseUid, side = side?.code,
+                            plannedSets = plannedSets,
                         )
                     ),
                     workoutId = workoutId,

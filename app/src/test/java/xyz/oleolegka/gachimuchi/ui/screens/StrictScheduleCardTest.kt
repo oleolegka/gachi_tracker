@@ -76,7 +76,7 @@ class StrictScheduleCardTest : ScreenTest() {
                 settings = TimerSettings(),
                 floors = emptyList(),
                 actions = WorkoutLogActions(
-                    addExercise = { _, _, _ -> },
+                    addExercise = { _, _, _, _ -> },
                     createExercise = { _, _ -> },
                     addSet = {},
                     undoSet = {},

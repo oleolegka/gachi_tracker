@@ -414,10 +414,15 @@ class MainViewModel(
     }
 
     /** Stages an exercise into the draft, or — called again for one already there — changes its rest. */
-    fun updateDraftCard(exerciseId: Long, restSec: Int, side: HoldSide? = null) {
+    fun updateDraftCard(
+        exerciseId: Long,
+        restSec: Int,
+        side: HoldSide? = null,
+        plannedSets: Int? = null,
+    ) {
         val current = _draft.value ?: return
         val without = current.cards.filterNot { it.exerciseId == exerciseId && it.side == side }
-        _draft.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side))
+        _draft.value = current.copy(cards = without + DraftCard(exerciseId, restSec, side, plannedSets))
     }
 
     /** Takes a card off the draft. There is nothing to undo in the journal — it was never written. */
@@ -460,7 +465,9 @@ class MainViewModel(
         _draft.value = null
         viewModelScope.launch {
             val id = repo.startWorkout(current.day.toString(), current.slotId, current.name)
-            current.cards.forEach { card -> repo.addExerciseToWorkout(id, card.exerciseId, card.restSec, card.side) }
+            current.cards.forEach { card ->
+                repo.addExerciseToWorkout(id, card.exerciseId, card.restSec, card.side, card.plannedSets)
+            }
             then(id)
         }
     }
@@ -479,8 +486,16 @@ class MainViewModel(
      * [side] names one CARD of a one-sided exercise. Adding both is two calls — see
      * [xyz.oleolegka.gachimuchi.ui.screens.WorkoutLogScreen] for where they are made.
      */
-    fun addExerciseToWorkout(workoutId: Long, exerciseId: Long, restSec: Int, side: HoldSide? = null) {
-        viewModelScope.launch { repo.addExerciseToWorkout(workoutId, exerciseId, restSec, side) }
+    fun addExerciseToWorkout(
+        workoutId: Long,
+        exerciseId: Long,
+        restSec: Int,
+        side: HoldSide? = null,
+        plannedSets: Int? = null,
+    ) {
+        viewModelScope.launch {
+            repo.addExerciseToWorkout(workoutId, exerciseId, restSec, side, plannedSets)
+        }
     }
 
     /**

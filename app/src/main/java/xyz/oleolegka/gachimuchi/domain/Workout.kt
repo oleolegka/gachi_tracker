@@ -296,6 +296,16 @@ data class WorkoutExercise(
      * deleting it does.
      */
     val finishedEventId: Long? = null,
+    /**
+     * How many sets of this card were PLANNED, or null when nobody said (§18.17).
+     *
+     * Last "added" row wins, the same rule [restSec] follows and for the same reason: adding an
+     * exercise again is how a choice is changed in an append-only journal.
+     *
+     * A PLAN and not a limit — see [WorkoutExerciseAdded.plannedSets]. Nothing anywhere refuses
+     * a set past it; the card reads "2 of 5" and that is the whole of its effect.
+     */
+    val plannedSets: Int? = null,
 ) {
     /**
      * Whether this CARD has been marked done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. A status
@@ -482,7 +492,13 @@ data class Workout(
  * exercise, and the rest chosen for it — because that is all a card can say before it exists:
  * no sets, no "added" row, nothing a card in a real workout also has to have written for it.
  */
-data class DraftCard(val exerciseId: Long, val restSec: Int, val side: HoldSide? = null)
+data class DraftCard(
+    val exerciseId: Long,
+    val restSec: Int,
+    val side: HoldSide? = null,
+    /** How many sets are planned for this card, or null when nobody said — see §18.17. */
+    val plannedSets: Int? = null,
+)
 
 /**
  * [cards] shaped as a [Workout], so the screen that draws one can draw the other without
@@ -500,7 +516,12 @@ fun draftWorkout(opDate: String, name: String?, cards: List<DraftCard>, linkOf: 
         opDate = opDate,
         slot = null,
         name = name,
-        exercises = cards.map { WorkoutExercise(linkOf(it.exerciseId), it.restSec, emptyList(), side = it.side) },
+        exercises = cards.map {
+            WorkoutExercise(
+                linkOf(it.exerciseId), it.restSec, emptyList(),
+                side = it.side, plannedSets = it.plannedSets,
+            )
+        },
         entriesWithoutExercise = emptyList(),
     )
 
@@ -727,6 +748,8 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val links = LinkedHashMap<String, ExerciseLink>()
     val sides = HashMap<String, HoldSide?>()
     val rests = HashMap<String, Int>()
+    /** The planned set count of each card, by the same key — see [WorkoutExercise.plannedSets]. */
+    val plans = HashMap<String, Int?>()
     val addedRows = HashMap<String, MutableList<Long>>()
     /** The live "card finished" event of each card, keyed the same way — see [WorkoutExercise.finished]. */
     val cardFinished = HashMap<String, Long>()
@@ -777,6 +800,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             val side = HoldSide.fromCode(added.side)
             val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id, side)
             rests[key] = added.restSec
+            // last one wins, exactly as the rest does — and a later row that says nothing about
+            // a plan CLEARS it, because that row is the current statement about this card
+            plans[key] = added.plannedSets
             addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
@@ -816,6 +842,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             // buildSession settles its own tie by
             ofExercise.sortedWith(compareBy({ it.happenedAt }, { it.id })),
             addedRows[key].orEmpty(), sides[key], finishedEventId = cardFinished[key],
+            plannedSets = plans[key],
         )
     }
     val ordered = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks
