@@ -70,7 +70,11 @@ class TimerScreenTest : ScreenTest() {
         compose.onNode(hasScrollAction()).performScrollToNode(hasText(text))
     }
 
-    private fun timer(on: Boolean, programs: List<WorkoutProgram> = emptyList()) {
+    private fun timer(
+        on: Boolean,
+        programs: List<WorkoutProgram> = emptyList(),
+        scheduleOwners: Map<Long, List<String>> = emptyMap(),
+    ) {
         val state = TimerUiState(
             enabled = on,
             run = null,
@@ -85,6 +89,7 @@ class TimerScreenTest : ScreenTest() {
                 actions = actions,
                 programs = programs,
                 exerciseNames = mapOf(1L to "Hangs 20 mm"),
+                scheduleOwners = scheduleOwners,
                 onRunProgram = { ran = it },
                 onEditProgram = {
                     editRequested++
@@ -175,6 +180,75 @@ class TimerScreenTest : ScreenTest() {
 
         assertEquals(1, editRequested)
         assertNull("null is what the editor is told to open blank", edited)
+    }
+
+    /*
+     * The schedules (decisions §18.15). What is asserted is what the owner complained about:
+     * a program he never wrote sitting in his library with nothing on it to say where it came
+     * from or why it could not be edited.
+     */
+
+    private val scheduleOfHangs = WorkoutProgram(
+        id = 7,
+        name = "Hangs 20mm protocol",
+        groups = listOf(
+            ProgramGroup(
+                name = "Set",
+                blocks = listOf(ProgramBlock(name = "Hang", workSec = 10, restSec = 60)),
+            )
+        ),
+        exerciseId = 1,
+    )
+
+    @Test
+    fun `an exercise schedule sits under its own heading, not among the owner's programs`() {
+        timer(
+            on = true,
+            programs = listOf(repeaters, scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+        )
+
+        compose.onNodeWithText("Exercise schedules").assertIsDisplayed()
+        // the owner's own program keeps its place above and grows no heading of its own
+        compose.onNodeWithText("Hangboard repeaters 7:3").assertIsDisplayed()
+        compose.onNodeWithText("Hangs 20mm protocol").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the row says whose schedule it is and that it cannot be retimed`() {
+        timer(
+            on = true,
+            programs = listOf(scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+        )
+
+        compose.onNodeWithText("Schedule for Hangs 20 mm - the times are fixed")
+            .assertIsDisplayed()
+        // and the freeze is readable before anything is opened, which is the whole point
+        compose.onNodeWithText(
+            "Made for one exercise and fixed once it was used: the times in these cannot be " +
+                "changed, only the name. Your own programs are above.",
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun `twins sharing one schedule are both named on it`() {
+        timer(
+            on = true,
+            programs = listOf(scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm", "Hangs 15 mm")),
+        )
+
+        compose.onNodeWithText("Schedule for Hangs 20 mm, Hangs 15 mm - the times are fixed")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun `a library with no schedules in it looks exactly as it did`() {
+        timer(on = true, programs = listOf(repeaters))
+
+        compose.onNodeWithText("Exercise schedules").assertDoesNotExist()
+        compose.onNodeWithText("Hangboard repeaters 7:3").assertIsDisplayed()
     }
 
     @Test

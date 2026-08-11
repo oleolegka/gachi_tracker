@@ -1,6 +1,7 @@
 package xyz.oleolegka.gachimuchi.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -290,6 +291,55 @@ class ProgramTest {
         val sections = programSections(listOf(named("A", "   "), named("B", " Hangboard ")))
 
         assertEquals(listOf("Hangboard", "Other"), sections.map { it.title })
+    }
+
+    // --- the exercise schedules, cut out of the filing (decisions 18.15) ----------------
+
+    @Test
+    fun `an exercise schedule leaves the plain list and comes back as its own section`() {
+        val tabata = named("Tabata")
+        val schedule = named("Hangs 20mm protocol")
+
+        val sections = programSections(listOf(tabata, schedule), setOf(schedule.id))
+
+        assertEquals(listOf("", EXERCISE_SCHEDULES_SECTION), sections.map { it.title })
+        // the owner's own programs are drawn exactly as before - one plain untitled list
+        assertEquals(listOf("Tabata"), sections.first().programs.map { it.name })
+        assertFalse(sections.first().schedules)
+        assertEquals(listOf("Hangs 20mm protocol"), sections.last().programs.map { it.name })
+        assertTrue(sections.last().schedules)
+    }
+
+    @Test
+    fun `a schedule is filed with the schedules whatever category it carries`() {
+        val warmUp = named("Warm-up", "Warm-up")
+        val schedule = named("Hangs 20mm protocol", "Hangboard")
+
+        val sections = programSections(listOf(warmUp, schedule), setOf(schedule.id))
+
+        // it would otherwise reappear under "Hangboard", which is the mixing being fixed
+        assertEquals(listOf("Warm-up", EXERCISE_SCHEDULES_SECTION), sections.map { it.title })
+    }
+
+    @Test
+    fun `a library of nothing but schedules is one section, not an empty screen`() {
+        val schedule = named("Hangs 20mm protocol")
+
+        val sections = programSections(listOf(schedule), setOf(schedule.id))
+
+        assertEquals(listOf(EXERCISE_SCHEDULES_SECTION), sections.map { it.title })
+    }
+
+    @Test
+    fun `ids nobody points at change nothing`() {
+        val tabata = named("Tabata")
+
+        // a stale id (the exercise was deleted between two reads) must not empty the list
+        val sections = programSections(listOf(tabata), setOf(-999L))
+
+        assertEquals(1, sections.size)
+        assertEquals("", sections.single().title)
+        assertFalse(sections.single().schedules)
     }
 
     @Test

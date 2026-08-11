@@ -125,11 +125,29 @@ data class WorkoutProgram(
     @SerialName("hidden") val hidden: Boolean = false,
 )
 
-/** Programs under one heading, in the order they are stored. */
-data class ProgramSection(val title: String, val programs: List<WorkoutProgram>)
+/**
+ * Programs under one heading, in the order they are stored.
+ *
+ * [schedules] marks the one section that is not a heading the user wrote: the exercise
+ * schedules (see [programSections]). The rows in it are drawn differently — whose schedule it
+ * is, and that its times are fixed — so the flag travels with the section rather than being
+ * re-derived from the title, which is a string and would be a heading anyone could type.
+ */
+data class ProgramSection(
+    val title: String,
+    val programs: List<WorkoutProgram>,
+    val schedules: Boolean = false,
+)
 
 /** The heading a program with no category of its own is filed under. */
 const val OTHER_PROGRAMS_SECTION = "Other"
+
+/**
+ * The heading the exercise schedules are filed under. "Schedule" rather than "protocol" or
+ * "program" is the owner's own word for the timed scenario of a hold exercise (decisions
+ * §18.15), chosen exactly so the three do not blur into each other.
+ */
+const val EXERCISE_SCHEDULES_SECTION = "Exercise schedules"
 
 /**
  * Files the program list under headings for the timer tab.
@@ -155,7 +173,32 @@ const val OTHER_PROGRAMS_SECTION = "Other"
  * A list where nothing is categorised comes back as ONE section with an empty title, so a
  * phone with three programs does not grow a heading it did not ask for.
  */
-fun programSections(programs: List<WorkoutProgram>): List<ProgramSection> {
+/**
+ * ── The exercise schedules are cut off first (decisions §18.15) ─────────────────
+ * [scheduleProgramIds] is every program some exercise's protocol currently IS
+ * ([xyz.oleolegka.gachimuchi.data.ProgramRepository.isReferenced]). Those are not programs
+ * the owner wrote and filed; the app generated them for one exercise, and they are frozen
+ * because they became part of that exercise's identity. Mixed into the library they read as
+ * badly-named programs someone left behind — the owner met "Hangs 20mm protocol" next to his
+ * own Tabata and asked why it was there — so they leave the categorised list entirely and come
+ * back as ONE section at the end, whatever categories they carry.
+ *
+ * They are not simply hidden ([WorkoutProgram.hidden] would do that in one line): a schedule
+ * is still runnable, exportable and renameable, and a library that silently omitted the
+ * programs the app made would be a library that lies about what is on the phone.
+ */
+fun programSections(
+    programs: List<WorkoutProgram>,
+    scheduleProgramIds: Set<Long> = emptySet(),
+): List<ProgramSection> {
+    if (scheduleProgramIds.isNotEmpty()) {
+        val schedules = programs.filter { it.id != 0L && it.id in scheduleProgramIds }
+        if (schedules.isNotEmpty()) {
+            val standalone = programs.filter { it.id == 0L || it.id !in scheduleProgramIds }
+            return programSections(standalone) +
+                ProgramSection(EXERCISE_SCHEDULES_SECTION, schedules, schedules = true)
+        }
+    }
     if (programs.none { it.category.isNotBlank() }) {
         return if (programs.isEmpty()) emptyList() else listOf(ProgramSection("", programs))
     }
