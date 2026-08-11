@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -296,15 +295,26 @@ fun DoorTile(
             ),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
-                Text(
-                    name,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (recordDate != null) RecordBadge(recordDate, Modifier.align(Alignment.CenterVertically))
-            }
+            Text(
+                name,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            /*
+             * THE BADGE IS A ROW OF ITS OWN, always under the name.
+             *
+             * It used to share a FlowRow with the name, which put it to the RIGHT of a short
+             * name and UNDER a long one — the same tile in two different shapes depending on
+             * how many letters the exercise happens to be called by, and the feed then read as
+             * a column of misaligned pills. Owner's report, 2026-08-11: "sometimes underneath,
+             * sometimes to the right. It has to be underneath, always."
+             *
+             * Under the name rather than under the caption because that is where the wrapped
+             * case already put it, and because the badge is about the exercise (this name has a
+             * record) rather than about the form-and-recency line below.
+             */
+            if (recordDate != null) RecordBadge(recordDate)
             Text(caption, fontSize = 11.sp, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(

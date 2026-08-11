@@ -240,6 +240,19 @@ fun parseMinuteOfDay(at: String?): Int? {
 }
 
 /**
+ * The minute of the day [ts] was written at, or null when its clock says nothing about [day].
+ *
+ * Takes the string rather than the row because the two kinds of fact stamped below — an entry
+ * and a workout that recorded none — arrive as different types carrying the same field.
+ */
+private fun minuteOn(ts: String, day: String): Int? {
+    // ts is "YYYY-MM-DDTHH:MM:SS" (data/ActivityRepository.now); only a timestamp from the SAME
+    // day as the fact tells us anything about when the training took place
+    if (ts.length < 16 || !ts.startsWith("${day}T")) return null
+    return parseMinuteOfDay(ts.substring(11, 16))
+}
+
+/**
  * Journal events turned into calendar facts over the inclusive [dateFrom]..[dateTo]
  * range. Body weight is excluded through [FACT_TYPES] — stepping on the scales is not
  * training.
@@ -247,6 +260,22 @@ fun parseMinuteOfDay(at: String?): Int? {
  * This is also where an entry picks up the plan it was recorded against
  * ([ActivityStamp.slot]): the link lives on the workout's start event, not on the entry, so
  * it has to be carried across here — the calendar never sees a [Workout].
+ *
+ * ── A WORKOUT THAT WROTE NOTHING DOWN STANDS FOR ITSELF ─────────────────────────
+ * Stamps used to be made only out of ENTRIES, so a session with nothing logged inside it left
+ * no fact at all: the slot it was started from went MISS once its window closed, and the
+ * calendar drew a red dot for a plan the user had actually gone and done — right next to the
+ * green dot the same session got from `journalInstanceCounts`. The day screen has always
+ * disagreed with that too (domain/DayCards.kt drops the plan card when a workout was started
+ * from that slot, whatever the workout holds).
+ *
+ * So a workout with no entry of its own on the day gets ONE stamp, carrying the start row's own
+ * time and slot link. One, not one plus its entries: a session that DID log something is
+ * already represented by what it logged, and a second stamp would let it close two slots.
+ *
+ * "No entry of its own" is judged within the range being read, which is the same question the
+ * range is asking — a session whose sets were later re-dated onto another day did nothing on
+ * this one, and stands for itself here exactly as an empty one does.
  */
 fun activityStamps(
     events: List<JournalEvent>,
@@ -256,20 +285,36 @@ fun activityStamps(
 ): List<ActivityStamp> {
     // resolved once for the whole range: doing it per entry would walk the journal again for
     // every set in it, and a month of the calendar asks for a lot of sets
-    val startedFromAPlan = workoutStarts(events).mapNotNull { (row, started) ->
-        started?.slotLink()?.let { row to it }
-    }
-    return readActivities(events, types, dateFrom, dateTo).map { ev ->
-        // ts is "YYYY-MM-DDTHH:MM:SS" (data/ActivityRepository.now); only a timestamp from the
-        // SAME day as the entry tells us anything about when the training took place
-        val sameDay = ev.ts.length >= 16 && ev.ts.startsWith(ev.opDate + "T")
-        val minute = if (sameDay) parseMinuteOfDay(ev.ts.substring(11, 16)) else null
+    val starts = workoutStarts(events)
+    val entries = readActivities(events, types, dateFrom, dateTo)
+
+    val out = ArrayList<ActivityStamp>(entries.size + starts.size)
+    val spokenFor = HashSet<Long>()
+    for (ev in entries) {
         val ref = ev.workout
-        val slot = if (ref == null) null else {
-            startedFromAPlan.firstOrNull { (start, _) -> ref.matches(start) }?.second
-        }
-        ActivityStamp(id = ev.id, day = ev.opDate, minuteOfDay = minute, slot = slot)
+        val start = if (ref == null) null else starts.firstOrNull { (row, _) -> ref.matches(row) }
+        if (start != null) spokenFor += start.first.id
+        out += ActivityStamp(
+            id = ev.id,
+            day = ev.opDate,
+            minuteOfDay = minuteOn(ev.ts, ev.opDate),
+            slot = start?.second?.slotLink(),
+        )
     }
+    for ((row, started) in starts) {
+        if (row.id in spokenFor) continue
+        // dated exactly as domain/Workout.kt's `workoutsOn` dates a workout, so the session
+        // cannot land on one day here and another one on the day screen
+        val day = started?.opDate ?: row.writeDay()
+        if (day < dateFrom || day > dateTo) continue
+        out += ActivityStamp(
+            id = row.id,
+            day = day,
+            minuteOfDay = minuteOn(row.ts, day),
+            slot = started?.slotLink(),
+        )
+    }
+    return out
 }
 
 /**

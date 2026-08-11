@@ -180,6 +180,43 @@ class FormDetailScreenTest : ScreenTest() {
         compose.onNodeWithText("20 Jul").assertIsDisplayed()
     }
 
+    /**
+     * The report from the phone, 2026-08-11: "for exercises that existed before, but where the
+     * user has now ticked two hands, the statistics have three columns - left, right, no side.
+     * The last one has to go."
+     *
+     * It appeared because the sets logged before the tick name no hand, and those used to be
+     * kept as a record of their own. They are read as symmetric work now (domain/Records.kt),
+     * so they belong to each hand and there is no third column to draw.
+     */
+    @Test
+    fun `a history logged before the one-sided tick draws two columns, not three`() {
+        val name = "One-arm hangs on the small edge"
+        val oneArm = exerciseEntity(31, name, ExerciseForm.HOLD).copy(oneSided = true)
+        val ref = exerciseRef(31, name, ExerciseForm.HOLD)
+        val journal = Journal()
+        journal.holdSet(ref, "2026-07-20", addedKg = 8.0)  // before the tick: names no hand
+        journal.holdSet(ref, "2026-08-01", addedKg = 10.0, side = HoldSide.LEFT)
+
+        screen {
+            FormDetailScreen(
+                state = UiState(events = journal.events, exercises = listOf(oneArm), loading = false),
+                exerciseId = oneArm.id,
+                today = today,
+                onClose = {},
+            )
+        }
+
+        compose.onNodeWithText("LEFT").assertIsDisplayed()
+        compose.onNodeWithText("RIGHT").assertIsDisplayed()
+        compose.onNodeWithText("NO SIDE", substring = true).assertDoesNotExist()
+        // the old sideless 8 kg is the right hand's best as well as part of the left's history,
+        // where the left's own 10 kg has since beaten it
+        compose.onNodeWithText("10").assertIsDisplayed()
+        compose.onNodeWithText("8").assertIsDisplayed()
+        compose.onNodeWithText("20 Jul").assertIsDisplayed()
+    }
+
     /** The ordinary two-handed exercise is untouched: one record, one column, as ever. */
     @Test
     fun `a two-handed exercise still gets a plain single record card`() {

@@ -1,7 +1,6 @@
 package xyz.oleolegka.gachimuchi.domain
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -13,8 +12,9 @@ import org.junit.Test
  *
  * The asymmetry between the hands is the thing this kind of training exists to close, so
  * folding both into one record answers the wrong question: it reports the stronger hand and
- * hides the gap. What is pinned down here is that each side is judged against ITSELF, and
- * that a set which should have named a hand and did not is REPORTED rather than guessed at.
+ * hides the gap. What is pinned down here is that each side is judged against ITSELF — and
+ * that a set which named NO hand is read as both hands having done the same thing, so it joins
+ * each side's history instead of standing apart as a third record (owner's ruling, 2026-08-11).
  */
 class OneSidedTest {
 
@@ -120,7 +120,6 @@ class OneSidedTest {
 
         assertEquals(HoldSide.RIGHT, records[1].side)
         assertEquals(12.0, records[1].value, 1e-9)
-        assertFalse(records.any { it.sideMissing })
     }
 
     @Test
@@ -131,45 +130,48 @@ class OneSidedTest {
         )
         assertEquals(1, records.size)
         assertNull(records.single().side)
-        assertFalse(records.single().sideMissing)
         assertEquals("added weight 12 kg", records.single().text)
     }
 
-    // --- the defect, stated out loud ---------------------------------------------------
+    // --- the history logged before the tick --------------------------------------------
 
+    /**
+     * The one the owner reported from the phone: an exercise ticked "one limb at a time" today,
+     * with a history that predates the tick, used to show THREE columns — left, right, and
+     * "no side" for everything logged before. The third one is gone, and what was in it is now
+     * part of both hands.
+     */
     @Test
-    fun `a one-sided exercise with sideless sets reports them as a record of unknown side`() {
+    fun `a sideless set joins both hands instead of becoming a third record`() {
         val records = records(
             hang(addedKg = 8.0, day = "2026-08-01"),
             hang(addedKg = 5.0, side = HoldSide.LEFT, day = "2026-08-02"),
+            oneSided = true,
+        )
+
+        assertEquals("two hands, no third column", 2, records.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), records.map { it.side })
+        // 8 kg was done by both hands, so it is each hand's best — the left's own 5 kg loses
+        // to it, and the right, which has nothing else, is credited with it as well
+        assertEquals(listOf(8.0, 8.0), records.map { it.value })
+        assertEquals(listOf("2026-08-01", "2026-08-01"), records.map { it.opDate })
+        assertTrue(records.none { it.text.contains("side not recorded") })
+    }
+
+    @Test
+    fun `a hand that has since beaten the old symmetric best keeps its own number`() {
+        val records = records(
+            hang(addedKg = 8.0, day = "2026-08-01"),
+            hang(addedKg = 5.0, side = HoldSide.LEFT, day = "2026-08-02"),
+            hang(addedKg = 9.0, side = HoldSide.RIGHT, day = "2026-08-03"),
             oneSided = true,
         )
 
         assertEquals(2, records.size)
-        assertEquals(HoldSide.LEFT, records[0].side)
-
-        val unknown = records[1]
-        assertNull("a set that named no hand must not be given one", unknown.side)
-        assertTrue("the gap in the data has to be stated", unknown.sideMissing)
-        assertEquals(8.0, unknown.value, 1e-9)
-        assertTrue(unknown.text, unknown.text.contains("side not recorded"))
-    }
-
-    @Test
-    fun `the sideless best is kept apart from the hands rather than crowned overall`() {
-        // the failure this guards: 8 kg by an unknown hand must not be reported as the
-        // exercise's record, because it may well have been the strong hand's easy day
-        val records = records(
-            hang(addedKg = 8.0, day = "2026-08-01"),
-            hang(addedKg = 5.0, side = HoldSide.LEFT, day = "2026-08-02"),
-            hang(addedKg = 6.0, side = HoldSide.RIGHT, day = "2026-08-03"),
-            oneSided = true,
-        )
-
-        assertEquals(3, records.size)
-        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT, null), records.map { it.side })
-        assertEquals(listOf(5.0, 6.0, 8.0), records.map { it.value })
-        assertEquals(listOf(false, false, true), records.map { it.sideMissing })
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), records.map { it.side })
+        // the left is still on the old two-handed 8; the right has moved past it
+        assertEquals(listOf(8.0, 9.0), records.map { it.value })
+        assertEquals(listOf("2026-08-01", "2026-08-03"), records.map { it.opDate })
     }
 
     @Test
@@ -183,8 +185,21 @@ class OneSidedTest {
         )
 
         assertEquals(2, records.size)
-        assertEquals(HoldSide.LEFT, records[0].side)
-        assertTrue(records[1].sideMissing)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), records.map { it.side })
+        assertEquals(listOf(9.0, 9.0), records.map { it.value })
+    }
+
+    /**
+     * The live detector and the all-time card have to agree. If a sideless 4 kg is part of the
+     * left hand's history on the card, then a left-hand 6 kg has to be announced as beating 4 —
+     * not as a first-ever left-hand set, which is what it used to be treated as.
+     */
+    @Test
+    fun `a sideless set is what a new one-handed set is measured against`() {
+        val prior = listOf(hang(addedKg = 4.0))
+        val hit = evaluateHoldRecord(prior, hang(addedKg = 6.0, side = HoldSide.LEFT))
+        assertNotNull("the left hand inherits the symmetric history", hit)
+        assertEquals(4.0, hit!!.previous, 1e-9)
     }
 
     @Test
