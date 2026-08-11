@@ -416,6 +416,8 @@ fun WorkoutLogScreen(
      */
     var planningFor by rememberSaveable { mutableStateOf<Long?>(null) }
     var planningSide by rememberSaveable { mutableStateOf<String?>(null) }
+    /** A protocol card was tapped while another one already has the conductor. See its dialog. */
+    var conductorBusy by rememberSaveable { mutableStateOf(false) }
     /**
      * The card whose removal is being confirmed, by [WorkoutExercise.cardKey] rather than by
      * catalog id: a block can be there for an exercise this phone has no catalog row for, and
@@ -656,6 +658,28 @@ fun WorkoutLogScreen(
                             {
                                 when {
                                     /*
+                                     * ANOTHER CARD IS UNDER THE CONDUCTOR, and there is only one
+                                     * conductor in the app (§13.2: "exactly one at any moment, and
+                                     * it owns the screen and the sound").
+                                     *
+                                     * This branch is new because the card above it is new. Until
+                                     * the running check learned about sides, a one-sided exercise's
+                                     * other card counted as running and led back to the conductor,
+                                     * so this could not be reached. Now it can, and what lies
+                                     * underneath is `TimerController.start`, which replaces a run
+                                     * "without ceremony" — it would take the sets the other hand
+                                     * had already done with it, silently, and it does not even
+                                     * leave them as an offer.
+                                     *
+                                     * So the tap SAYS SO instead. Not a fix for the two hands
+                                     * working at once — that needs the rest between sets to stop
+                                     * being a step of the conductor's program, which is a decision
+                                     * about the model and not about this screen. It is the honest
+                                     * report of the state the app is actually in, in place of
+                                     * losing a set to find out.
+                                     */
+                                    liveExerciseId != null -> conductorBusy = true
+                                    /*
                                      * A SIMPLE PAIR DOES NOT KNOW HOW LONG THE RUN IS (§18.15).
                                      * Its schedule fixes the shape of one effort and nothing
                                      * else, so the holds and the sets are this run's to choose —
@@ -855,6 +879,28 @@ fun WorkoutLogScreen(
             onDismiss = { weighingFor = null; weighingSide = null },
         )
     } }
+
+    if (conductorBusy) {
+        AlertDialog(
+            onDismissRequest = { conductorBusy = false },
+            title = { Text("A set is already being conducted") },
+            text = {
+                Text(
+                    "The app calls out one protocol at a time - it has one screen and one voice. " +
+                        "Finish or stop the set that is running, and this one can start.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { conductorBusy = false; actions.openConductor() }) {
+                    Text("Go to it")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { conductorBusy = false }) { Text("Stay here") }
+            },
+        )
+    }
 
     planningFor?.let { id -> state.refById(id)?.let { ref ->
         RunPlanDialog(

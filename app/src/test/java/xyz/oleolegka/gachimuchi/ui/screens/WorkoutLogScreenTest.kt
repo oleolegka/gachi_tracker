@@ -1039,11 +1039,19 @@ class WorkoutLogScreenTest : ScreenTest() {
         // exactly one card says it, not two
         compose.onAllNodesWithText("Set running · tap to go back to it").assertCountEquals(1)
 
-        // and the right hand's card still starts its own thing rather than reopening the left's
+        /*
+         * And the right card no longer silently reopens the left hand's conductor. What it does
+         * instead is say why it cannot start: there is ONE conductor, and `TimerController.start`
+         * replaces a run without ceremony, taking the sets the other hand had already done with
+         * it. Saying so is the honest state of the app; two hands genuinely working at once is
+         * the model change reported alongside this and not done here.
+         */
         compose.onNodeWithText("One-arm hangs - Right").performClick()
         settle()
-        assertEquals("the right card must not lead to the left hand's conductor", 0, conductorOpened)
-        compose.onNodeWithText("Before this run").assertExists()
+        assertEquals("the right card must not silently reopen the left hand's conductor", 0, conductorOpened)
+        compose.onNodeWithText("A set is already being conducted").assertExists()
+        // and nothing was started on top of the run that is going
+        assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
     }
 
     // --- taking a set back ------------------------------------------------------------------
