@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,9 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import kotlin.math.round
 import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
 import xyz.oleolegka.gachimuchi.data.ExerciseEdit
@@ -41,8 +38,8 @@ import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.firstBlock
-import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
+import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 
 /**
  * Correcting a catalog exercise, taking one out of the pickers, removing one for good, or
@@ -92,7 +89,7 @@ class ExerciseEditor internal constructor(
      * find-or-create used by every other caller, so a name that already exists is quietly
      * reused rather than duplicated.
      */
-    val create: (name: String, form: ExerciseForm, workSec: Double?, restSec: Double?) -> Unit,
+    val create: (new: NewExercise) -> Unit,
 )
 
 @Composable
@@ -117,31 +114,28 @@ fun rememberExerciseEditor(): ExerciseEditor {
             program = program,
             pictureStore = pictureStore,
             onDismiss = { editing = null },
-            onSave = { name, oneSided, share ->
+            onSave = { name, oneSided ->
                 scope.launch {
                     val result = repo.editExercise(exercise.id, name)
                     /*
-                     * The two flags are their own columns and their own writes: correcting a
-                     * name, declaring the exercise one-handed and saying what share of you it
-                     * lifts are different claims, and none of them may rewrite the others.
+                     * The flag is its own column and its own write: correcting a name and
+                     * declaring the exercise one-handed are different claims, and neither may
+                     * rewrite the other.
                      *
-                     * They go AFTER the identity edit and only when it took. A refused edit
+                     * It goes AFTER the identity edit and only when it took. A refused edit
                      * tells the user the exercise "was left as it was", and that sentence has
                      * to be true of the whole dialog and not only of the name.
                      *
                      * The dialog itself closes here too, and only here - not the instant Save
                      * is tapped. Closing on tap used to say "saved" before the write was even
                      * attempted, so a name refused as taken looked identical to one that went
-                     * through: the dialog was already gone, the flags had silently not been
+                     * through: the dialog was already gone, the flag had silently not been
                      * written, and the "Not saved" alert that followed talked about the name
-                     * alone. Staying open on every other outcome keeps the toggles exactly as
-                     * typed - on screen, not yet true - until they are.
+                     * alone. Staying open on every other outcome keeps the toggle exactly as
+                     * typed - on screen, not yet true - until it is.
                      */
                     if (result is ExerciseEdit.Saved) {
                         if (oneSided != exercise.oneSided) repo.setOneSided(exercise.id, oneSided)
-                        if (share != exercise.bodyweightShare) {
-                            repo.setBodyweightShare(exercise.id, share)
-                        }
                         editing = null
                     }
                     message = when (result) {
@@ -206,8 +200,17 @@ fun rememberExerciseEditor(): ExerciseEditor {
             delete = { exercise ->
                 scope.launch { repo.deleteExercise(exercise) }
             },
-            create = { name, form, workSec, restSec ->
-                scope.launch { repo.ensureExercise(name, form, workSec, restSec) }
+            create = { new ->
+                scope.launch {
+                    repo.ensureExercise(
+                        name = new.name,
+                        form = new.form,
+                        workSec = new.workSec,
+                        restSec = new.restSec,
+                        oneSided = new.oneSided,
+                        protocolProgramId = new.protocolProgramId,
+                    )
+                }
             },
         )
     }
@@ -216,13 +219,21 @@ fun rememberExerciseEditor(): ExerciseEditor {
 /**
  * The correction itself: the name — the protocol is shown, never asked for.
  *
- * ── And two things that are not corrections ────────────────────────────────────
- * "One side at a time" and "how much of you it lifts" are statements about the exercise that
- * nothing else in the app could make. Both columns were being read — by the records block and
- * by the volume chart — while no control anywhere wrote them, so both features were dead on
- * arrival. They sit in the correction dialog because this is the one screen that shows an
- * exercise as facts about itself; they are not typo repairs, and the sentences under them say
- * so.
+ * ── And one thing that is not a correction ─────────────────────────────────────
+ * "One side at a time" is a statement about the exercise that nothing else in the app could
+ * make: the column was being read — by the records block — while no control anywhere wrote
+ * it, so the feature was dead on arrival. It sits in the correction dialog because this is
+ * the one screen that shows an exercise as facts about itself; it is not a typo repair, and
+ * the sentence under it says so. It is also asked at CREATION now — see
+ * `ui/screens/ExercisePicker.kt` — which is where the owner first missed it.
+ *
+ * ── "How much of you it lifts" is gone ─────────────────────────────────────────
+ * A percent field wrote `bodyweight_share` here and nothing else in the app ever asked for
+ * it. Owner, 2026-08-11: "I never asked for it, I do not want it anywhere". The column and
+ * every reader of it stay exactly as they were (dropping a column is a schema migration for
+ * no gain) — it simply has no writer any more and stays empty, so a set logged at your own
+ * body weight is worth no tonnage. That consequence was accepted out loud: "never mind the
+ * tonnage, let it be a bit wrong".
  *
  * ── The form is shown and cannot be changed ────────────────────────────────────
  * It decides the shape of the payload every set of this exercise was written in, and changing
@@ -249,7 +260,7 @@ private fun EditExerciseDialog(
     program: WorkoutProgram?,
     pictureStore: ExercisePictureStore,
     onDismiss: () -> Unit,
-    onSave: (String, Boolean, Double?) -> Unit,
+    onSave: (String, Boolean) -> Unit,
     /** Picked from the camera or the gallery — see [rememberExerciseEditor] for what this does
      *  with it (an immediate write, not part of [onSave]). */
     onPickPicture: (Uri) -> Unit,
@@ -262,12 +273,6 @@ private fun EditExerciseDialog(
     val protocolBlock = program?.firstBlock()
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
     var oneSided by remember(exercise.id) { mutableStateOf(exercise.oneSided) }
-    var percent by remember(exercise.id) { mutableStateOf(exercise.bodyweightShare.asPercentField()) }
-
-    val share = percentAsShare(percent)
-    // typed something that is not a share of one body: refused rather than dropped on the
-    // floor, since a number that vanishes on save is how this column stayed empty for months
-    val percentBad = percent.isNotBlank() && share == null
 
     val takePhoto = rememberCameraCapture(onPickPicture)
     val pickFromGallery = rememberSinglePicturePicker(onPickPicture)
@@ -358,50 +363,6 @@ private fun EditExerciseDialog(
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
-                if (lifted) {
-                    /*
-                     * The other thing here that is not a correction of a typo, and the same
-                     * kind of hole the switch above was: `bodyweight_share` is computed with,
-                     * exported, migrated and tested, and NO control in the app ever wrote it.
-                     * A set done with your own body weight is therefore worth no tonnage at
-                     * all, and a week of pull-ups draws as a week of doing nothing. Found from
-                     * the phone, 2026-08-08.
-                     *
-                     * Asked as a PERCENT although the column is a share in (0, 1]: nobody
-                     * thinks of a push-up as "0.65 of a person". The conversion is the one
-                     * place this can go wrong, so it is a single pair of functions at the
-                     * bottom of this file and the field refuses anything outside 0..100
-                     * instead of storing a hundredth of what was meant.
-                     */
-                    OutlinedTextField(
-                        value = percent,
-                        onValueChange = { percent = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        isError = percentBad,
-                        label = { Text("How much of you it lifts, %") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    )
-                    Text(
-                        if (percentBad) {
-                            "Between 0 and 100, or empty. A share of one body cannot be more " +
-                                "than the whole of it."
-                        } else if (hold) {
-                            "A pull-up holds all of you: 100. A push-up, roughly two thirds: " +
-                                "65 - a rough figure going around, not one anybody measured " +
-                                "here. Leave it empty and nothing changes. On a hold it is " +
-                                "recorded but changes no chart today: the impulse a hang is " +
-                                "measured in counts the whole of you regardless of this."
-                        } else {
-                            "A pull-up lifts all of you: 100. A push-up, roughly two thirds: " +
-                                "65 - a rough figure going around, not one anybody measured " +
-                                "here. Until this is filled in, sets logged as your own body " +
-                                "weight are worth NOTHING on the volume chart. Leave it empty " +
-                                "and that stays exactly as it is today."
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
                 Text(
                     "The form stays ${ExerciseForm.fromCodeOrTick(exercise.form).title.lowercase()}: " +
                         "it decides the shape every set of this exercise was written in, and " +
@@ -412,60 +373,13 @@ private fun EditExerciseDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = name.isNotBlank() && !percentBad,
-                onClick = {
-                    onSave(
-                        name.trim(),
-                        oneSided,
-                        if (lifted) share else exercise.bodyweightShare,
-                    )
-                },
+                enabled = name.isNotBlank(),
+                onClick = { onSave(name.trim(), oneSided) },
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
-
-/**
- * A stored number as the text of a field: "20" rather than "20.0", and empty for absent.
- *
- * Whole numbers are written whole because that is how they were typed, and a dialog that
- * opens showing "20.0" in a field the user entered as "20" reads as the app having changed
- * something.
- */
-private fun Double?.asField(): String = when {
-    this == null -> ""
-    this == toLong().toDouble() -> toLong().toString()
-    else -> toString()
-}
-
-/**
- * A typed percentage as the stored share, or null for "not said".
- *
- * Null covers both an empty field and a number that cannot be a share of one body. The upper
- * bound is the same one `usableShare` applies when reading, and it is enforced HERE as well
- * so that the refusal happens where the person can see it: a 150 accepted into the column
- * would be silently ignored by every chart afterwards, which is the failure this whole change
- * is about. Zero is refused for the same reason it is on read — "this exercise lifts none of
- * you" is not a thing anybody means; they mean they have not said.
- *
- * This and [asPercentField] are internal rather than private so that the pair can be tested on
- * its own: they are the only arithmetic between what is typed and what every chart later reads,
- * and a factor of a hundred lost here would look exactly like the bug being fixed.
- */
-internal fun percentAsShare(text: String): Double? =
-    parseNumber(text)?.let { it / 100.0 }?.takeIf { it > 0.0 && it <= 1.0 }
-
-/**
- * The stored share as the text of a percent field: 0.65 opens as "65", not "65.00000000000001".
- *
- * Rounded to two decimal places of a percent, which is finer than anybody's estimate of what
- * fraction of themselves a push-up lifts and coarse enough that the multiplication's own error
- * never reaches the field. A value imported at a finer precision is shown rounded and saved as
- * what is shown — the field is not allowed to display one number and keep another.
- */
-internal fun Double?.asPercentField(): String =
-    this?.let { round(it * 10_000.0) / 100.0 }.asField()
 
 /** The form of a row, degrading to a check-in rather than throwing — see `ExerciseEntity.toRef`. */
 private fun ExerciseForm.Companion.fromCodeOrTick(code: Int): ExerciseForm =

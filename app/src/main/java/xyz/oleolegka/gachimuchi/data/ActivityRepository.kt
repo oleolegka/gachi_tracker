@@ -882,8 +882,30 @@ class ActivityRepository(private val db: AppDatabase) {
         workSec: Double? = null,
         restSec: Double? = null,
         defaultRestSec: Int? = null,
+        /**
+         * "Done one side at a time" (§18.2), as answered by whoever is creating this.
+         *
+         * Written on the row this call INSERTS and never onto one it merely finds. A found
+         * row is an exercise that already exists with its own history, and what it says about
+         * itself is its own: silently flipping it here would split or re-merge its records
+         * from a screen that thought it was creating something. Correcting an existing one is
+         * the edit dialog's job — see `ui/components/ExerciseEditor.kt`.
+         */
+        oneSided: Boolean = false,
+        /**
+         * An existing library program to be led by, INSTEAD of [workSec]/[restSec] describing
+         * a new one.
+         *
+         * It takes precedence when both arrive, and it goes into the identity key exactly as a
+         * generated one would — the exercise is "these hangs on THAT protocol" either way. A
+         * program id that no longer resolves is treated as no protocol at all rather than
+         * failing the creation: the row still gets made, with the same "no protocol" that a
+         * plain strength exercise has.
+         */
+        protocolProgramId: Long? = null,
     ): Long {
-        val program = resolveOrCreateProtocolProgram(name, workSec, restSec)
+        val program = protocolProgramId?.let { programRepo.programById(it) }
+            ?: resolveOrCreateProtocolProgram(name, workSec, restSec)
         val key = exerciseIdentityKey(name, form.code, program?.uid)
         db.exercises().byIdentityKey(key)?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
@@ -896,6 +918,7 @@ class ActivityRepository(private val db: AppDatabase) {
                 name = name, form = form.code, createdAt = now(),
                 protocolProgramId = program?.id,
                 defaultRestSec = defaultRestSec,
+                oneSided = oneSided,
                 identityKey = key,
             )
         )

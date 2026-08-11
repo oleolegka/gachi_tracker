@@ -179,13 +179,7 @@ data class WorkoutLogActions(
      * asked for straight afterwards and the question needs the id, which only exists once the
      * row has been written.
      */
-    val createExercise: (
-        name: String,
-        form: ExerciseForm,
-        workSec: Double?,
-        restSec: Double?,
-        then: (Long) -> Unit,
-    ) -> Unit,
+    val createExercise: (new: NewExercise, then: (Long) -> Unit) -> Unit,
 
     /** Append a set. The form is already stamped with the workout's day. */
     val addSet: (ActivityForm) -> Unit,
@@ -730,8 +724,8 @@ fun WorkoutLogScreen(
             startInCreate = state.exercises.isEmpty(),
             // picked or created, the next question is the same one, so both land on it
             onPick = { id -> askingRestFor = id; askingRestSide = null; askingRestIsNew = true },
-            onCreate = { name, form, work, rest ->
-                actions.createExercise(name, form, work, rest) { id ->
+            onCreate = { new ->
+                actions.createExercise(new) { id ->
                     askingRestFor = id
                     askingRestSide = null
                     askingRestIsNew = true
@@ -1224,30 +1218,22 @@ private fun RestDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 /*
-                 * Said LOUDLY as well as typed: the field holds "5:00" already, which reads
-                 * fine on its own, but the confirmation line stays because a number that big
-                 * benefits from being said twice, once in the smaller field and once where it
-                 * cannot be missed — reported from the phone as "hard to tell what is even
-                 * selected" (2026-08-08), before mm:ss entry existed to make the field itself
-                 * legible at all.
+                 * The time is on this dialog ONCE, in the field. It used to be twice — a
+                 * headline above repeating whatever the field held, in a different size,
+                 * added back when the field was a bare count of seconds and unreadable as a
+                 * length of time. mm:ss entry made the field itself legible and left the
+                 * headline as a duplicate; from the phone, 2026-08-11: "the time is written
+                 * twice, in two different fonts". The one kept is the one you can edit.
                  */
-                Text(
-                    seconds?.let(::formatClock) ?: "--:--",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = if (seconds != null) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        colors.inkMuted
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
                 TimeField(
                     label = "Rest, mm:ss",
                     value = draft,
                     onValueChange = { draft = it },
                     bumpsSec = listOf(10, 30),
                     isError = draft.isNotBlank() && seconds == null,
+                    // the minus buttons stop at the shortest rest this dialog can store,
+                    // rather than walking down into a value it would then refuse
+                    minSec = MIN_STEP_SEC,
                 )
                 if (seconds == null) {
                     Text(

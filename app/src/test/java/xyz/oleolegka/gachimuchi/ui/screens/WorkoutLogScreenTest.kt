@@ -157,7 +157,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 floors = floors,
                 actions = WorkoutLogActions(
                     addExercise = { id, rest, side -> added += Triple(id, rest, side) },
-                    createExercise = { _, _, _, _, _ -> },
+                    createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
                     removeExercise = { ids, exerciseId, side -> removedRows += ids; removedFor += exerciseId to side },
@@ -194,7 +194,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 floors = emptyList(),
                 actions = WorkoutLogActions(
                     addExercise = { id, rest, side -> added += Triple(id, rest, side) },
-                    createExercise = { _, _, _, _, _ -> },
+                    createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
                     removeExercise = { ids, exerciseId, side -> removedRows += ids; removedFor += exerciseId to side },
@@ -710,7 +710,12 @@ class WorkoutLogScreenTest : ScreenTest() {
         // the catalog remembers 90 s for this one, so agreeing costs exactly one tap — typed
         // as mm:ss now, not bare seconds (§13.9)
         compose.onNodeWithText("Rest, mm:ss").assertExists()
-        compose.onAllNodesWithText("1:30").assertCountEquals(2)
+        /*
+         * ONCE, in the field. It used to be twice — a headline above repeating what the field
+         * held, in another size — and this count was what pinned that down. Reported from the
+         * phone, 2026-08-11: "the time is written twice, in two different fonts".
+         */
+        compose.onAllNodesWithText("1:30").assertCountEquals(1)
 
         compose.onNodeWithText("Add to workout").performClick()
         assertEquals(listOf(Triple(2L, 90, null)), added)
@@ -729,7 +734,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Save").assertExists()
-        compose.onAllNodesWithText("2:30").assertCountEquals(2)
+        // once, in the field — see the note on the sibling test above
+        compose.onAllNodesWithText("2:30").assertCountEquals(1)
         assertTrue(
             "the dialog must name the exercise whose rest is being changed",
             compose.onAllNodesWithText("Bench press").fetchSemanticsNodes().size >= 2,

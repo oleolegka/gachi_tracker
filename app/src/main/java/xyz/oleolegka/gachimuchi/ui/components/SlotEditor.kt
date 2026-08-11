@@ -80,6 +80,7 @@ import xyz.oleolegka.gachimuchi.domain.withExerciseRest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
+import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
 
@@ -156,13 +157,7 @@ fun SlotEditorDialog(
      * Writes a new catalog row and hands back its id. Null hides the picker's create button,
      * which is only right for a caller that genuinely cannot write — the calendar can.
      */
-    onCreateExercise: ((
-        name: String,
-        form: ExerciseForm,
-        workSec: Double?,
-        restSec: Double?,
-        then: (Long) -> Unit,
-    ) -> Unit)? = null,
+    onCreateExercise: ((new: NewExercise, then: (Long) -> Unit) -> Unit)? = null,
     onSave: (SlotDraft) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -220,8 +215,8 @@ fun SlotEditorDialog(
              * of the dead end. Reported from the phone, 2026-08-08.
              */
             onCreate = onCreateExercise?.let { create ->
-                { name, form, work, rest ->
-                    create(name, form, work, rest) { id ->
+                { new ->
+                    create(new) { id ->
                         draft = draft.withExerciseAdded(id)
                     }
                 }

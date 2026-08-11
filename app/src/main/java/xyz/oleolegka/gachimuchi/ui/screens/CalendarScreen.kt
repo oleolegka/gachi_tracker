@@ -46,7 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.DayDots
 import xyz.oleolegka.gachimuchi.domain.DayStatus
-import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.SlotState
@@ -148,13 +147,7 @@ fun CalendarScreen(
     onSaveSlot: (SlotDraft, Long?) -> Unit,
     onDeleteSlot: (Long) -> Unit,
     /** Lets the plan's exercise picker create a row it does not have yet. */
-    onCreateExercise: ((
-        name: String,
-        form: ExerciseForm,
-        workSec: Double?,
-        restSec: Double?,
-        then: (Long) -> Unit,
-    ) -> Unit)? = null,
+    onCreateExercise: ((new: NewExercise, then: (Long) -> Unit) -> Unit)? = null,
     /** The workout being composed, when there is one — see [DraftSummary]. */
     draft: DraftSummary? = null,
 ) {

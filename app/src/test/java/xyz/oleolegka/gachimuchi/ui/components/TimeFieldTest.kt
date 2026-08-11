@@ -26,6 +26,11 @@ class TimeFieldTest : ScreenTest() {
     private fun field() =
         compose.onNode(hasSetTextAction() and hasContentDescription("Rest, mm:ss"))
 
+    private fun tap(label: String) {
+        compose.onNode(hasClickAction() and hasText(label)).performClick()
+        settle()
+    }
+
     @Test
     fun `a bump adds its seconds to what the field already holds`() {
         screen {
@@ -39,9 +44,63 @@ class TimeFieldTest : ScreenTest() {
         }
 
         field().assertTextContains("0:45")
-        compose.onNode(hasClickAction() and hasText("+10s")).performClick()
-        settle()
+        tap("+10s")
 
         field().assertTextContains("0:55")
+    }
+
+    /** The bug from the phone, 2026-08-11: every bump had a "+" and none of them had a "-". */
+    @Test
+    fun `every bump has a minus of its own that takes those seconds away`() {
+        screen {
+            var value by remember { mutableStateOf("2:00") }
+            TimeField(
+                label = "Rest, mm:ss",
+                value = value,
+                onValueChange = { value = it },
+                bumpsSec = listOf(10, 30),
+            )
+        }
+
+        tap("-30s")
+        field().assertTextContains("1:30")
+        tap("-10s")
+        field().assertTextContains("1:20")
+    }
+
+    @Test
+    fun `a minus stops at the floor instead of going negative`() {
+        screen {
+            var value by remember { mutableStateOf("0:20") }
+            TimeField(
+                label = "Rest, mm:ss",
+                value = value,
+                onValueChange = { value = it },
+                bumpsSec = listOf(30),
+                minSec = 1,
+            )
+        }
+
+        tap("-30s")
+        field().assertTextContains("0:01")
+        tap("-30s")
+        field().assertTextContains("0:01")
+    }
+
+    /** With no floor named, zero is where it stops — never a negative length of time. */
+    @Test
+    fun `the default floor is zero`() {
+        screen {
+            var value by remember { mutableStateOf("0:05") }
+            TimeField(
+                label = "Rest, mm:ss",
+                value = value,
+                onValueChange = { value = it },
+                bumpsSec = listOf(10),
+            )
+        }
+
+        tap("-10s")
+        field().assertTextContains("0:00")
     }
 }
