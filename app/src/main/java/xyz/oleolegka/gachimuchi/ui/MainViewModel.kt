@@ -700,9 +700,16 @@ class MainViewModel(
     // whether it is storable, the repository writes it. There is no "current slot" state
     // here, because the editor is a dialog that lives and dies inside the screen.
 
-    /** Creates a slot (id null) or rewrites an existing one. An unusable draft is ignored. */
+    /**
+     * Creates a slot (id null) or rewrites an existing one. An unusable draft is ignored.
+     *
+     * The day is handed down so the repository can refuse a plan put on a day already gone
+     * without trusting a screen to have refused first — see [ActivityRepository.saveSlot].
+     * It comes off the same [today] every screen reads, so nothing can disagree about which
+     * day it is.
+     */
     fun saveSlot(draft: SlotDraft, id: Long? = null) {
-        viewModelScope.launch { repo.saveSlot(draft, id) }
+        viewModelScope.launch { repo.saveSlot(draft, id, today = today.value) }
     }
 
     /** Deletes a slot and, with it, every occurrence of it — past days included. */

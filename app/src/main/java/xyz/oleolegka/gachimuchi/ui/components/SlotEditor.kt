@@ -179,7 +179,12 @@ fun SlotEditorDialog(
     // the field checks first (name, time, rule, a readable date), and only once those are
     // clean does "is this day already gone" get asked — see isBackdated's own KDoc for why
     // that one is kept apart rather than folded into problem() itself
-    val problem = draft.problem() ?: if (draft.isBackdated(today)) SlotProblem.DATE_IN_PAST else null
+    //
+    // The anchor the slot ALREADY has is handed over with it: an old repeating session is
+    // anchored in the past by definition, and comparing its untouched anchor with today
+    // would leave the editor unable to save a plan the user is not moving anywhere.
+    val problem = draft.problem()
+        ?: if (draft.isBackdated(today, was = initial?.anchorDate)) SlotProblem.DATE_IN_PAST else null
     val anchor = remember(draft.anchorDate) {
         runCatching { LocalDate.parse(draft.anchorDate) }.getOrDefault(day)
     }
