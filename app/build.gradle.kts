@@ -42,9 +42,26 @@ android {
 
     buildTypes {
         release {
-            // R8 is off for now: shrinking can silently break Room/Compose, and there is
-            // no device at hand to verify that it does not. Turn it on once there is.
-            isMinifyEnabled = false
+            /*
+             * Shrinking is ON since 2026-08-11, and renaming is not - see proguard-rules.pro
+             * for why, and for why there is not a single hand-written keep rule in it.
+             *
+             * The check that allowed this was the one unit tests cannot do: the owner installed
+             * the `shrunk` build type below on his own phone. That build still exists so the
+             * next question of this kind ("does obfuscation break anything?") can be asked the
+             * same way, beside the real app rather than over it.
+             *
+             * Stated rather than assumed: installing proved the apk is valid, not that every
+             * reflection-dependent path still works. What R8 breaks, it breaks at the screen
+             * that uses it. If something is missing in a release build and present in a debug
+             * one, this is the first place to look.
+             */
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (keystorePath != null && keystorePass != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -78,6 +95,14 @@ android {
             initWith(getByName("debug"))
             applicationIdSuffix = ".shrunk"
             versionNameSuffix = "-shrunk"
+            /*
+             * Debug SIGNING, so it can be installed beside the real app - but NOT debuggable.
+             * R8 holds back on a debuggable build type (line numbers and locals are kept, some
+             * optimisations are skipped), and a check that is gentler than the thing it stands
+             * in for is not a check. This one is meant to be the release build in every way
+             * except whose key signed it.
+             */
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
