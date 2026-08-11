@@ -37,7 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -418,12 +417,17 @@ private fun LegendItem(label: String, color: Color) {
  * neither is [status] at all, which is the whole point of the rework: nothing here reads
  * [DayStatus.state] any more, because a single tint had no way to say "one done, one missed".
  *
- * ── Why a composited sliver of black, not a second theme role ────────────────────
- * `surface` and `recessed` (ui/theme/Theme.kt) are close in light mode but SWAP which one is
- * darker in dark mode (see the note on `SurfaceRecessedDark`) — picking between them here
- * would make the past read lighter than the future in one theme and darker in the other.
- * Compositing a few percent of black onto the surface darkens it a little in EITHER theme,
- * which is the one thing "future lighter, past darker" needs to hold both ways.
+ * ── Two named tones, because a composited sliver of black was not visible ────────
+ * This used to be `surface` for a day ahead and five percent black over `surface` for a day
+ * gone. Five percent of the surface's OWN brightness is thirteen levels out of 255 in the
+ * light theme and one and a half in the dark one, where the surface is already near black —
+ * reported from the phone as two tones nobody can tell apart (2026-08-11), which in the dark
+ * theme they very nearly were not.
+ *
+ * The pair is now stated per theme ([GachiColors.calendarAhead] / [GachiColors.calendarGone]),
+ * each tone straddling its own surface, so "ahead is lighter" survives BOTH themes — the trap
+ * a single alpha was chosen to dodge in the first place, and the one it dodged by making the
+ * difference invisible instead.
  */
 @Composable
 private fun DayCell(
@@ -438,8 +442,7 @@ private fun DayCell(
 ) {
     val colors = LocalGachiColors.current
     val date = LocalDate.parse(status.day)
-    val surface = MaterialTheme.colorScheme.surface
-    val cellBackground = if (isPast) PAST_TINT.compositeOver(surface) else surface
+    val cellBackground = if (isPast) colors.calendarGone else colors.calendarAhead
     Box(
         modifier
             .aspectRatio(1f / 1.06f)
@@ -474,9 +477,6 @@ private fun DayCell(
         }
     }
 }
-
-/** How much black a past cell's background is nudged by — see [DayCell]'s own header. */
-private val PAST_TINT = Color.Black.copy(alpha = 0.05f)
 
 /**
  * Up to [xyz.oleolegka.gachimuchi.domain.MAX_CALENDAR_DOTS] coloured dots, plus a "+N" mark

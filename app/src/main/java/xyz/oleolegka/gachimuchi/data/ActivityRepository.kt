@@ -32,6 +32,7 @@ import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.isBackdated
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET
@@ -1145,13 +1146,34 @@ class ActivityRepository(private val db: AppDatabase) {
      * become the same two statements, and no path leaves a stale row behind. It follows the
      * refusals — a draft that is not storable writes no exercises either, and neither does
      * an edit of a slot that has been deleted in the meantime.
+     *
+     * ── [today], and why the floor on backdating is repeated here ────────────────
+     * "A plan cannot be put on a day already gone" (domain/Schedule.kt's `isBackdated`) used
+     * to be enforced by ONE disabled button in one dialog, which is not where a rule about
+     * what may be stored belongs: every other refusal in this method is made twice on
+     * purpose, and this one was made once. Passing the day makes the database the last word
+     * on it as well, so a second screen — or the same screen composed against a stale
+     * "today" — cannot write what the first one refuses.
+     *
+     * A null [today] means "no floor", and that is for the callers who legitimately have no
+     * business asking: the tests, and anything replaying a plan that already exists. A
+     * RESTORE does not come through here at all (see data/JournalBackup.kt, which writes the
+     * rows itself), because a backup's plans are history and must come back exactly as they
+     * left, past anchors included.
      */
-    suspend fun saveSlot(draft: SlotDraft, id: Long? = null): Long? {
+    suspend fun saveSlot(draft: SlotDraft, id: Long? = null, today: LocalDate? = null): Long? {
         // aliased on import: this file also declares a SlotEntity.toSlot of its own
         val slot = draft.draftToSlot(id ?: 0L) ?: return null
         // the field write and the composition rewrite as one act — see [writeSlotExercises]
         // for what a process dying BETWEEN the two of them would leave behind
         return db.withTransaction {
+            // read inside the transaction: the anchor being compared against has to be the
+            // one this write is about to replace, not one from a moment earlier
+            val existing = id?.let { db.slots().byId(it) }
+            if (id != null && existing == null) return@withTransaction null
+            if (today != null && draft.isBackdated(today, was = existing?.anchorDate)) {
+                return@withTransaction null
+            }
             val savedId = if (id == null) {
                 createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
             } else {
