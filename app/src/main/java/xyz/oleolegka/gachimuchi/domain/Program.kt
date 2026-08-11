@@ -125,11 +125,29 @@ data class WorkoutProgram(
     @SerialName("hidden") val hidden: Boolean = false,
 )
 
-/** Programs under one heading, in the order they are stored. */
-data class ProgramSection(val title: String, val programs: List<WorkoutProgram>)
+/**
+ * Programs under one heading, in the order they are stored.
+ *
+ * [schedules] marks the one section that is not a heading the user wrote: the exercise
+ * schedules (see [programSections]). The rows in it are drawn differently — whose schedule it
+ * is, and that its times are fixed — so the flag travels with the section rather than being
+ * re-derived from the title, which is a string and would be a heading anyone could type.
+ */
+data class ProgramSection(
+    val title: String,
+    val programs: List<WorkoutProgram>,
+    val schedules: Boolean = false,
+)
 
 /** The heading a program with no category of its own is filed under. */
 const val OTHER_PROGRAMS_SECTION = "Other"
+
+/**
+ * The heading the exercise schedules are filed under. "Schedule" rather than "protocol" or
+ * "program" is the owner's own word for the timed scenario of a hold exercise (decisions
+ * §18.15), chosen exactly so the three do not blur into each other.
+ */
+const val EXERCISE_SCHEDULES_SECTION = "Exercise schedules"
 
 /**
  * Files the program list under headings for the timer tab.
@@ -155,7 +173,32 @@ const val OTHER_PROGRAMS_SECTION = "Other"
  * A list where nothing is categorised comes back as ONE section with an empty title, so a
  * phone with three programs does not grow a heading it did not ask for.
  */
-fun programSections(programs: List<WorkoutProgram>): List<ProgramSection> {
+/**
+ * ── The exercise schedules are cut off first (decisions §18.15) ─────────────────
+ * [scheduleProgramIds] is every program some exercise's protocol currently IS
+ * ([xyz.oleolegka.gachimuchi.data.ProgramRepository.isReferenced]). Those are not programs
+ * the owner wrote and filed; the app generated them for one exercise, and they are frozen
+ * because they became part of that exercise's identity. Mixed into the library they read as
+ * badly-named programs someone left behind — the owner met "Hangs 20mm protocol" next to his
+ * own Tabata and asked why it was there — so they leave the categorised list entirely and come
+ * back as ONE section at the end, whatever categories they carry.
+ *
+ * They are not simply hidden ([WorkoutProgram.hidden] would do that in one line): a schedule
+ * is still runnable, exportable and renameable, and a library that silently omitted the
+ * programs the app made would be a library that lies about what is on the phone.
+ */
+fun programSections(
+    programs: List<WorkoutProgram>,
+    scheduleProgramIds: Set<Long> = emptySet(),
+): List<ProgramSection> {
+    if (scheduleProgramIds.isNotEmpty()) {
+        val schedules = programs.filter { it.id != 0L && it.id in scheduleProgramIds }
+        if (schedules.isNotEmpty()) {
+            val standalone = programs.filter { it.id == 0L || it.id !in scheduleProgramIds }
+            return programSections(standalone) +
+                ProgramSection(EXERCISE_SCHEDULES_SECTION, schedules, schedules = true)
+        }
+    }
     if (programs.none { it.category.isNotBlank() }) {
         return if (programs.isEmpty()) emptyList() else listOf(ProgramSection("", programs))
     }
@@ -344,6 +387,45 @@ fun WorkoutProgram.flatten(): List<WorkoutStep> {
  * genuinely IS that minimal shape — a caller comparing `repeats` and block count does that.
  */
 fun WorkoutProgram.firstBlock(): ProgramBlock? = groups.firstOrNull()?.blocks?.firstOrNull()
+
+/**
+ * The run a STRICT schedule performs: the schedule itself, not a program rebuilt out of it.
+ *
+ * ── The defect this replaces ────────────────────────────────────────────────────
+ * Every protocol-led run used to go through [programFromExercise], which reads
+ * [WorkoutProgram.firstBlock] — the FIRST BLOCK OF THE FIRST GROUP — and rebuilds a program
+ * around it from a rep count taken off the last logged set, a set count taken off the settings
+ * and a pause taken off the journal. For a plain pair that is exactly right, because a pair is
+ * all its schedule ever said. For a richer schedule it is a silent collapse: a second block, a
+ * changed order, a group repeat, a pause between groups — everything past the first block
+ * meant nothing at all, and the run that played was not the one the schedule described.
+ *
+ * So a strict schedule runs as written, and the three derived numbers do not enter into it.
+ * The only thing supplied from outside is the exercise link, which makes the finished run
+ * offerable as sets of THIS exercise ([RunOrigin.EXERCISE]) — twins that deliberately share one
+ * schedule (§18.15) each get a run named after themselves rather than after the shared row.
+ *
+ * [WorkoutProgram.prepareSec] is deliberately the SCHEDULE'S OWN and not the global timer
+ * setting: the lead-in is a stretch of time inside the scenario, and the scenario is the thing
+ * that is strict. Returns null for anything that is not [ScheduleKind.STRICT].
+ */
+fun scheduledRun(exercise: ExerciseRef): WorkoutProgram? =
+    scheduledRunOf(exercise.schedule, exercise.name, exercise.id)
+
+/**
+ * The same thing for a caller holding the schedule itself rather than an [ExerciseRef] that
+ * carries it — the backstop in
+ * [xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise], which resolves the
+ * program out of the database when the ref arrived without one.
+ *
+ * It exists so that the two paths cannot drift: both the branch test and the renaming happen
+ * here, once, instead of the second caller starting the stored program as-is and getting a run
+ * named after a schedule two twins share.
+ */
+fun scheduledRunOf(schedule: WorkoutProgram?, name: String, exerciseId: Long): WorkoutProgram? {
+    if (schedule == null || scheduleKindOf(schedule) != ScheduleKind.STRICT) return null
+    return schedule.copy(name = name, exerciseId = exerciseId)
+}
 
 /** Total length of a program once expanded, in seconds. */
 fun WorkoutProgram.totalSec(): Int = flatten().sumOf { it.durationSec }

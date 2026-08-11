@@ -73,6 +73,14 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * straight from the library is the right thing for the one that belongs to no exercise —
  * a Tabata, a warm-up — and for trying out something just edited.
  *
+ * ── Two kinds of thing live here, and they are not mixed ───────────────────────
+ * Programs the owner wrote or imported, and the SCHEDULES the app generated for single hold
+ * exercises. Only the first kind is his filing; the second is machinery that happens to be
+ * stored the same way, is frozen the moment the exercise starts using it, and read as junk
+ * left in the library when it sat between a Tabata and a set of repeaters. So schedules come
+ * last, under one heading of their own, each row naming the exercise it belongs to
+ * (decisions §18.15, `domain/Program.kt`'s programSections).
+ *
  * One scrolling screen rather than a section with its own navigation. There are only three
  * things here and they are read in this order — the live run first, because when anything is
  * running that is the only thing that matters; then the programs; then the settings, which
@@ -85,6 +93,13 @@ fun TimerScreen(
     programs: List<WorkoutProgram>,
     /** Catalog names by exercise id, so a linked program can say what it trains. */
     exerciseNames: Map<Long, String>,
+    /**
+     * The exercises whose protocol a program IS, by program id — the schedules of decisions
+     * §18.15. Keys are what gets filed under its own heading; values are the names the row
+     * says it belongs to (more than one when twins share a schedule). Empty map means no
+     * schedule section at all, which is what a library of hand-written programs looks like.
+     */
+    scheduleOwners: Map<Long, List<String>>,
     onRunProgram: (WorkoutProgram) -> Unit,
     onEditProgram: (WorkoutProgram?) -> Unit,
     onDeleteProgram: (Long) -> Unit,
@@ -108,7 +123,9 @@ fun TimerScreen(
      */
     val visiblePrograms = remember(programs) { programs.filter { !it.hidden } }
     val hiddenPrograms = remember(programs) { programs.filter { it.hidden } }
-    val sections = remember(visiblePrograms) { programSections(visiblePrograms) }
+    val sections = remember(visiblePrograms, scheduleOwners) {
+        programSections(visiblePrograms, scheduleOwners.keys)
+    }
     var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var hiddenTrayOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -203,11 +220,28 @@ fun TimerScreen(
                 }
             }
             if (section.title !in collapsed) {
+                /*
+                 * The schedules say once, under their heading, what the whole section is —
+                 * repeating "the app made this, and it no longer changes" on every card would
+                 * be four lines of the same sentence on a phone that owns four holds.
+                 */
+                if (section.schedules) {
+                    item(key = "schedules-note") {
+                        Text(
+                            "Made for one exercise and fixed once it was used: the times in " +
+                                "these cannot be changed, only the name. Your own programs " +
+                                "are above.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.inkMuted,
+                        )
+                    }
+                }
                 items(section.programs, key = { it.id }) { program ->
                     ProgramCard(
                         program = program,
                         enabled = state.enabled,
                         exerciseName = exerciseNames[program.exerciseId],
+                        scheduleFor = scheduleOwners[program.id].orEmpty(),
                         onRun = { onRunProgram(program) },
                         onEdit = { onEditProgram(program) },
                         onExport = { transfer.export(listOf(program)) },
@@ -240,6 +274,9 @@ fun TimerScreen(
                         program = program,
                         enabled = state.enabled,
                         exerciseName = exerciseNames[program.exerciseId],
+                        // a schedule put away still says whose it is: the tray is one flat
+                        // list, so the heading that would have said it is not there
+                        scheduleFor = scheduleOwners[program.id].orEmpty(),
                         onRun = { onRunProgram(program) },
                         onEdit = { onEditProgram(program) },
                         onExport = { transfer.export(listOf(program)) },
@@ -426,11 +463,23 @@ private fun SectionHeader(
     HorizontalDivider(color = colors.grid)
 }
 
+/**
+ * One row of the library.
+ *
+ * [scheduleFor] non-empty means this program is some exercise's schedule (decisions §18.15):
+ * the row then says WHOSE it is and that its times are fixed, and it carries no delete button
+ * at all. The first two belong on the row and not only in the editor, because the freeze was
+ * only ever discoverable by opening the program and finding the fields turned into text — by
+ * which point the owner had already gone looking for a program he had not written. The third
+ * is the working agreement's own rule: a forbidden action loses the control that STARTS it,
+ * not the one that finishes it.
+ */
 @Composable
 private fun ProgramCard(
     program: WorkoutProgram,
     enabled: Boolean,
     exerciseName: String?,
+    scheduleFor: List<String> = emptyList(),
     onRun: () -> Unit,
     onEdit: () -> Unit,
     onExport: () -> Unit,
@@ -441,13 +490,21 @@ private fun ProgramCard(
     Card(Modifier.fillMaxWidth().clickable(onClick = onEdit)) {
         Column(Modifier.padding(12.dp)) {
             Text(program.name, style = MaterialTheme.typography.titleMedium)
+            if (scheduleFor.isNotEmpty()) {
+                Text(
+                    "Schedule for ${scheduleFor.joinToString(", ")} - the times are fixed",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkSecondary,
+                )
+            }
             Text(
                 buildString {
                     append("${program.workStepCount()} efforts   ")
                     append("${formatClock(program.totalSec())} total")
                     // stated on the card, because it is what decides whether finishing this
-                    // program offers to write the sets down
-                    exerciseName?.let { append("   logs as $it") }
+                    // program offers to write the sets down - but not when the line above has
+                    // just named the same exercise, which is the usual case for a schedule
+                    exerciseName?.takeIf { it !in scheduleFor }?.let { append("   logs as $it") }
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkMuted,
@@ -462,7 +519,23 @@ private fun ProgramCard(
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onExport) { Text("Export") }
                 TextButton(onClick = onToggleHidden) { Text(if (program.hidden) "Show" else "Hide") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+                /*
+                 * No delete button on a schedule, rather than a refusal after it is pressed:
+                 * the exercise is keyed to this program's uid and nothing cascades, so deleting
+                 * it would leave that exercise pointing at a row that is gone. The repository
+                 * refuses too (ProgramRepository.delete) — this is the door, that is the lock.
+                 */
+                if (scheduleFor.isEmpty()) {
+                    TextButton(onClick = onDelete) { Text("Delete") }
+                }
+            }
+            if (scheduleFor.isNotEmpty()) {
+                Text(
+                    "No delete: the exercise is built on this schedule. Hide it instead.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
     }

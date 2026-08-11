@@ -27,9 +27,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * ONE GESTURE for "what can I do with this": a long press on the thing itself.
@@ -117,6 +118,13 @@ private val DRAG_INTENT_SLOP = 6.dp
  * `combinedClickable`'s, and its long press is still declared (as an empty one) so that a press
  * held and released does not ALSO fire the tap: what that press meant is decided below, by the
  * detector that knows whether the finger moved.
+ *
+ * ── The gesture is not the only way in ─────────────────────────────────────────
+ * [content] is also handed `openMenu`, and a caller that draws a control calling it puts THE
+ * SAME menu behind a visible button. That is the second half of the rule "a hidden action has a
+ * sign": the press stays exactly as it was for the hand that already knows it, and the card
+ * stops being a thing whose actions can only be found by holding a finger on it and hoping.
+ * A caller that draws no such control simply ignores the lambda, and nothing changes for it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -126,9 +134,8 @@ fun ItemActions(
     modifier: Modifier = Modifier,
     onTap: (() -> Unit)? = null,
     drag: ItemDrag? = null,
-    content: @Composable (Modifier) -> Unit,
+    content: @Composable (press: Modifier, openMenu: () -> Unit) -> Unit,
 ) {
-    val colors = LocalGachiColors.current
     var open by remember { mutableStateOf(false) }
 
     val slopPx = with(LocalDensity.current) { DRAG_INTENT_SLOP.toPx() }
@@ -181,34 +188,65 @@ fun ItemActions(
     }
 
     Box(modifier) {
-        content(press)
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            Text(
-                title,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.inkSecondary,
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
-            )
-            HorizontalDivider(color = colors.grid)
-            actions.forEach { action ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            action.label,
-                            color = if (action.destructive) {
-                                colors.critical
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    },
-                    onClick = {
-                        open = false
-                        action.onClick()
-                    },
+        content(press) { if (actions.isNotEmpty()) open = true }
+        ActionMenu(open, { open = false }, title, actions)
+    }
+}
+
+/**
+ * The menu itself, without the gesture that raises it.
+ *
+ * There is exactly ONE of these per item, and both ways in lead to it: the long press above,
+ * and the `openMenu` lambda [ItemActions] hands its content so that a card can put a visible
+ * three-dot button in front of the same menu (rule 2 of `design-system/app-next/SYSTEM.md` — a
+ * hidden action needs a sign). It is a function of its own only so that the body of the menu
+ * is written once; a second DropdownMenu next to this one would be two menus that drift.
+ *
+ * A DESTRUCTIVE entry is set off by a divider as well as by its colour: the redraw's rule 3
+ * is that a destructive action does not sit flush against a frequent one, and inside a menu
+ * a rule of separation is a line rather than distance.
+ */
+@Composable
+fun ActionMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    title: String,
+    actions: List<ItemAction>,
+) {
+    val colors = LocalGachiColors.current
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(
+            title,
+            fontSize = TextSize.Caption,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.inkSecondary,
+            modifier = Modifier.padding(horizontal = Spacing.Block, vertical = Spacing.Line),
+        )
+        HorizontalDivider(color = colors.grid)
+        actions.forEachIndexed { index, action ->
+            if (action.destructive && index > 0) {
+                HorizontalDivider(
+                    color = colors.grid,
+                    modifier = Modifier.padding(vertical = Spacing.Tight),
                 )
             }
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        action.label,
+                        fontSize = TextSize.Body,
+                        color = if (action.destructive) {
+                            colors.critical
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    action.onClick()
+                },
+            )
         }
     }
 }
@@ -243,7 +281,7 @@ fun ConfirmRemoveDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                 Text(subject, style = MaterialTheme.typography.titleSmall)
                 Text(
                     explanation,

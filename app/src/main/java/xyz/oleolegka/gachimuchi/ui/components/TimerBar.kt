@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.NUDGE_SEC
 import xyz.oleolegka.gachimuchi.domain.RunPhase
+import xyz.oleolegka.gachimuchi.domain.ScheduleKind
 import xyz.oleolegka.gachimuchi.domain.StepKind
 import xyz.oleolegka.gachimuchi.domain.ceilSeconds
 import xyz.oleolegka.gachimuchi.domain.currentStep
@@ -27,7 +28,9 @@ import xyz.oleolegka.gachimuchi.domain.formatClock
 import xyz.oleolegka.gachimuchi.domain.nextStep
 import xyz.oleolegka.gachimuchi.domain.phase
 import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
+import xyz.oleolegka.gachimuchi.domain.workStepCount
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * The timer as it appears on the logging screen: ONE compact row above the entry card.
@@ -63,7 +66,7 @@ fun TimerBar(
 ) {
     val colors = LocalGachiColors.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.Inset, vertical = Spacing.Tight)) {
             when {
                 !state.enabled -> Row(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
@@ -119,12 +122,21 @@ private fun IdleRow(
          * protocol, so the whole session is a program with nothing left to ask. The button
          * names the numbers it is about to use, because starting a twenty-minute program
          * by accident is worse than reading four extra words.
+         *
+         * A STRICT SCHEDULE (§18.15) says so on the button instead of naming a pair. There is
+         * no honest pair to name: the pair on the row is only the schedule's first block, and
+         * for a schedule that is more than one block that number is the least of what is about
+         * to run. The effort count is what stays true whatever shape the schedule has, and it
+         * is the number worth reading before handing the screen over for twenty minutes.
          */
-        if (exercise?.protocol != null) {
-            TextButton(onClick = onStartProgram) {
-                Text("Start ${exercise.protocol!!.first.toInt()}:${exercise.protocol!!.second.toInt()}")
-            }
+        val label = when {
+            exercise == null || !exercise.canBeConducted -> null
+            exercise.scheduleKind == ScheduleKind.STRICT ->
+                exercise.schedule?.workStepCount()?.let { "Start schedule - $it efforts" }
+                    ?: "Start schedule"
+            else -> exercise.protocol?.let { "Start ${it.first.toInt()}:${it.second.toInt()}" }
         }
+        label?.let { TextButton(onClick = onStartProgram) { Text(it) } }
     }
 }
 
@@ -143,7 +155,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
 
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -153,7 +165,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
             // work and rest never look alike, and the label below says which it is anyway
             color = if (step.kind.isEffort()) colors.accent else MaterialTheme.colorScheme.onSurface,
         )
-        Column(Modifier.weight(1f).padding(start = 6.dp)) {
+        Column(Modifier.weight(1f).padding(start = Spacing.Line)) {
             Text(
                 if (phase == RunPhase.PAUSED) "${step.name} - paused" else step.name,
                 style = MaterialTheme.typography.labelSmall,
@@ -191,7 +203,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
     }
     LinearProgressIndicator(
         progress = { fraction },
-        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
         color = if (step.kind == StepKind.WORK) colors.accent else colors.inkMuted,
     )
 }

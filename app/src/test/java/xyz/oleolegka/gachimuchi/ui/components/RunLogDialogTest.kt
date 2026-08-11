@@ -75,7 +75,7 @@ class RunLogDialogTest : ScreenTest() {
     }
 
     private fun tapLog() {
-        compose.onNodeWithText("Log 1 set").performClick()
+        compose.onNodeWithText("Write down 1 set").performClick()
         settle()
     }
 

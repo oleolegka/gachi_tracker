@@ -80,7 +80,9 @@ import xyz.oleolegka.gachimuchi.domain.withExerciseRest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
+import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.LocalDate
 
 /**
@@ -156,13 +158,7 @@ fun SlotEditorDialog(
      * Writes a new catalog row and hands back its id. Null hides the picker's create button,
      * which is only right for a caller that genuinely cannot write — the calendar can.
      */
-    onCreateExercise: ((
-        name: String,
-        form: ExerciseForm,
-        workSec: Double?,
-        restSec: Double?,
-        then: (Long) -> Unit,
-    ) -> Unit)? = null,
+    onCreateExercise: ((new: NewExercise, then: (Long) -> Unit) -> Unit)? = null,
     onSave: (SlotDraft) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -179,7 +175,12 @@ fun SlotEditorDialog(
     // the field checks first (name, time, rule, a readable date), and only once those are
     // clean does "is this day already gone" get asked — see isBackdated's own KDoc for why
     // that one is kept apart rather than folded into problem() itself
-    val problem = draft.problem() ?: if (draft.isBackdated(today)) SlotProblem.DATE_IN_PAST else null
+    //
+    // The anchor the slot ALREADY has is handed over with it: an old repeating session is
+    // anchored in the past by definition, and comparing its untouched anchor with today
+    // would leave the editor unable to save a plan the user is not moving anywhere.
+    val problem = draft.problem()
+        ?: if (draft.isBackdated(today, was = initial?.anchorDate)) SlotProblem.DATE_IN_PAST else null
     val anchor = remember(draft.anchorDate) {
         runCatching { LocalDate.parse(draft.anchorDate) }.getOrDefault(day)
     }
@@ -220,8 +221,8 @@ fun SlotEditorDialog(
              * of the dead end. Reported from the phone, 2026-08-08.
              */
             onCreate = onCreateExercise?.let { create ->
-                { name, form, work, rest ->
-                    create(name, form, work, rest) { id ->
+                { new ->
+                    create(new) { id ->
                         draft = draft.withExerciseAdded(id)
                     }
                 }
@@ -236,7 +237,7 @@ fun SlotEditorDialog(
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Line),
             ) {
                 OutlinedTextField(
                     value = draft.name,
@@ -252,7 +253,7 @@ fun SlotEditorDialog(
                 if (suggestions.isNotEmpty()) {
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
                     ) {
                         suggestions.forEach { name ->
                             SiblingChip(
@@ -267,7 +268,7 @@ fun SlotEditorDialog(
 
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OutlinedTextField(
@@ -305,7 +306,7 @@ fun SlotEditorDialog(
                 // the way in for everything they do not cover
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
                 ) {
                     QUICK_TIMES.forEach { time ->
                         SiblingChip(
@@ -328,7 +329,7 @@ fun SlotEditorDialog(
                     selected = draft.repeatRule.takeIf { it in REPEAT_RULES } ?: REPEAT_NONE,
                     label = { ruleLabel(it) },
                     onSelect = { draft = draft.copy(repeatRule = it) },
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = Modifier.padding(top = Spacing.Tight),
                 )
 
                 DayField(
@@ -375,7 +376,7 @@ fun SlotEditorDialog(
                 if (initial != null) {
                     TextButton(
                         onClick = onDelete,
-                        modifier = Modifier.padding(top = 4.dp),
+                        modifier = Modifier.padding(top = Spacing.Tight),
                     ) {
                         Text("Delete this session", color = colors.critical)
                     }
@@ -477,7 +478,7 @@ private fun PlannedExercisesSection(
                     "only here for when you already know what you are going to do.",
                 fontSize = 12.sp,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+                modifier = Modifier.padding(top = Spacing.Tight, bottom = Spacing.Tight),
             )
 
             exercises.forEachIndexed { index, planned ->
@@ -496,7 +497,7 @@ private fun PlannedExercisesSection(
                 )
             }
 
-            TextButton(onClick = onAdd, modifier = Modifier.padding(top = 2.dp)) {
+            TextButton(onClick = onAdd, modifier = Modifier.padding(top = Spacing.Tight)) {
                 Icon(Icons.Filled.Add, contentDescription = null, tint = colors.accent)
                 Text("  Add an exercise", color = colors.accent)
             }
@@ -530,13 +531,13 @@ private fun PlannedExerciseRow(
     // slot opened, an exercise moved to this row by a reorder — but left alone the rest of the
     // time, so a keystroke that does not yet parse (a lone "1") is not erased by its own write
     var restText by remember(restSec) { mutableStateOf(restSec?.let(::formatDurationSec) ?: "") }
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = Spacing.Tight)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${position + 1}.",
                 fontSize = 13.sp,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(end = 6.dp),
+                modifier = Modifier.padding(end = Spacing.Tight),
             )
             Text(
                 name,
@@ -571,7 +572,7 @@ private fun PlannedExerciseRow(
             selected = restSec == null,
             accent = colors.accent,
             onClick = { restText = ""; onRest(null) },
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = Spacing.Tight),
         )
         TimeField(
             label = "Rest, mm:ss",
@@ -586,7 +587,7 @@ private fun PlannedExerciseRow(
             bumpsSec = listOf(10, 30),
             isError = restText.isNotBlank() &&
                 parseDurationText(restText)?.let { it !in MIN_STEP_SEC..MAX_REST_INPUT_SEC } ?: true,
-            modifier = Modifier.padding(top = 2.dp),
+            modifier = Modifier.padding(top = Spacing.Tight),
         )
     }
 }
@@ -604,7 +605,7 @@ private fun DayField(label: String, day: LocalDate, onChange: (LocalDate) -> Uni
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontSize = 12.sp, color = colors.inkMuted, modifier = Modifier.padding(end = 4.dp))
+        Text(label, fontSize = 12.sp, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
         IconButton(onClick = { onChange(day.minusDays(1)) }) {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
@@ -683,14 +684,14 @@ private fun TimePickerSheet(initial: String?, onPick: (String) -> Unit, onDismis
     )
     var keyboard by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+        Surface(shape = MaterialTheme.shapes.large, tonalElevation = 6.dp) {
             Column(
-                Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                Modifier.padding(Spacing.Cards).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Inset),
             ) {
                 Text("Time of the session", style = MaterialTheme.typography.labelLarge)
                 if (keyboard) TimeInput(state = state) else TimePicker(state = state)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                     TextButton(onClick = { keyboard = !keyboard }) {
                         Text(if (keyboard) "Clock" else "Keyboard")
                     }

@@ -58,6 +58,8 @@ import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
+import xyz.oleolegka.gachimuchi.domain.scheduledRun
+import xyz.oleolegka.gachimuchi.domain.scheduledRunOf
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restHintSec
@@ -65,8 +67,10 @@ import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.workoutEventIds
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
+import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -634,6 +638,40 @@ class MainViewModel(
     }
 
     /**
+     * Takes one exercise CARD out of a workout: its rows, and the rest counting under it.
+     *
+     * ── Why the rest is dismissed twice, by two different rules ─────────────────
+     * First by CARD — (exerciseId, side) — which is right and is what the left hand's card
+     * being removed must not do to the right hand's countdown.
+     *
+     * Then, once the rows are gone, by EXERCISE, but only if the workout no longer holds any
+     * card of it. That second pass is the belt to the first one's braces, and it exists because
+     * the two keys are written by different code paths: a floor is keyed by the side of the SET
+     * that started it, a card by the side of the row that added it, and any journal where those
+     * two disagree (a set recorded with no side on a one-sided exercise — see WorkoutExercise's
+     * own KDoc for how that produces a third, sideless block) leaves a countdown alive with
+     * nothing left on screen to stop it. That is §23.A2 as reported from the phone: the exercise
+     * is gone and the rest goes on counting, and speaking, in the background.
+     */
+    fun removeWorkoutExercise(
+        workoutId: Long,
+        eventIds: List<Long>,
+        exerciseId: Long?,
+        side: HoldSide? = null,
+    ) {
+        exerciseId?.let { timer.floors.dismiss(it, side?.code) }
+        viewModelScope.launch {
+            if (eventIds.isNotEmpty()) repo.deleteEntries(eventIds)
+            if (exerciseId != null) {
+                val stillThere = buildWorkout(repo.allEvents(), workoutId)
+                    ?.exercises.orEmpty()
+                    .any { it.exerciseId == exerciseId }
+                if (!stillThere) timer.floors.dismissAllOf(exerciseId)
+            }
+        }
+    }
+
+    /**
      * Removes a workout and everything recorded into it.
      *
      * ── Why the whole thing and not just the start event ────────────────────────
@@ -654,7 +692,18 @@ class MainViewModel(
      */
     fun deleteWorkout(workoutId: Long) {
         viewModelScope.launch {
-            repo.deleteEntries(workoutEventIds(repo.allEvents(), workoutId))
+            val events = repo.allEvents()
+            /*
+             * The countdowns first, and from the workout as it still reads — after the rows are
+             * gone there is nothing left to ask which exercises it held. A rest outlives the
+             * screen it was started from (it is a foreground service, a notification and an
+             * alarm), so deleting the workout without this leaves the phone counting, and
+             * eventually speaking, for a session that is no longer in the log (§23.A2).
+             */
+            buildWorkout(events, workoutId)?.exercises?.forEach { exercise ->
+                exercise.exerciseId?.let { timer.floors.dismiss(it, exercise.side?.code) }
+            }
+            repo.deleteEntries(workoutEventIds(events, workoutId))
         }
     }
 
@@ -679,15 +728,30 @@ class MainViewModel(
      * cannot be put until the row it is about exists. A caller that only needs the exercise to
      * become the active one leaves it out and reads [activeExerciseId] as before.
      */
-    fun createExercise(
-        name: String,
-        form: ExerciseForm,
-        workSec: Double? = null,
-        restSec: Double? = null,
-        then: ((Long) -> Unit)? = null,
-    ) {
+    fun createExercise(new: NewExercise, then: ((Long) -> Unit)? = null) {
         viewModelScope.launch {
-            val id = repo.ensureExercise(name.trim(), form, workSec, restSec)
+            /*
+             * A schedule built on the create form is written HERE, one step before the
+             * exercise that will reference it, and nowhere earlier. The form holds it as a
+             * plain value precisely so that backing out of creation leaves no orphan program
+             * in the library — the editor is opened and closed while the exercise does not
+             * exist yet, possibly several times, and every one of those passes would
+             * otherwise leave a row behind.
+             *
+             * `id = 0` is forced rather than assumed: the draft may have been seeded from a
+             * library program the user then modified, and saving it under that id would
+             * rewrite the original — which is the very thing §18.9 freezes against, arrived
+             * at from a screen that thought it was creating something new.
+             */
+            val builtProgramId = new.newProgram?.let { programRepo.save(it.copy(id = 0)) }
+            val id = repo.ensureExercise(
+                name = new.name.trim(),
+                form = new.form,
+                workSec = new.workSec,
+                restSec = new.restSec,
+                oneSided = new.oneSided,
+                protocolProgramId = builtProgramId ?: new.protocolProgramId,
+            )
             _activeExerciseId.value = id
             then?.invoke(id)
         }
@@ -700,9 +764,16 @@ class MainViewModel(
     // whether it is storable, the repository writes it. There is no "current slot" state
     // here, because the editor is a dialog that lives and dies inside the screen.
 
-    /** Creates a slot (id null) or rewrites an existing one. An unusable draft is ignored. */
+    /**
+     * Creates a slot (id null) or rewrites an existing one. An unusable draft is ignored.
+     *
+     * The day is handed down so the repository can refuse a plan put on a day already gone
+     * without trusting a screen to have refused first — see [ActivityRepository.saveSlot].
+     * It comes off the same [today] every screen reads, so nothing can disagree about which
+     * day it is.
+     */
     fun saveSlot(draft: SlotDraft, id: Long? = null) {
-        viewModelScope.launch { repo.saveSlot(draft, id) }
+        viewModelScope.launch { repo.saveSlot(draft, id, today = today.value) }
     }
 
     /** Deletes a slot and, with it, every occurrence of it — past days included. */
@@ -767,6 +838,22 @@ class MainViewModel(
      */
     fun dismissFloor(exerciseId: Long, side: HoldSide? = null) = timer.floors.dismiss(exerciseId, side?.code)
 
+    /** Both cards of it, when the exercise itself is what is going — see [FloorController.dismissAllOf]. */
+    fun dismissFloorsOf(exerciseId: Long) = timer.floors.dismissAllOf(exerciseId)
+
+    /**
+     * Removes a whole SINGLE-entry card of a day: its rows, and the rest its exercise may still
+     * be counting.
+     *
+     * The two halves are one act because they were one object on the screen. Deleting the rows
+     * and leaving the countdown was the shape of §23.A2 — a bar, a notification and eventually a
+     * beep for something the log no longer contains.
+     */
+    fun deleteSingleEntries(eventIds: List<Long>, exerciseId: Long?) {
+        exerciseId?.let { dismissFloorsOf(it) }
+        deleteEntries(eventIds)
+    }
+
     /**
      * The plate answered on the way INTO the set that is running, or null when none was.
      *
@@ -809,7 +896,58 @@ class MainViewModel(
      */
     fun startProgramForExercise(start: ProgramStart) {
         _entryAddedKg.value = start.addedKg
+
+        /*
+         * A STRICT SCHEDULE PLAYS ITSELF (§18.15), and it does so before anything below is
+         * read. The schedule fixes every temporal thing about the run — which efforts, how
+         * long, in what order, with what pauses, how many repeats, how many sets — so the rep
+         * count off the last logged set, the set count off the settings and the pause off the
+         * journal have no say in it. They are not merely overridden here, they are never
+         * fetched: the one variable left before a strict run is the plate, and the caller has
+         * already answered that.
+         */
+        scheduledRun(start.exercise)?.let { schedule ->
+            timer.start(schedule, start.exercise.id, RunOrigin.EXERCISE, start.side)
+            return
+        }
+
         viewModelScope.launch {
+            /*
+             * A STRICT schedule is run exactly as it was written, and nothing about it is
+             * rebuilt (§18.15).
+             *
+             * The path below this is the "simple pair" one: it takes the exercise's two
+             * numbers and multiplies them out by a rep count guessed from the last set and a
+             * set count from the settings. That is right when the schedule really is a pair —
+             * it carries no rep or set count of its own, so they have to come from somewhere —
+             * and it is destructive for anything richer. It reads only the FIRST BLOCK, so a
+             * schedule of "hang 7 s, rest 3 s, six times, four sets, three minutes between"
+             * came out as a single 7:3 pair repeated by whatever the settings happened to say,
+             * with a second block or a second group dropped on the floor and no sign anywhere
+             * that anything had been lost.
+             *
+             * Its own `prepareSec` is kept rather than overridden from the settings for the
+             * same reason: the lead-in is one of the timings the strict branch promises to fix.
+             */
+            /*
+             * THE SAME TEST as the one above, asked of the database rather than of the ref.
+             *
+             * The two exist because the ref may not carry a resolved schedule — a caller that
+             * built one by hand, or a catalog whose library has not been read into
+             * `programsById` yet — and this is the backstop for exactly that. They must never
+             * disagree about which branch an exercise is on, so both ask `scheduleKindOf`
+             * (domain/HoldSchedule.kt) and neither carries a rule of its own. This one used to
+             * ask `!isSimplePair()` instead, which is the same answer for every schedule with
+             * any work in it and a different one for an empty schedule — see that function's
+             * own note on why an empty schedule is not strict.
+             */
+            val stored = repo.exercise(start.exercise.id)?.protocolProgramId
+                ?.let { programRepo.programById(it) }
+            scheduledRunOf(stored, start.exercise.name, start.exercise.id)?.let { schedule ->
+                timer.start(schedule, start.exercise.id, RunOrigin.EXERCISE, start.side)
+                return@launch
+            }
+
             val events = repo.allEvents()
             val settings = timerSettings.value
             val reps = lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
@@ -855,6 +993,13 @@ class MainViewModel(
         viewModelScope.launch { programRepo.save(program) }
     }
 
+    /**
+     * Removes a program from the library. A program that is some exercise's schedule is
+     * refused by the repository and the answer is dropped here on purpose: the only screen
+     * that calls this draws no delete button for such a row (`ui/screens/TimerScreen.kt`), so
+     * a refusal reaching this point would be a bug elsewhere and not something to report to
+     * someone who never asked.
+     */
     fun deleteProgram(id: Long) {
         viewModelScope.launch { programRepo.delete(id) }
     }

@@ -228,6 +228,21 @@ class FloorController internal constructor(
     }
 
     /**
+     * Takes off every rest of ONE exercise, whichever card it belongs to.
+     *
+     * The blunt twin of [dismiss], for the callers that are removing the exercise itself rather
+     * than one of its cards: a single-entry card deleted from a day, and every card of a
+     * workout being deleted whole. There the side is not known (a day card groups by exercise,
+     * not by hand) and leaving the other hand's countdown alive would be the very bug this is
+     * closing — a rest still ticking, and speaking, for something no longer in the log (§23.A2).
+     */
+    @Synchronized
+    fun dismissAllOf(exerciseId: Long) {
+        publish(_floors.value.filterNot { it.exerciseId == exerciseId })
+        advance()
+    }
+
+    /**
      * Takes off every rest that is already over, leaving the ones still counting.
      *
      * What the button on the notification does, and the only bulk operation offered there:

@@ -32,6 +32,7 @@ import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.SetCancel
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
+import xyz.oleolegka.gachimuchi.domain.isBackdated
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_AMENDED
 import xyz.oleolegka.gachimuchi.domain.TYPE_ENTRY_DELETED
 import xyz.oleolegka.gachimuchi.domain.TYPE_HOLD_SET
@@ -580,7 +581,7 @@ class ActivityRepository(private val db: AppDatabase) {
      * it needs a `Context` this class is deliberately never handed (see
      * [xyz.oleolegka.gachimuchi.data.GalleryStore] for the same split). The caller is expected
      * to have already copied the new file in, and to
-     * remove the old one after this returns; see `ui/components/ExerciseEditor.kt`, the only
+     * remove the old one after this returns; see `ui/screens/EditExerciseScreen.kt`, the only
      * caller, for where that happens.
      */
     suspend fun setPicture(exerciseId: Long, pictureId: String?) =
@@ -882,8 +883,30 @@ class ActivityRepository(private val db: AppDatabase) {
         workSec: Double? = null,
         restSec: Double? = null,
         defaultRestSec: Int? = null,
+        /**
+         * "Done one side at a time" (§18.2), as answered by whoever is creating this.
+         *
+         * Written on the row this call INSERTS and never onto one it merely finds. A found
+         * row is an exercise that already exists with its own history, and what it says about
+         * itself is its own: silently flipping it here would split or re-merge its records
+         * from a screen that thought it was creating something. Correcting an existing one is
+         * the edit screen's job — see `ui/screens/EditExerciseScreen.kt`.
+         */
+        oneSided: Boolean = false,
+        /**
+         * An existing library program to be led by, INSTEAD of [workSec]/[restSec] describing
+         * a new one.
+         *
+         * It takes precedence when both arrive, and it goes into the identity key exactly as a
+         * generated one would — the exercise is "these hangs on THAT protocol" either way. A
+         * program id that no longer resolves is treated as no protocol at all rather than
+         * failing the creation: the row still gets made, with the same "no protocol" that a
+         * plain strength exercise has.
+         */
+        protocolProgramId: Long? = null,
     ): Long {
-        val program = resolveOrCreateProtocolProgram(name, workSec, restSec)
+        val program = protocolProgramId?.let { programRepo.programById(it) }
+            ?: resolveOrCreateProtocolProgram(name, workSec, restSec)
         val key = exerciseIdentityKey(name, form.code, program?.uid)
         db.exercises().byIdentityKey(key)?.let { found ->
             if (defaultRestSec != null) setDefaultRest(found.id, defaultRestSec)
@@ -896,6 +919,7 @@ class ActivityRepository(private val db: AppDatabase) {
                 name = name, form = form.code, createdAt = now(),
                 protocolProgramId = program?.id,
                 defaultRestSec = defaultRestSec,
+                oneSided = oneSided,
                 identityKey = key,
             )
         )
@@ -952,9 +976,9 @@ class ActivityRepository(private val db: AppDatabase) {
 
     // --- the protocol program a plain work:rest pair resolves to (requirement 3) ----------
     //
-    // The exercise create/edit dialogs still ask for two plain numbers, Work and Rest — see
-    // ui/screens/ExercisePicker.kt's CreateExerciseForm and ui/components/ExerciseEditor.kt's
-    // EditExerciseDialog, neither of which changed shape for this. All of the "an exercise's
+    // Creating an exercise still asks for two plain numbers, Work and Rest — see
+    // ui/screens/ExercisePicker.kt's CreateExerciseForm; correcting one shows the same pair as
+    // a fixed fact (ui/screens/EditExerciseScreen.kt). Neither changed shape for this. All of the "an exercise's
     // protocol is a library program now" logic lives here instead, so that a person filling in
     // two boxes gets a program in the library for free and never sees one being built.
 
@@ -982,7 +1006,15 @@ class ActivityRepository(private val db: AppDatabase) {
         programRepo.allPrograms().firstOrNull { it.isMinimalProtocol(workInt, restInt) }?.let { return it }
         val id = programRepo.save(
             WorkoutProgram(
-                name = "$exerciseName protocol",
+                /*
+                 * "schedule", the owner's own word for the timed scenario of a hold (decisions
+                 * §18.15), and the word the library now files these under. It used to say
+                 * "protocol", which under a heading reading "Exercise schedules" was two words
+                 * for one thing. Only NEW rows: the names already written stay as they are —
+                 * identity is keyed on uid, never on the name, so a mass rewrite of stored data
+                 * would buy a caption and risk a migration.
+                 */
+                name = "$exerciseName schedule",
                 prepareSec = PREPARE_DEFAULT_SEC,
                 category = "Protocols",
                 groups = listOf(
@@ -1122,13 +1154,34 @@ class ActivityRepository(private val db: AppDatabase) {
      * become the same two statements, and no path leaves a stale row behind. It follows the
      * refusals — a draft that is not storable writes no exercises either, and neither does
      * an edit of a slot that has been deleted in the meantime.
+     *
+     * ── [today], and why the floor on backdating is repeated here ────────────────
+     * "A plan cannot be put on a day already gone" (domain/Schedule.kt's `isBackdated`) used
+     * to be enforced by ONE disabled button in one dialog, which is not where a rule about
+     * what may be stored belongs: every other refusal in this method is made twice on
+     * purpose, and this one was made once. Passing the day makes the database the last word
+     * on it as well, so a second screen — or the same screen composed against a stale
+     * "today" — cannot write what the first one refuses.
+     *
+     * A null [today] means "no floor", and that is for the callers who legitimately have no
+     * business asking: the tests, and anything replaying a plan that already exists. A
+     * RESTORE does not come through here at all (see data/JournalBackup.kt, which writes the
+     * rows itself), because a backup's plans are history and must come back exactly as they
+     * left, past anchors included.
      */
-    suspend fun saveSlot(draft: SlotDraft, id: Long? = null): Long? {
+    suspend fun saveSlot(draft: SlotDraft, id: Long? = null, today: LocalDate? = null): Long? {
         // aliased on import: this file also declares a SlotEntity.toSlot of its own
         val slot = draft.draftToSlot(id ?: 0L) ?: return null
         // the field write and the composition rewrite as one act — see [writeSlotExercises]
         // for what a process dying BETWEEN the two of them would leave behind
         return db.withTransaction {
+            // read inside the transaction: the anchor being compared against has to be the
+            // one this write is about to replace, not one from a moment earlier
+            val existing = id?.let { db.slots().byId(it) }
+            if (id != null && existing == null) return@withTransaction null
+            if (today != null && draft.isBackdated(today, was = existing?.anchorDate)) {
+                return@withTransaction null
+            }
             val savedId = if (id == null) {
                 createSlot(slot.name, slot.atTime, slot.repeatRule, slot.anchorDate)
             } else {

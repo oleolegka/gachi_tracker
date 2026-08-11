@@ -44,6 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.HeatmapDay
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtShortMonth
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.LocalDate
 
 /**
@@ -91,7 +92,7 @@ fun ActivityHeatmapView(
     Column(modifier) {
         Legend(heatmap.levels)
 
-        Row(Modifier.fillMaxWidth().padding(top = 9.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = Spacing.Line)) {
             WeekdayGutter(dayStyle)
             Box(Modifier.weight(1f).horizontalScroll(scroll)) {
                 val gridWidth = HeatmapMetrics.widthFor(heatmap.weeks)
@@ -167,7 +168,7 @@ fun ActivityHeatmapView(
                 ?: "Tap a day to see what was logged",
             fontSize = 11.sp,
             color = colors.inkMuted,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = Spacing.Line),
         )
     }
 }
@@ -223,17 +224,17 @@ private fun Legend(levels: Int) {
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Less", fontSize = 10.sp, color = colors.inkMuted, modifier = Modifier.padding(end = 4.dp))
+        Text("Less", fontSize = 10.sp, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
         for (level in 0..levels) {
             Box(
                 Modifier
-                    .padding(end = 3.dp)
+                    .padding(end = Spacing.Tight)
                     .size(11.dp)
                     .clip(RoundedCornerShape(3.dp))
                     .background(colors.forHeatmapLevel(level))
             )
         }
-        Text("More", fontSize = 10.sp, color = colors.inkMuted, modifier = Modifier.padding(start = 1.dp))
+        Text("More", fontSize = 10.sp, color = colors.inkMuted, modifier = Modifier.padding(start = Spacing.Tight))
     }
 }
 
@@ -241,8 +242,8 @@ private fun Legend(levels: Int) {
 @Composable
 fun ActivityHeatmapCard(heatmap: Heatmap, today: LocalDate, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
-    GachiCard(modifier.fillMaxWidth(), radius = 16.dp) {
-        Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 12.dp)) {
+    GachiCard(modifier.fillMaxWidth()) {
+        Column(Modifier.padding(Spacing.Inset)) {
             Text(
                 "Activity over the year",
                 fontSize = 14.sp,
@@ -253,7 +254,7 @@ fun ActivityHeatmapCard(heatmap: Heatmap, today: LocalDate, modifier: Modifier =
                 "all forms - tap a day",
                 fontSize = 11.sp,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
+                modifier = Modifier.padding(top = Spacing.Tight, bottom = Spacing.Inset),
             )
             ActivityHeatmapView(heatmap, today)
             if (heatmap.totalActivities == 0) {
@@ -265,7 +266,7 @@ fun ActivityHeatmapCard(heatmap: Heatmap, today: LocalDate, modifier: Modifier =
                     fontSize = 12.sp,
                     color = colors.inkMuted,
                     lineHeight = 17.sp,
-                    modifier = Modifier.padding(top = 10.dp),
+                    modifier = Modifier.padding(top = Spacing.Line),
                 )
             }
         }

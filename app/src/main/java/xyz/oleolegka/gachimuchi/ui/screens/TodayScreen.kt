@@ -13,14 +13,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.DraftSummary
 import xyz.oleolegka.gachimuchi.domain.dayCards
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.DayActions
 import xyz.oleolegka.gachimuchi.ui.components.DayCardList
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -54,6 +55,8 @@ fun TodayScreen(
     today: LocalDate,
     actions: DayActions,
     modifier: Modifier = Modifier,
+    /** The workout being composed, when there is one — see [DraftSummary]. */
+    draft: DraftSummary? = null,
 ) {
     val colors = LocalGachiColors.current
 
@@ -64,14 +67,17 @@ fun TodayScreen(
      * calendar makes, and one recomposition away from correct.
      */
     val now: LocalDateTime = remember(state.events, state.slots, today) { LocalDateTime.now() }
-    val day = remember(state.events, state.slots, today, now) {
-        dayCards(state.events, state.slots, today, today, now)
+    val day = remember(state.events, state.slots, today, now, draft) {
+        dayCards(state.events, state.slots, today, today, now, draft)
     }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = PaddingValues(
+            start = Spacing.Block, end = Spacing.Block,
+            top = Spacing.Line, bottom = Spacing.Cards,
+        ),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Block),
     ) {
         item {
             /*
@@ -83,14 +89,20 @@ fun TodayScreen(
              * could make that answer untrue by accident. The demo is gone entirely now, and
              * an empty day says what to do rather than being padded out with invented sets.
              */
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+            ) {
                 Text(
                     today.format(weekdayDateFormat),
-                    fontSize = 13.sp,
+                    fontSize = TextSize.Title,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                Text(" - ${today.year}", fontSize = 13.sp, color = colors.inkSecondary)
+                // the year is the least of the three facts here and is set as such, rather than
+                // joined to the date with a dash and given the same weight as the weekday
+                Text("${today.year}", fontSize = TextSize.Meta, color = colors.inkMuted)
             }
         }
 

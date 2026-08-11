@@ -373,12 +373,19 @@ fun holdSetsFromRun(
     }
 }
 
-/** "3 sets - 6 + 6 + 3 efforts of 7 s", the line the offer is read from. */
+/**
+ * "6 + 6 + 3 efforts of 7 s", the line the offer is read from.
+ *
+ * IT DOES NOT COUNT THE SETS. It used to open with "3 sets - ", and the offer then said how
+ * many sets it was about three times over: in the title, here, and on the button. The button
+ * is the one that keeps it (`ui/components/RunLogDialog.kt`), because that is where the
+ * number is live — turn a set down to zero and it is not written, and the button says so
+ * before it is pressed. This line's own job is the SHAPE of the run, which the pluses show.
+ */
 fun runSummaryLine(sets: List<CompletedSet>): String {
     val live = sets.filter { it.reps > 0 }
     if (live.isEmpty()) return "Nothing was completed."
     val counts = live.joinToString(" + ") { it.reps.toString() }
-    val setWord = if (live.size == 1) "set" else "sets"
     val effortWord = if (live.sumOf { it.reps } == 1) "effort" else "efforts"
-    return "${live.size} $setWord - $counts $effortWord of ${live.first().workSec} s"
+    return "$counts $effortWord of ${live.first().workSec} s"
 }

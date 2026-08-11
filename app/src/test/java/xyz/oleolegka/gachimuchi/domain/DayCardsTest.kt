@@ -123,7 +123,8 @@ class DayCardsTest {
         slots: List<Slot> = emptyList(),
         date: LocalDate = today,
         now: LocalDateTime = noon(today),
-    ) = dayCards(events, slots, date, today, now)
+        draft: DraftSummary? = null,
+    ) = dayCards(events, slots, date, today, now, draft)
 
     // --- an empty day ------------------------------------------------------------------
 
@@ -154,7 +155,8 @@ class DayCardsTest {
         assertEquals(DayCardKind.PLANNED, card.kind)
         assertEquals("Gym", card.title)
         assertEquals("18:00", card.timeLabel)
-        assertEquals("not started yet", card.subtitle)
+        assertEquals("plan · 18:00", card.metaLine)
+        assertEquals("not started", card.detailLine)
         assertEquals(DayCardAction.START, card.action)
         assertEquals(7L, card.slotId)
         assertNull(card.workoutId)
@@ -168,7 +170,8 @@ class DayCardsTest {
 
         val card = day.cards.single()
         assertEquals(DayCardKind.PLANNED, card.kind)
-        assertEquals("missed - nothing was recorded", card.subtitle)
+        assertEquals("missed · nothing was recorded", card.detailLine)
+        assertTrue("and is marked as missed, for the spine", card.missed)
         // the old rule refused to log against a past slot because logging wrote today's
         // date; a workout carries its own date now, so the offer is honest
         assertEquals(DayCardAction.START, card.action)
@@ -288,13 +291,84 @@ class DayCardsTest {
         assertEquals("Fingerboard 20 mm", fingers.title)
         // five sets, one card: without this the whole point of the screen is lost the first
         // time somebody logs a real set of sets
-        assertEquals("outside a workout - 5 entries", fingers.subtitle)
+        assertEquals("outside a workout · 19:00 - 19:20", fingers.metaLine)
+        assertEquals("5 sets", fingers.detailLine)
         assertEquals("19:00 - 19:20", fingers.timeLabel)
         assertEquals(DayCardAction.OPEN, fingers.action)
         assertEquals(fingerboard.id, fingers.exerciseId)
 
-        assertEquals("outside a workout - 1 entry", day.cards[1].subtitle)
+        assertEquals("1 set", day.cards[1].detailLine)
         assertEquals("20:00", day.cards[1].timeLabel)
+    }
+
+    /*
+     * §23.A1: the card has to name the rows it stands for, or there is no way to delete the
+     * object — only a way to empty it out one entry at a time until it disappears by itself.
+     */
+    @Test
+    fun `a loose card carries every row it stands for, so it can be removed whole`() {
+        val iso = today.toString()
+        val rows = listOf(set(fingerboard, iso, at = "19:00"), set(fingerboard, iso, at = "19:05"))
+        val day = cardsOf(rows + set(stretching, iso, at = "20:00"))
+
+        assertEquals(rows.map { it.id }, day.cards.first().entryIds)
+        // and only its own: the other exercise's row is on the other card
+        assertEquals(1, day.cards[1].entryIds.size)
+    }
+
+    /** A weigh-in names no exercise and still has to be deletable — the rows are what it has. */
+    @Test
+    fun `a weigh-in card carries its row even though it names no exercise`() {
+        val row = weighIn(today.toString())
+        val card = cardsOf(listOf(row)).cards.single()
+
+        assertNull(card.exerciseId)
+        assertEquals(listOf(row.id), card.entryIds)
+    }
+
+    // --- the workout being composed (§23.A3) --------------------------------------------
+
+    @Test
+    fun `a draft is a card of its own day, and says it has not been started`() {
+        val day = cardsOf(emptyList(), draft = DraftSummary(today.toString(), "Legs", 3))
+
+        val card = day.cards.single()
+        assertEquals(DayCardKind.DRAFT, card.kind)
+        assertEquals("Legs", card.title)
+        assertEquals("draft · not started", card.metaLine)
+        assertEquals("3 exercises · nothing recorded", card.detailLine)
+        assertEquals(DayCardAction.RESUME, card.action)
+        // §13.1 is untouched: nothing about a draft is in the journal, so nothing on the day
+        // reads as a workout in progress
+        assertEquals("", card.timeLabel)
+    }
+
+    @Test
+    fun `a draft with nothing in it yet is still a card`() {
+        val card = cardsOf(emptyList(), draft = DraftSummary(today.toString(), null, 0)).cards.single()
+
+        assertEquals("Workout", card.title)
+        assertEquals("draft · not started", card.metaLine)
+        assertEquals("nothing added yet", card.detailLine)
+    }
+
+    @Test
+    fun `a draft appears on its own day and on no other`() {
+        val draft = DraftSummary(today.toString(), "Legs", 1)
+
+        assertTrue(cardsOf(emptyList(), date = yesterday, draft = draft).isEmpty)
+        assertTrue(cardsOf(emptyList(), date = tomorrow, draft = draft).isEmpty)
+    }
+
+    @Test
+    fun `a draft never pushes what is already recorded down the day`() {
+        val iso = today.toString()
+        val day = cardsOf(
+            listOf(set(fingerboard, iso, at = "19:00")),
+            draft = DraftSummary(iso, "Legs", 1),
+        )
+
+        assertEquals(listOf(DayCardKind.SINGLE, DayCardKind.DRAFT), day.cards.map { it.kind })
     }
 
     /**
@@ -315,7 +389,7 @@ class DayCardsTest {
         val day = cardsOf(listOf(first, second, fixed, marker))
 
         val card = day.cards.single()
-        assertEquals("outside a workout - 2 entries", card.subtitle)
+        assertEquals("2 sets", card.detailLine)
         // the 19:00 entry still happened at 19:00 - fixing a typo a week later must not read
         // as if that set had never been timed at all
         assertEquals("19:00 - 19:05", card.timeLabel)
@@ -357,12 +431,13 @@ class DayCardsTest {
         // nobody named it, so it is shown by its time and the label is not repeated
         assertEquals("08:00 - 08:30", first.title)
         assertEquals("", first.timeLabel)
-        assertEquals("2 exercises, 3 sets", first.subtitle)
+        assertEquals("2 exercises · 3 sets", first.detailLine)
         assertEquals(DayCardAction.OPEN, first.action)
         assertEquals(morning.id, first.workoutId)
 
         assertEquals(DayCardKind.RUNNING, second.kind)
-        assertEquals("in progress - 1 exercise, 1 set", second.subtitle)
+        assertEquals("in progress", second.metaLine)
+        assertEquals("1 exercise · 1 set", second.detailLine)
         assertEquals(DayCardAction.CONTINUE, second.action)
     }
 
@@ -372,7 +447,8 @@ class DayCardsTest {
         val card = cardsOf(listOf(start)).cards.single()
 
         assertEquals(DayCardKind.RUNNING, card.kind)
-        assertEquals("in progress - nothing recorded yet", card.subtitle)
+        assertEquals("in progress", card.metaLine)
+        assertEquals("nothing recorded yet", card.detailLine)
     }
 
     @Test
@@ -387,8 +463,8 @@ class DayCardsTest {
         val card = cardsOf(listOf(start, added)).cards.single()
 
         // the workout HAS the exercise (§13.2: the empty blocks are the feature), so the
-        // subtitle says one exercise and no sets rather than pretending the workout is empty
-        assertEquals("in progress - 1 exercise, 0 sets", card.subtitle)
+        // detail line says one exercise and no sets rather than pretending the workout is empty
+        assertEquals("1 exercise · 0 sets", card.detailLine)
     }
 
     // --- a mixed day -------------------------------------------------------------------
@@ -435,7 +511,7 @@ class DayCardsTest {
         // the plan is last because its window has passed and nothing was recorded near it;
         // it is still on the list, because a plan that quietly disappears is a plan nobody
         // learns anything from
-        assertEquals("missed - nothing was recorded", day.cards.last().subtitle)
+        assertEquals("missed · nothing was recorded", day.cards.last().detailLine)
     }
 
     @Test
@@ -491,7 +567,9 @@ class DayCardsTest {
         assertFalse("a set you have not done yet is not a journal entry", day.canRecord)
         val card = day.cards.single()
         assertEquals(DayCardKind.PLANNED, card.kind)
-        assertEquals("planned", card.subtitle)
+        // a day still ahead has not failed to start anything, so it is not told that it has
+        assertEquals("plan · 18:00", card.metaLine)
+        assertEquals("", card.detailLine)
         assertEquals(DayCardAction.NONE, card.action)
     }
 
@@ -511,16 +589,20 @@ class DayCardsTest {
 
         val cards = cardsOf(events)
         val workout = cards.cards.first { it.kind == DayCardKind.RUNNING }
-        assertNotNull(workout.recordLine)
+        assertNotNull(workout.record)
+        assertEquals("Record", workout.record!!.label)
         assertTrue(
             "one record is worth spelling out: the number is the news",
-            workout.recordLine!!.startsWith("Record: estimated 1RM"),
+            workout.record!!.value.startsWith("estimated 1RM"),
         )
         // the baseline sets broke nothing, so their cards say nothing about records
-        assertTrue(cards.cards.filter { it.kind == DayCardKind.SINGLE }.all { it.recordLine == null })
+        assertTrue(cards.cards.filter { it.kind == DayCardKind.SINGLE }.all { it.record == null })
 
         val two = cardsOf(events + set(squat, iso, start.id, at = "18:20", weightKg = 120.0))
-        assertEquals("2 records", two.cards.first { it.kind == DayCardKind.RUNNING }.recordLine)
+        assertEquals(
+            DayCardRecord("Records", "2"),
+            two.cards.first { it.kind == DayCardKind.RUNNING }.record,
+        )
     }
 
     // --- what belongs to which day -----------------------------------------------------
@@ -559,6 +641,6 @@ class DayCardsTest {
             row(TYPE_SET_CANCEL, payloadJson.encodeToString(SetCancel(mistake.id)), "${iso}T09:01:00"),
             set(bench, iso, at = "09:05"),
         )
-        assertEquals("outside a workout - 1 entry", cardsOf(events).cards.single().subtitle)
+        assertEquals("1 set", cardsOf(events).cards.single().detailLine)
     }
 }

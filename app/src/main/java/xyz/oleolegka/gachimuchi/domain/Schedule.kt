@@ -631,8 +631,10 @@ fun problemText(problem: SlotProblem): String = when (problem) {
 }
 
 /**
- * Whether [today] is why this draft cannot be saved from the EDITOR — a day already gone,
- * as opposed to something wrong with a field (see [SlotProblem.DATE_IN_PAST]).
+ * Whether this draft is trying to PUT a plan on a day already gone, which is the one thing
+ * the editor refuses (see [SlotProblem.DATE_IN_PAST]).
+ *
+ * [was] is the anchor the slot already had, or null when there is no slot yet — a new plan.
  *
  * ── Reported bugs, and why the fix is here ───────────────────────────────────────
  * "Nailing a plan onto yesterday" turned out to be two bugs with one cause: the anchor date
@@ -641,19 +643,33 @@ fun problemText(problem: SlotProblem): String = when (problem) {
  * closed it — a plan added after the fact IS a way to manufacture one). And a REPEATING slot
  * anchored on a past day made every past occurrence of it "planned" as well, because
  * [occursOn] has always started counting from the anchor, not from today — it was never
- * wrong, the anchor it was handed was. Refusing an anchor before today closes both at once:
- * the earliest a newly saved slot can occur is today, whatever the rule says.
+ * wrong, the anchor it was handed was.
+ *
+ * ── Why an anchor that has not moved is not backdated ────────────────────────────
+ * The first cut of this rule compared the anchor with today and stopped there, which locked
+ * up every plan that had been running for a while: "Gym, every week" set up three weeks ago
+ * IS anchored three weeks ago, so its editor opened with Save already dead and the session
+ * could not be renamed, retimed, filled in or moved forward — reported from the phone as the
+ * calendar being stuck in the past (2026-08-11).
+ *
+ * The floor is on the ACT, not on the value: a plan may not be created on a day gone, and an
+ * existing one may not be moved onto one. An anchor that is simply where it has always been
+ * is history, and refusing to save around it removes nothing from the past — those
+ * occurrences exist either way — while taking away the only means of correcting them.
  *
  * ── Kept apart from [problem] ─────────────────────────────────────────────────────
- * [problem] is also what [toSlot] checks, and [toSlot] has no "today" of its own — it is
- * reached by more than the screen (data/ActivityRepository.kt's `saveSlot` calls it
- * directly, on drafts built outside any dialog). "Plans cannot be backdated" is the
- * EDITOR's own rule about what a person is doing right now, not a property every caller of
- * [toSlot] has to prove, so only the screen asks this question and only the screen enforces
- * the answer.
+ * [problem] is also what [toSlot] checks, and [toSlot] has no "today" of its own. This
+ * question needs two facts a draft does not carry — what day it is, and what the row said
+ * before — so it is asked by the two places that hold them: the editor, and
+ * data/ActivityRepository.kt's `saveSlot`, which enforces it again on the way to the
+ * database so that the answer does not depend on a screen having asked.
  */
-fun SlotDraft.isBackdated(today: LocalDate): Boolean =
-    runCatching { LocalDate.parse(anchorDate) }.getOrNull()?.isBefore(today) == true
+fun SlotDraft.isBackdated(today: LocalDate, was: String? = null): Boolean {
+    val anchor = runCatching { LocalDate.parse(anchorDate) }.getOrNull() ?: return false
+    if (!anchor.isBefore(today)) return false
+    // unchanged: the plan is not being put anywhere, it is being edited where it already is
+    return anchorDate != was
+}
 
 /** The draft as a storable slot, or null when [problem] says it is not one yet. */
 fun SlotDraft.toSlot(id: Long = 0L): Slot? {

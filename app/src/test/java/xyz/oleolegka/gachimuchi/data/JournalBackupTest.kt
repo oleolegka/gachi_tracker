@@ -523,8 +523,9 @@ class JournalBackupTest {
                 "the clashing import is kept apart rather than merged over it",
                 "Hangboard repeaters 7:3 (imported)" in names,
             )
-            assertTrue("Hangs protocol" in names)
-            assertTrue("One-arm hang protocol" in names)
+            // the name ensureExercise generates today - "schedule", the owner's word
+            assertTrue("Hangs schedule" in names)
+            assertTrue("One-arm hang schedule" in names)
             assertEquals(4, names.size)
         } finally {
             other.close()

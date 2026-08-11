@@ -67,7 +67,15 @@ fun niceScale(values: List<Double>, targetTicks: Int = 4, includeZero: Boolean =
         val pad = if (lo == 0.0) 1.0 else abs(lo) * 0.1
         lo -= pad
         hi += pad
-        if (includeZero) lo = minOf(lo, 0.0)
+        /*
+         * The padding may not carry the axis across zero when zero is the baseline. A single
+         * value of 0 used to come out as an axis of -1..1 with a gridline at -0.5 — half a bar
+         * chart below its own baseline, describing negative volume, which is not a quantity
+         * this app has. The padding is there to give a flat series a height, so it is taken
+         * on the side the data can actually reach.
+         */
+        if (includeZero && finite.all { it >= 0.0 }) lo = 0.0
+        else if (includeZero) hi = 0.0
     }
 
     val step = niceStep((hi - lo) / targetTicks.coerceAtLeast(1))

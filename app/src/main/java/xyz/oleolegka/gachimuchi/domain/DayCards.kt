@@ -43,6 +43,20 @@ enum class DayCardKind {
 
     /** Entries of one exercise recorded outside any workout. */
     SINGLE,
+
+    /**
+     * A workout composed but not started — exercises picked, nothing recorded, no start event.
+     *
+     * It is a card and not a workout because §13.1 is still in force: adding exercises does NOT
+     * start a workout, only the button or the first set does. It is a card AT ALL because of
+     * §23.A3 — leaving the screen used to throw the composition away, and a thing the user
+     * assembled disappearing without being asked is the one behaviour the owner ruled out
+     * outright ("we delete only when the user asks; we gave him a button").
+     *
+     * Unlike every other kind it is NOT folded out of the journal: nothing about it is written
+     * down. See [DraftSummary].
+     */
+    DRAFT,
 }
 
 /** What the card's primary tap does. */
@@ -55,6 +69,9 @@ enum class DayCardAction {
 
     /** Open what is behind the card, to look at it. */
     OPEN,
+
+    /** Go back into the workout being composed — see [DayCardKind.DRAFT]. */
+    RESUME,
 
     /** Nothing to do here — see [dayCards] for the two cases that produce it. */
     NONE,
@@ -72,12 +89,37 @@ data class DayCard(
     /** Stable within a day — the list key, and what the tests assert order on. */
     val key: String,
     val title: String,
-    val subtitle: String,
+    /**
+     * The first line under the title: WHAT this card is, and WHEN — "plan · 20:00",
+     * "outside a workout · 07:05", "in progress · 18:05 - 19:12".
+     *
+     * The time is in here rather than beside the title, which is where it used to be: at 360 dp
+     * a named workout and a clock reading were fighting over one line and the title wrapped.
+     * [timeLabel] is still carried on its own, because the raw reading is a fact about the day
+     * and this line is a sentence made of it.
+     */
+    val metaLine: String,
+    /**
+     * The second line: what is IN it — "3 exercises · 9 sets", "1 weigh-in", "not started".
+     *
+     * Empty is an ordinary answer (a plan on a future day has nothing to count), and the card
+     * then draws one meta line instead of two.
+     */
+    val detailLine: String,
     /** "18:20", "18:20 - 19:35", or "" when nothing on the card carries a usable clock time. */
     val timeLabel: String,
     val action: DayCardAction,
-    /** Records broken on this card, in one line, or null when there were none. */
-    val recordLine: String? = null,
+    /** Records broken on this card, or null when there were none. */
+    val record: DayCardRecord? = null,
+    /**
+     * A planned session whose window has closed with nothing recorded against it.
+     *
+     * Said in [detailLine] too, in words, and carried as a flag only so the card can also be
+     * told apart at a glance — a missed plan and an outstanding one are the same shape
+     * otherwise, and by the time you are reading the second line you have already decided
+     * which cards are worth reading.
+     */
+    val missed: Boolean = false,
     /** [DayCardKind.PLANNED]: the slot to start from. */
     val slotId: Long? = null,
     /** [DayCardKind.RUNNING] and [DayCardKind.DONE]: the workout to open. */
@@ -93,6 +135,54 @@ data class DayCard(
     val workoutName: String? = null,
     /** [DayCardKind.SINGLE]: the exercise its entries are about, when they name one. */
     val exerciseId: Long? = null,
+    /**
+     * [DayCardKind.SINGLE]: the journal rows the card stands for, so it can be removed WHOLE.
+     *
+     * Carried on the card rather than looked up again by the screen, because the grouping that
+     * decided which rows belong together happened here — a weigh-in has no exercise id to look
+     * anything up by, and a card the screen cannot name the rows of is a card with no way to
+     * delete it. That was the actual bug (§23.A1): the entries could be removed one at a time
+     * from the breakdown until the card evaporated, and the object itself had no removal at all.
+     */
+    val entryIds: List<Long> = emptyList(),
+)
+
+/**
+ * The good news of a card, in two parts so it can be drawn as one.
+ *
+ * Split rather than handed over as "Record: 7.5 kg × 7 s" because the news and the number are
+ * weighted differently on the card — the word is the quiet half and the value is the loud one —
+ * and a screen cannot take a joined string apart again without guessing where the seam was.
+ */
+data class DayCardRecord(
+    /** "Record", or "Records" when there was more than one. */
+    val label: String,
+    /** The record itself, or how many there were when spelling them all out would not fit. */
+    val value: String,
+)
+
+/**
+ * The workout being composed right now, as much of it as a day card needs to say.
+ *
+ * Deliberately not the draft itself: the draft is a ViewModel-held list of staged cards, and
+ * this file is a pure function over the journal. Passing a three-field summary keeps the
+ * dependency pointing the way it already does everywhere else, and makes the card testable
+ * without staging anything.
+ *
+ * ── What it costs, stated ───────────────────────────────────────────────────────
+ * A draft lives in memory only. It survives leaving the screen, switching tabs and coming back
+ * — which is the whole of §23.A3 — and it does NOT survive the process being killed. Making it
+ * survive that means writing it down, and there is nowhere in an append-only journal of FACTS
+ * to write a workout that has not happened; the honest place would be a table of its own, which
+ * is a schema change and a bigger piece of work than the bug asked for.
+ */
+data class DraftSummary(
+    /** The day it is being composed for, as the journal writes dates. */
+    val date: String,
+    /** What it was named on the way in, or null — shown exactly as a real workout's name is. */
+    val name: String?,
+    /** How many exercise cards are staged in it. Zero is an ordinary state. */
+    val exerciseCount: Int,
 )
 
 /** The whole day: its cards, and whether anything may still be recorded against it. */
@@ -143,6 +233,8 @@ fun dayCards(
     date: LocalDate,
     today: LocalDate,
     now: LocalDateTime,
+    /** The workout being composed, when there is one — see [DraftSummary]. */
+    draft: DraftSummary? = null,
 ): DayCards {
     val iso = date.toString()
     val canRecord = !date.isAfter(today)
@@ -175,6 +267,8 @@ fun dayCards(
     for (group in looseGroups(events, iso)) {
         rows += placedSingle(group, recordOf)
     }
+
+    if (draft != null && draft.date == iso) rows += placedDraft(draft)
 
     rows.sortWith(compareBy({ it.minute ?: Int.MAX_VALUE }, { it.rank }, { it.tiebreak }))
     return DayCards(date = iso, cards = rows.map { it.card }, canRecord = canRecord)
@@ -220,19 +314,61 @@ private fun placedPlan(status: SlotStatus, canRecord: Boolean): Placed = Placed(
         kind = DayCardKind.PLANNED,
         key = "slot:${status.slot.id}",
         title = status.name,
-        subtitle = planSubtitle(status, canRecord),
+        metaLine = joined("plan", status.atTime.orEmpty()),
+        detailLine = planDetail(status, canRecord),
         timeLabel = status.atTime.orEmpty(),
         // a day in the future has nothing to start: the set has not been done yet
         action = if (canRecord) DayCardAction.START else DayCardAction.NONE,
+        missed = status.state == SlotState.MISS,
         slotId = status.slot.id,
     ),
 )
 
-private fun planSubtitle(status: SlotStatus, canRecord: Boolean): String = when {
-    status.state == SlotState.MISS -> "missed - nothing was recorded"
-    !canRecord -> "planned"
-    else -> "not started yet"
+/**
+ * The second line of a plan.
+ *
+ * "not started" and nothing else — it used to read "not started yet" here and "not started" on
+ * the draft card three rows below, which is one state under two names on one screen (owner,
+ * 2026-08-11: "почему тут yet, ниже иначе написано?"). A day still ahead says nothing at all:
+ * "not started" is a complaint, and a session at eight tonight has not failed to start.
+ */
+private fun planDetail(status: SlotStatus, canRecord: Boolean): String = when {
+    status.state == SlotState.MISS -> joined("missed", "nothing was recorded")
+    !canRecord -> ""
+    else -> "not started"
 }
+
+/**
+ * The workout being composed, as a card.
+ *
+ * Undated on purpose — nothing has happened yet, so there is no clock reading to sort it by —
+ * and ranked with the FACTS rather than with the plans: it is the thing the user is in the
+ * middle of doing, and it belongs next to what is already recorded rather than below tonight's
+ * schedule. The tiebreak puts it last among undated facts, so it never pushes a real card down.
+ */
+private fun placedDraft(draft: DraftSummary): Placed = Placed(
+    minute = null,
+    rank = RANK_FACT,
+    tiebreak = Long.MAX_VALUE,
+    card = DayCard(
+        kind = DayCardKind.DRAFT,
+        key = "draft",
+        title = draft.name ?: "Workout",
+        // what it IS, in the same slot every other card says what it is. "draft" is a word the
+        // plan card does not use, which is what the dashed spine says a second time in colour
+        metaLine = joined("draft", "not started"),
+        // the count is what tells the user whether the thing they assembled is still assembled;
+        // "nothing recorded" is not a repetition of "not started" but the other half of it — a
+        // draft is exercises picked AND nothing written down
+        detailLine = if (draft.exerciseCount == 0) {
+            "nothing added yet"
+        } else {
+            joined(count(draft.exerciseCount, "exercise", "exercises"), "nothing recorded")
+        },
+        timeLabel = "",
+        action = DayCardAction.RESUME,
+    ),
+)
 
 private fun placedWorkout(
     workout: Workout,
@@ -262,10 +398,11 @@ private fun placedWorkout(
             // a workout nobody named is shown BY ITS TIME (§13: a name must never be a
             // condition of starting one), and the label is dropped so it is not said twice
             title = name ?: range.ifEmpty { "Workout" },
-            subtitle = workoutSubtitle(workout, running),
+            metaLine = joined(workoutState(workout, running), if (name != null) range else ""),
+            detailLine = workoutDetail(workout),
             timeLabel = if (name != null) range else "",
             action = if (running) DayCardAction.CONTINUE else DayCardAction.OPEN,
-            recordLine = recordLine(entries.map { it.id }, recordOf),
+            record = record(entries.map { it.id }, recordOf),
             slotId = workout.slotId,
             workoutId = workout.id,
             workoutName = name,
@@ -274,18 +411,31 @@ private fun placedWorkout(
 }
 
 /**
- * "3 exercises, 11 sets" — the state of the workout, which is what tells it apart from a
+ * Which of the three things a workout card is, in one word, or "" when it is none of them.
+ *
+ * The empty answer is not a gap: a workout that is neither the open one nor explicitly finished
+ * is what a session left hanging yesterday becomes, and calling that "finished" would be the
+ * card saying something the journal never recorded. It then shows its times and nothing else,
+ * which is exactly what is known about it.
+ */
+private fun workoutState(workout: Workout, running: Boolean): String = when {
+    running -> "in progress"
+    workout.finished -> "finished"
+    else -> ""
+}
+
+/**
+ * "3 exercises · 11 sets" — the state of the workout, which is what tells it apart from a
  * single entry at a glance. An exercise added and not yet done still counts: it is in the
  * workout, and the list inside the workout will show it.
  */
-private fun workoutSubtitle(workout: Workout, running: Boolean): String {
-    val body = if (workout.isEmpty) {
-        "nothing recorded yet"
-    } else {
-        "${count(workout.exercises.size, "exercise", "exercises")}, " +
-            count(workout.setCount, "set", "sets")
-    }
-    return if (running) "in progress - $body" else body
+private fun workoutDetail(workout: Workout): String = if (workout.isEmpty) {
+    "nothing recorded yet"
+} else {
+    joined(
+        count(workout.exercises.size, "exercise", "exercises"),
+        count(workout.setCount, "set", "sets"),
+    )
 }
 
 private fun placedSingle(group: LooseGroup, recordOf: Map<Long, RecordHit?>): Placed {
@@ -298,17 +448,14 @@ private fun placedSingle(group: LooseGroup, recordOf: Map<Long, RecordHit?>): Pl
             kind = DayCardKind.SINGLE,
             key = "single:${group.key}",
             title = group.name,
-            /*
-             * "entries", not "sets": what lands here is whatever was recorded on its own,
-             * and that includes a weigh-in and a check-in, neither of which is a set. The
-             * workout subtitle above says "sets" because a workout is made of them.
-             */
-            subtitle = "outside a workout - ${count(group.entries.size, "entry", "entries")}",
+            metaLine = joined("outside a workout", timeRange(times)),
+            detailLine = looseCount(group.entries),
             timeLabel = timeRange(times),
             // an entry that names no catalog exercise (a weigh-in) has no breakdown to open
             action = if (group.exerciseId != null) DayCardAction.OPEN else DayCardAction.NONE,
-            recordLine = recordLine(group.entries.map { it.id }, recordOf),
+            record = record(group.entries.map { it.id }, recordOf),
             exerciseId = group.exerciseId,
+            entryIds = group.entries.map { it.id },
         ),
     )
 }
@@ -378,17 +525,49 @@ private fun timeRange(times: List<String>): String {
 private fun count(n: Int, one: String, many: String): String = "$n ${if (n == 1) one else many}"
 
 /**
- * The records line of a card, or null.
+ * How many entries a loose card holds, COUNTED BY WHAT THEY ARE: "1 weigh-in", "3 sets".
+ *
+ * The generic word is the fallback and not the default (owner, 2026-08-11: "а почему бы и не
+ * написать, что это взвешивание? Мы ведь знаем, что это такое"). A card generalises only where
+ * generalising is the truth — a group holding two kinds of thing at once, which grouping by
+ * exercise makes rare but not impossible.
+ *
+ * Cardio keeps "entry": a 5 km run is not a set of anything, and there is no word covering a
+ * run, a row and a bike ride that is shorter than the generic one.
+ */
+private fun looseCount(entries: List<ActivityEvent>): String {
+    val nouns = entries.map { entryNoun(it.form) }.distinct()
+    val (one, many) = nouns.singleOrNull() ?: ("entry" to "entries")
+    return count(entries.size, one, many)
+}
+
+/** What one recorded thing is called, singular to plural, or the generic pair for "no word". */
+private fun entryNoun(form: ActivityForm): Pair<String, String> = when (form) {
+    is Bodyweight -> "weigh-in" to "weigh-ins"
+    is Tick -> "check-in" to "check-ins"
+    is StrengthSet, is HoldSet, is Duration -> "set" to "sets"
+    is Cardio -> "entry" to "entries"
+}
+
+/**
+ * The record of a card, or null.
  *
  * One record is worth spelling out, since the number is the whole news. Several are worth
  * only counting: three record lines on a card push everything else off the screen, and the
  * detail behind the card has them all anyway.
  */
-private fun recordLine(eventIds: List<Long>, recordOf: Map<Long, RecordHit?>): String? {
+private fun record(eventIds: List<Long>, recordOf: Map<Long, RecordHit?>): DayCardRecord? {
     val hits = eventIds.mapNotNull { recordOf[it] }
     return when (hits.size) {
         0 -> null
-        1 -> "Record: ${hits.single().text}"
-        else -> "${hits.size} records"
+        1 -> DayCardRecord("Record", hits.single().text)
+        else -> DayCardRecord("Records", "${hits.size}")
     }
 }
+
+/** The separator between the parts of a line on a card. */
+private const val DOT = " · "
+
+/** The non-empty parts of a card line, joined — an absent time leaves no dangling dot. */
+private fun joined(vararg parts: String): String =
+    parts.filter { it.isNotEmpty() }.joinToString(DOT)

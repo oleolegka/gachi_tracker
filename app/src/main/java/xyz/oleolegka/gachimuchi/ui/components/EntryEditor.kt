@@ -35,6 +35,7 @@ import xyz.oleolegka.gachimuchi.domain.parsePace
 import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * Correcting or removing ONE entry that is already in the journal.
@@ -111,7 +112,7 @@ fun EntryEditorDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Line),
             ) {
                 Text(
                     entry.summaryLine(),
@@ -290,7 +291,7 @@ private fun IncompleteToggle(selected: Boolean, onToggle: () -> Unit) {
  */
 @Composable
 private fun SideChipsRow(selected: HoldSide?, onSelect: (HoldSide?) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
         HoldSide.entries.forEach { option ->
             FilterChip(
                 selected = selected == option,

@@ -181,7 +181,7 @@ class NavigationTest {
     @Test
     fun `back always reaches the exit, in a bounded number of presses`() {
         /*
-         * Seven is the ceiling over ALL flag combinations: six modes closed one at a time,
+         * Eight is the ceiling over ALL flag combinations: seven modes closed one at a time,
          * then one hop to the home tab. In the app itself at most THREE can be open at once —
          * the conductor over logging over a workout, which is a hang started from a card
          * inside a workout that was opened to look at — so the real worst case is four
@@ -194,7 +194,7 @@ class NavigationTest {
             while (current.back() != BackStep.LeaveApp) {
                 current = current.after(current.back())!!
                 presses++
-                assertTrue("back loops from $state", presses <= 7)
+                assertTrue("back loops from $state", presses <= 8)
             }
             assertEquals("back must end at the bare home tab, from $state", home(), current)
             // the combinations the app can actually produce, and from each of them the exit
@@ -202,6 +202,7 @@ class NavigationTest {
             val modes = listOf(
                 state.editingProgram, state.showingFormDetail, state.conducting,
                 state.logging, state.showingWorkout, state.showingDayEntries,
+                state.editingExercise,
             )
             if (modes.count { it } <= 1) {
                 assertTrue("$state should exit within two presses, took $presses", presses <= 2)
@@ -227,6 +228,7 @@ class NavigationTest {
         val tab: Tab,
         val conducting: Boolean = false,
         val showingDayEntries: Boolean = false,
+        val editingExercise: Boolean = false,
     )
 
     private fun home() = NavState(false, false, false, false, HomeTab)
@@ -235,6 +237,7 @@ class NavigationTest {
         editingProgram, showingFormDetail, logging, showingWorkout, tab,
         conducting = conducting,
         showingDayEntries = showingDayEntries,
+        editingExercise = editingExercise,
     )
 
     /**
@@ -245,6 +248,7 @@ class NavigationTest {
      * not part of navigation — it keeps counting whichever screen is in front of it.
      */
     private fun NavState.after(step: BackStep): NavState? = when (step) {
+        BackStep.CloseExerciseEdit -> copy(editingExercise = false)
         BackStep.CloseEditor -> copy(editingProgram = false)
         BackStep.CloseFormDetail -> copy(showingFormDetail = false)
         BackStep.CloseConductor -> copy(conducting = false)
@@ -263,13 +267,16 @@ class NavigationTest {
                     for (workout in listOf(false, true)) {
                         for (conducting in listOf(false, true)) {
                             for (entries in listOf(false, true)) {
-                                for (tab in Tab.entries) {
-                                    check(
-                                        NavState(
-                                            editor, detail, log, workout, tab, conducting, entries,
+                                for (correcting in listOf(false, true)) {
+                                    for (tab in Tab.entries) {
+                                        check(
+                                            NavState(
+                                                editor, detail, log, workout, tab, conducting,
+                                                entries, correcting,
+                                            )
                                         )
-                                    )
-                                    seen++
+                                        seen++
+                                    }
                                 }
                             }
                         }
@@ -277,7 +284,7 @@ class NavigationTest {
                 }
             }
         }
-        assertEquals(2 * 2 * 2 * 2 * 2 * 2 * Tab.entries.size, seen)
+        assertEquals(2 * 2 * 2 * 2 * 2 * 2 * 2 * Tab.entries.size, seen)
     }
 
     @Test
@@ -285,6 +292,7 @@ class NavigationTest {
         // they are compared by value in the handler; a data object that lost its identity
         // would make two branches of the when fire on the same press
         val all = listOf(
+            BackStep.CloseExerciseEdit,
             BackStep.CloseEditor,
             BackStep.CloseFormDetail,
             BackStep.CloseConductor,

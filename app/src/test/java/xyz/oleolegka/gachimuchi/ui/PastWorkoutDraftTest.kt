@@ -20,6 +20,7 @@ import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.TYPE_WORKOUT_STARTED
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
 
@@ -45,6 +46,7 @@ class PastWorkoutDraftTest {
     private lateinit var db: AppDatabase
     private lateinit var repo: ActivityRepository
     private lateinit var viewModel: MainViewModel
+    private lateinit var timer: TimerController
 
     /** Runs Room's executors inline — see RunLoggingChainTest for why this is what [settle] needs. */
     private val inline = java.util.concurrent.Executor { it.run() }
@@ -57,11 +59,13 @@ class PastWorkoutDraftTest {
             .setTransactionExecutor(inline)
             .build()
         repo = ActivityRepository(db)
-        viewModel = MainViewModel(repo, ProgramRepository(db), TimerController(context))
+        timer = TimerController(context)
+        viewModel = MainViewModel(repo, ProgramRepository(db), timer)
     }
 
     @After
     fun tearDown() {
+        timer.stop()
         context.getSharedPreferences("timer", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("floors", Context.MODE_PRIVATE).edit().clear().commit()
         db.close()
@@ -165,5 +169,79 @@ class PastWorkoutDraftTest {
 
         assertEquals(emptyList<Long>(), viewModel.draft.value!!.cards.map { it.exerciseId })
         assertEquals(before, repo.allEvents().size)
+    }
+
+    // --- a rest must not outlive the thing it was counting for (23.A2) --------------------
+
+    /** The card's own key: the ordinary case, and the one that already worked. */
+    @Test
+    fun `taking an exercise out of a workout stops the rest counting under it`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val workout = repo.startWorkout("2026-08-07")
+        repo.addExerciseToWorkout(workout, bench.id, restSec = 180)
+        timer.floors.start(bench.id, "Bench press", orderedMs = 180_000)
+
+        val card = buildWorkout(repo.allEvents(), workout)!!.exercises.single()
+        viewModel.removeWorkoutExercise(workout, card.addedEventIds, card.exerciseId, card.side)
+        settle()
+
+        assertEquals(emptyList<Long>(), timer.floors.floors.value.map { it.exerciseId })
+    }
+
+    /*
+     * The half that was missing. A floor is keyed by the side of the SET that started it and a
+     * card by the side of the row that added it; where those two disagree the card's own key
+     * finds nothing, and the countdown was left running with nothing on screen to stop it.
+     */
+    @Test
+    fun `a rest keyed differently from its card is stopped too, once the card is gone`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val workout = repo.startWorkout("2026-08-07")
+        repo.addExerciseToWorkout(workout, bench.id, restSec = 180)
+        // a side the card does not carry: exactly the mismatch the second pass exists for
+        timer.floors.start(bench.id, "Bench press", orderedMs = 180_000, side = HoldSide.LEFT.code)
+
+        val card = buildWorkout(repo.allEvents(), workout)!!.exercises.single()
+        viewModel.removeWorkoutExercise(workout, card.addedEventIds, card.exerciseId, card.side)
+        settle()
+
+        assertEquals(emptyList<Long>(), timer.floors.floors.value.map { it.exerciseId })
+    }
+
+    /** The other hand is still in the workout, so its own countdown is none of this act's business. */
+    @Test
+    fun `removing one hand of a one-sided exercise leaves the other hand counting`() = runTest {
+        val pistol = ref("Pistol squat", ExerciseForm.STRENGTH, oneSided = true)
+        val workout = repo.startWorkout("2026-08-07")
+        repo.addExerciseToWorkout(workout, pistol.id, restSec = 90, side = HoldSide.LEFT)
+        repo.addExerciseToWorkout(workout, pistol.id, restSec = 90, side = HoldSide.RIGHT)
+        timer.floors.start(pistol.id, "Pistol squat - left", orderedMs = 90_000, side = HoldSide.LEFT.code)
+        timer.floors.start(pistol.id, "Pistol squat - right", orderedMs = 90_000, side = HoldSide.RIGHT.code)
+
+        val left = buildWorkout(repo.allEvents(), workout)!!
+            .exercises.single { it.side == HoldSide.LEFT }
+        viewModel.removeWorkoutExercise(workout, left.addedEventIds, left.exerciseId, left.side)
+        settle()
+
+        assertEquals(listOf(HoldSide.RIGHT.code), timer.floors.floors.value.map { it.side })
+    }
+
+    /** Deleting the WHOLE workout: every card of it, and every rest of every card. */
+    @Test
+    fun `deleting a workout stops every rest it had running`() = runTest {
+        val bench = ref("Bench press", ExerciseForm.STRENGTH)
+        val squat = ref("Squat", ExerciseForm.STRENGTH)
+        val workout = repo.startWorkout("2026-08-07")
+        repo.addExerciseToWorkout(workout, bench.id, restSec = 180)
+        repo.addExerciseToWorkout(workout, squat.id, restSec = 120)
+        timer.floors.start(bench.id, "Bench press", orderedMs = 180_000)
+        timer.floors.start(squat.id, "Squat", orderedMs = 120_000)
+        // and one that has nothing to do with this workout, which must survive
+        timer.floors.start(999, "Stretching", orderedMs = 60_000)
+
+        viewModel.deleteWorkout(workout)
+        settle()
+
+        assertEquals(listOf(999L), timer.floors.floors.value.map { it.exerciseId })
     }
 }
