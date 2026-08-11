@@ -276,7 +276,7 @@ class SlotEditorTest : ScreenTest() {
         editor()
 
         compose.onNodeWithText("Add to the plan").assertIsNotEnabled()
-        inBody("Give the session a name, for example Gym or Fingerboard.").assertExists()
+        inBody("Give the session a name - Gym, Fingerboard.").assertExists()
     }
 
     @Test
