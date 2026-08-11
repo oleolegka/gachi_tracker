@@ -36,6 +36,8 @@ import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.loggingDay
 import xyz.oleolegka.gachimuchi.domain.looseWorkout
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.frozenScheduleIds
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.ui.components.DayActions
@@ -233,15 +235,17 @@ fun GachiApp(viewModel: MainViewModel) {
 
     /*
      * Every program some exercise's protocol currently IS, and the exercises that point at it
-     * — the UI-side mirror of ProgramRepository.isReferenced, computed here from state already
-     * loaded rather than by a second query, because both this screen's lock and TimerScreen's
-     * schedule section need the same answer on every recomposition of a live catalog. The
-     * enforcement itself lives in the repository (see save's own KDoc); this is only what
-     * decides which controls to show.
+     * — computed here from state already loaded rather than by a second query, because both
+     * this screen's lock and TimerScreen's schedule section need the same answer on every
+     * recomposition of a live catalog.
      *
      * A LIST of names per program, not one name: twins (a hang on 20 mm and the same hang on
      * 15 mm) deliberately share one schedule (decisions §18.15), and a row that named only the
      * first of them would read as if the other one had none.
+     *
+     * BEING A SCHEDULE AND BEING FROZEN ARE TWO FACTS NOW, and this is only the first: it is
+     * what files a program under the "Exercise schedules" heading and what makes a row say
+     * whose it is. Whether it may still be EDITED is [frozenProgramIds] below.
      */
     val scheduleOwners = remember(state.exercises) {
         val owners = LinkedHashMap<Long, MutableList<String>>()
@@ -251,7 +255,24 @@ fun GachiApp(viewModel: MainViewModel) {
         }
         owners.mapValues { it.value.toList() }
     }
-    val referencedProgramIds = scheduleOwners.keys
+    /*
+     * The UI-side mirror of ProgramRepository.isFrozen — the schedules that have had a set
+     * recorded against them and are therefore closed to editing and to deletion (§18.19).
+     *
+     * THE SAME DOMAIN FUNCTION THE REPOSITORY ASKS, not a second rule spelled out here: the
+     * editor showing a field the repository would then silently drop is the exact failure the
+     * owner named, and a screen with its own copy of the rule is how that happens. Folded once
+     * for the whole library rather than per program, and keyed on the journal as well as the
+     * catalog so that recording the first set of a hang closes its schedule on the spot.
+     */
+    val frozenProgramIds = remember(state.exercises, state.events) {
+        val owners = LinkedHashMap<Long, MutableList<ExerciseLink>>()
+        for (exercise in state.exercises) {
+            val programId = exercise.protocolProgramId ?: continue
+            owners.getOrPut(programId) { mutableListOf() } += ExerciseLink(exercise.uid, exercise.id)
+        }
+        frozenScheduleIds(state.events, owners.mapValues { it.value.toList() })
+    }
 
     /*
      * Opening the entry card. Kept current by rememberUpdatedState so the lambdas handed to
@@ -468,7 +489,7 @@ fun GachiApp(viewModel: MainViewModel) {
             initial = editorTarget.program,
             candidates = holdExercises,
             categories = programCategories,
-            locked = editorTarget.program?.id?.let { it != 0L && it in referencedProgramIds } == true,
+            locked = editorTarget.program?.id?.let { it != 0L && it in frozenProgramIds } == true,
             onSave = {
                 viewModel.saveProgram(it)
                 editing = null
@@ -797,6 +818,7 @@ fun GachiApp(viewModel: MainViewModel) {
                             state.exercises.associate { it.id to it.name }
                         },
                         scheduleOwners = scheduleOwners,
+                        frozenSchedules = frozenProgramIds,
                         onRunProgram = viewModel::runProgram,
                         onEditProgram = { editing = EditorTarget(it) },
                         onDeleteProgram = viewModel::deleteProgram,

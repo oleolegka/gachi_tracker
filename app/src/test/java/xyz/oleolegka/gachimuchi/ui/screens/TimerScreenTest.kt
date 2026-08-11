@@ -87,6 +87,7 @@ class TimerScreenTest : ScreenTest() {
         on: Boolean,
         programs: List<WorkoutProgram> = emptyList(),
         scheduleOwners: Map<Long, List<String>> = emptyMap(),
+        frozenSchedules: Set<Long> = scheduleOwners.keys,
     ) {
         val state = TimerUiState(
             enabled = on,
@@ -103,6 +104,7 @@ class TimerScreenTest : ScreenTest() {
                 programs = programs,
                 exerciseNames = mapOf(1L to "Hangs 20 mm"),
                 scheduleOwners = scheduleOwners,
+                frozenSchedules = frozenSchedules,
                 onRunProgram = { ran = it },
                 onEditProgram = {
                     editRequested++
@@ -284,11 +286,12 @@ class TimerScreenTest : ScreenTest() {
      * prohibition — the working agreement's own rule.
      */
     @Test
-    fun `a schedule row offers no delete button, and says why`() {
+    fun `a frozen schedule row offers no delete button, and says why`() {
         timer(
             on = true,
             programs = listOf(scheduleOfHangs),
             scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+            frozenSchedules = setOf(7L),
         )
 
         openMenuOf(scheduleOfHangs)
@@ -297,6 +300,30 @@ class TimerScreenTest : ScreenTest() {
         compose.onNodeWithText("Hide from this list").assertIsDisplayed()
         // the reason is under the section heading, said once for the whole section
         compose.onNodeWithText(SCHEDULES_NOTE).assertIsDisplayed()
+    }
+
+    /**
+     * The mild freeze on the screen (§18.19): a schedule nobody has recorded a set against is
+     * still filed under the schedules heading — it IS somebody's schedule — but the delete
+     * entry is there, because the repository would allow it. The two doors have to agree, and
+     * a menu entry the repository refuses is the failure this pair of tests exists to catch.
+     */
+    @Test
+    fun `a schedule with no sets against it yet keeps its delete button`() {
+        timer(
+            on = true,
+            programs = listOf(scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+            frozenSchedules = emptySet(),
+        )
+
+        // still a schedule: the heading and the ownership line are unchanged
+        compose.onNodeWithText("Exercise schedules").assertIsDisplayed()
+        compose.onNodeWithText("Schedule for Hangs 20 mm").assertIsDisplayed()
+
+        openMenuOf(scheduleOfHangs)
+        compose.onNodeWithText("Delete the program").performClick()
+        assertEquals(scheduleOfHangs.id, deleted)
     }
 
     @Test
@@ -339,5 +366,5 @@ class TimerScreenTest : ScreenTest() {
  * schedule card — three copies of one sentence on a phone that owns four hangboard holds.
  */
 private const val SCHEDULES_NOTE =
-    "Made for one exercise and fixed once it was used. Only the name can be changed, and it " +
-        "cannot be deleted while that exercise is built on it."
+    "Made for one exercise. Editable until the first set is recorded against it; after that " +
+        "only the name can be changed, and it cannot be deleted."

@@ -157,18 +157,25 @@ interface ExerciseDao {
     suspend fun setPictureId(id: Long, pictureId: String?, spaceId: Long = LOCAL_SPACE_ID)
 
     /**
-     * Whether any exercise's protocol IS this program — the live fact
-     * [xyz.oleolegka.gachimuchi.data.ProgramRepository.save] freezes a program's content on.
+     * The exercises whose protocol IS this program — WHICH ones, not merely whether any.
+     *
+     * It used to be `SELECT EXISTS(...)`, because the freeze it fed was §18.9's: a reference
+     * was the whole question, so the identity of the referrer did not matter. §18.19 made the
+     * freeze mild — a schedule is editable until a set is recorded against it — and that
+     * question cannot be answered in SQL at all: sets live in the journal, keyed by identity
+     * (see `domain/ScheduleFreeze.kt`). So this hands back the rows, and the caller
+     * ([xyz.oleolegka.gachimuchi.data.ProgramRepository.isFrozen]) asks the journal about them.
+     *
+     * ALL of them, never the first: twins deliberately share one schedule (§18.15), and a
+     * freeze decided on whichever row SQLite happened to return would let an edit made for the
+     * untrained twin rewrite the trained one's history.
      *
      * Scoped through `exercises` rather than carrying a `space_id` of its own: the question is
      * "does a catalog row point here", and the row that would point here already carries the
-     * profile. A program shared by several exercises (identical numbers, or a hand-authored
-     * program deliberately pointed at by more than one — see `ExerciseEntity.protocolProgramId`)
-     * answers true from the first match; which exercise it was does not matter to a caller
-     * asking only "may this be rewritten".
+     * profile.
      */
-    @Query("SELECT EXISTS(SELECT 1 FROM exercises WHERE protocol_program_id = :programId)")
-    suspend fun existsWithProtocolProgram(programId: Long): Boolean
+    @Query("SELECT * FROM exercises WHERE protocol_program_id = :programId")
+    suspend fun withProtocolProgram(programId: Long): List<ExerciseEntity>
 }
 
 /**

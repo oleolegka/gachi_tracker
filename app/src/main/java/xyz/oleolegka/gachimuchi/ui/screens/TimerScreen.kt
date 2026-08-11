@@ -109,6 +109,13 @@ fun TimerScreen(
      * schedule section at all, which is what a library of hand-written programs looks like.
      */
     scheduleOwners: Map<Long, List<String>>,
+    /**
+     * Of [scheduleOwners], the ones that are FROZEN — a set has been recorded against them, so
+     * their times are history now and the card offers no delete (§18.19). A schedule not in
+     * here is still a draft: it is filed under the schedules heading all the same, and it can
+     * still be edited and deleted, which is exactly what the mild freeze buys.
+     */
+    frozenSchedules: Set<Long>,
     onRunProgram: (WorkoutProgram) -> Unit,
     onEditProgram: (WorkoutProgram?) -> Unit,
     onDeleteProgram: (Long) -> Unit,
@@ -242,9 +249,9 @@ fun TimerScreen(
                 if (section.schedules) {
                     item(key = "schedules-note") {
                         Text(
-                            "Made for one exercise and fixed once it was used. Only the name " +
-                                "can be changed, and it cannot be deleted while that exercise " +
-                                "is built on it.",
+                            "Made for one exercise. Editable until the first set is " +
+                                "recorded against it; after that only the name can be " +
+                                "changed, and it cannot be deleted.",
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.inkMuted,
                         )
@@ -256,6 +263,7 @@ fun TimerScreen(
                         enabled = state.enabled,
                         exerciseName = exerciseNames[program.exerciseId],
                         scheduleFor = scheduleOwners[program.id].orEmpty(),
+                        frozen = program.id in frozenSchedules,
                         onRun = { onRunProgram(program) },
                         onEdit = { onEditProgram(program) },
                         onExport = { transfer.export(listOf(program)) },
@@ -291,6 +299,7 @@ fun TimerScreen(
                         // a schedule put away still says whose it is: the tray is one flat
                         // list, so the heading that would have said it is not there
                         scheduleFor = scheduleOwners[program.id].orEmpty(),
+                        frozen = program.id in frozenSchedules,
                         onRun = { onRunProgram(program) },
                         onEdit = { onEditProgram(program) },
                         onExport = { transfer.export(listOf(program)) },
@@ -526,6 +535,7 @@ private fun ProgramCard(
     enabled: Boolean,
     exerciseName: String?,
     scheduleFor: List<String> = emptyList(),
+    frozen: Boolean = false,
     onRun: () -> Unit,
     onEdit: () -> Unit,
     onExport: () -> Unit,
@@ -550,12 +560,18 @@ private fun ProgramCard(
             )
         )
         /*
-         * No delete on a schedule, rather than a refusal after it is pressed: the exercise is
-         * keyed to this program's uid and nothing cascades, so deleting it would leave that
-         * exercise pointing at a row that is gone. The repository refuses too
-         * (ProgramRepository.delete) — this is the door, that is the lock.
+         * No delete on a FROZEN schedule, rather than a refusal after it is pressed: the
+         * exercise is keyed to this program's uid and nothing cascades, so deleting it would
+         * leave that exercise pointing at a row that is gone while its sets still name the
+         * times it used to hold. The repository refuses too (ProgramRepository.delete) — this
+         * is the door, that is the lock, and both ask the same question now (§18.19).
+         *
+         * [scheduleFor] is deliberately NOT the test any more. Being somebody's schedule is
+         * what files this card under its heading; being trained on is what shuts it. A
+         * schedule with no sets against it yet is a draft the owner is still assembling, and
+         * refusing to delete it was the punishment §18.19 removed.
          */
-        if (scheduleFor.isEmpty()) {
+        if (!frozen) {
             add(ItemAction("Delete the program", destructive = true, onClick = onDelete))
         }
     }
