@@ -176,6 +176,37 @@ class TimerControllerTest {
         assertEquals(0, alarms().size)
     }
 
+    /**
+     * §18.20 through the real wiring: the Skip button, the disk, and the offer the screen is
+     * handed. The arithmetic is settled in domain/RunLogTest; what cannot be seen from there
+     * is whether the mark survives the trip through the controller, which settles the state
+     * against the clock and rewrites it on every command.
+     */
+    @Test
+    fun `hangs the skip button jumped are not offered to the journal as done`() {
+        val timer = newController()
+        timer.start(repeaters, exerciseId = 42, origin = RunOrigin.EXERCISE)
+
+        // out of the lead-in, then out of the first hang of set 1 — the hang never happened
+        timer.skip()
+        timer.skip()
+        assertEquals(setOf(0, 1), timer.run.value!!.state.skipped)
+        assertEquals(
+            "the mark has to be on disk, or a killed process puts the hang back",
+            setOf(0, 1),
+            store().loadRun()!!.state.skipped,
+        )
+
+        // and let the rest of the program run itself out
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(20))
+        timer.refresh()
+
+        val outcome = timer.outcome.value!!
+        assertEquals("two sets of three hangs", 2, outcome.sets.size)
+        assertEquals(listOf(2, 3), outcome.sets.map { it.reps })
+        assertEquals("what the schedule asked for is unchanged", listOf(3, 3), outcome.sets.map { it.plannedReps })
+    }
+
     // --- surviving the process ----------------------------------------------------------
 
     @Test

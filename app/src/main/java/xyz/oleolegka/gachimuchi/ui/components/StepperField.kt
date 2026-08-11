@@ -66,8 +66,29 @@ fun StepperField(
     stacked: Boolean = false,
     /** What a screen reader calls the field, for callers that pass no [label]. */
     fieldDescription: String? = null,
+    /**
+     * Whether the value this field holds has a NEGATIVE HALF, and the minus buttons may
+     * therefore walk into it.
+     *
+     * Off for everything a body can only have a positive amount of — reps, seconds, body
+     * weight, the load on a bar. On for added weight, which is signed
+     * ([xyz.oleolegka.gachimuchi.domain.StrengthSet.addedKg]): below zero is a band taking
+     * load OFF the hang, which on a fingerboard is the half of the axis most of the training
+     * actually happens on.
+     *
+     * ── Why the buttons and not just the keyboard ───────────────────────────────
+     * The field takes [KeyboardType.Decimal], which asks Android for a numeric pad and does
+     * NOT ask for a signed one; whether a minus key is on it is up to whichever keyboard is
+     * installed. So on the offer after a run — where the four step buttons ARE the control,
+     * sitting under the field a quarter of the width each — "minus fifteen" could be
+     * unreachable altogether, and pressing minus from zero looked like the app refusing the
+     * press for no stated reason. With this the buttons reach it in three taps.
+     */
+    signed: Boolean = false,
 ) {
     val colors = LocalGachiColors.current
+    // no floor at all when the axis is signed; [applyStep] clamps at this
+    val floor = if (signed) Double.NEGATIVE_INFINITY else 0.0
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -91,12 +112,12 @@ fun StepperField(
             ) {
                 steps.sortedDescending().forEach { step ->
                     StepButton("-${formatNumber(step)}", Modifier.weight(1f)) {
-                        onValueChange(applyStep(value, -step))
+                        onValueChange(applyStep(value, -step, floor))
                     }
                 }
                 steps.sorted().forEach { step ->
                     StepButton("+${formatNumber(step)}", Modifier.weight(1f)) {
-                        onValueChange(applyStep(value, step))
+                        onValueChange(applyStep(value, step, floor))
                     }
                 }
             }
@@ -108,7 +129,7 @@ fun StepperField(
             ) {
                 steps.sortedDescending().forEach { step ->
                     StepButton("-${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
-                        onValueChange(applyStep(value, -step))
+                        onValueChange(applyStep(value, -step, floor))
                     }
                 }
                 NumberField(
@@ -121,7 +142,7 @@ fun StepperField(
                 )
                 steps.sorted().forEach { step ->
                     StepButton("+${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
-                        onValueChange(applyStep(value, step))
+                        onValueChange(applyStep(value, step, floor))
                     }
                 }
             }
