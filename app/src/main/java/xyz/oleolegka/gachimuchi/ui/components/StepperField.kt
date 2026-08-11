@@ -17,6 +17,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -40,52 +42,122 @@ import xyz.oleolegka.gachimuchi.ui.theme.Spacing
  * Tap targets are 48dp, the minimum that is reliably hittable with a thumb, and the row
  * is laid out negatives-field-positives so that the two most used steps sit closest to
  * the value they change.
+ *
+ * ── [stacked]: the same field with its buttons UNDERNEATH ────────────────────
+ * Beside the field is right where the field has a screen's width to sit in. Inside a
+ * DIALOG it is not: four buttons of 50dp each, plus the gaps, leave the value itself
+ * about 48dp — narrower than any one of the buttons changing it, which is what the run
+ * offer looked like. [stacked] is the layout [TimeField] already uses for exactly this
+ * reason: the field takes the full width and the four buttons share it out below, a
+ * quarter each, which on the narrowest phone this app targets is still 57dp.
  */
 @Composable
 fun StepperField(
-    label: String,
+    /** Drawn above the field. Null when the caller heads the block some other way. */
+    label: String?,
     value: String,
     onValueChange: (String) -> Unit,
     steps: List<Double>,
     modifier: Modifier = Modifier,
     decimal: Boolean = true,
     placeholder: String? = null,
+    /** Buttons under the field, sharing its width, rather than beside it. See the KDoc. */
+    stacked: Boolean = false,
+    /** What a screen reader calls the field, for callers that pass no [label]. */
+    fieldDescription: String? = null,
 ) {
     val colors = LocalGachiColors.current
-    val keyboard = LocalSoftwareKeyboardController.current
 
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            steps.sortedDescending().forEach { step ->
-                StepButton("-${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
-                    onValueChange(applyStep(value, -step))
-                }
-            }
-            OutlinedTextField(
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Line),
+    ) {
+        if (label != null) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
+        }
+        if (stacked) {
+            NumberField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                placeholder = placeholder?.let { { Text(it, textAlign = TextAlign.Center) } },
-                textStyle = TextStyle(fontSize = 18.sp, textAlign = TextAlign.Center),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
+                decimal = decimal,
+                placeholder = placeholder,
+                description = fieldDescription,
+                modifier = Modifier.fillMaxWidth(),
             )
-            steps.sorted().forEach { step ->
-                StepButton("+${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
-                    onValueChange(applyStep(value, step))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+            ) {
+                steps.sortedDescending().forEach { step ->
+                    StepButton("-${formatNumber(step)}", Modifier.weight(1f)) {
+                        onValueChange(applyStep(value, -step))
+                    }
+                }
+                steps.sorted().forEach { step ->
+                    StepButton("+${formatNumber(step)}", Modifier.weight(1f)) {
+                        onValueChange(applyStep(value, step))
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                steps.sortedDescending().forEach { step ->
+                    StepButton("-${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
+                        onValueChange(applyStep(value, -step))
+                    }
+                }
+                NumberField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    decimal = decimal,
+                    placeholder = placeholder,
+                    description = fieldDescription,
+                    modifier = Modifier.weight(1f),
+                )
+                steps.sorted().forEach { step ->
+                    StepButton("+${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
+                        onValueChange(applyStep(value, step))
+                    }
                 }
             }
         }
     }
+}
+
+/** The field itself, so that both layouts above spell it exactly once. */
+@Composable
+private fun NumberField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    decimal: Boolean,
+    placeholder: String?,
+    description: String?,
+    modifier: Modifier = Modifier,
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.then(
+            if (description != null) {
+                Modifier.semantics { contentDescription = description }
+            } else {
+                Modifier
+            }
+        ),
+        singleLine = true,
+        placeholder = placeholder?.let { { Text(it, textAlign = TextAlign.Center) } },
+        textStyle = TextStyle(fontSize = 18.sp, textAlign = TextAlign.Center),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
+    )
 }
 
 /**

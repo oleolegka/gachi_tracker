@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,10 +12,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -26,8 +32,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.CompletedSet
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
@@ -38,6 +48,7 @@ import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.runSummaryLine
 import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
@@ -69,6 +80,24 @@ import java.time.format.DateTimeFormatter
  * A hold is the one form whose sets map onto timed efforts one for one (§12-A). For a
  * strength set a 30-second work step is a set of unknown reps, so it is not offered as a
  * choice rather than being written as a guess.
+ *
+ * ── The 2026-08-11 redraw, and what it was answering ────────────────────────────
+ * The owner, looking at this form: "it is offering me to do something with sets, some
+ * pluses, I have no idea what this is". Four things were wrong at once and each is
+ * answered here (`design-system/app-next/run-log.html`):
+ *
+ *  1. The weight field was hemmed in by four 50dp buttons and had less width left than any
+ *     one of them. The buttons now sit UNDERNEATH it, a quarter of the width each — see
+ *     [StepperField]'s `stacked`, which is the layout [TimeField] already used.
+ *  2. Four identical disabled "Not completed" chips, one per set, took half the height of
+ *     the list. They are a column of checkboxes now, under one heading that says the words
+ *     once.
+ *  3. Everything the run had to disclaim — that it ended an hour ago, which day it will be
+ *     written under, that it was cut short, what rest it counted — was scattered above and
+ *     below the sets in 11sp grey, so the last two read as a footnote to the weight buttons.
+ *     They are one recessed block of facts under the name.
+ *  4. The number of sets was said three times over (title, summary, button). It is said
+ *     once, on the button, where it is also live: take a set down to zero and it drops.
  */
 @Composable
 fun RunLogDialog(
@@ -95,137 +124,311 @@ fun RunLogDialog(
         mutableStateOf(chosen?.let { lastAddedKg(it.id) }?.let { formatNumber(it) }.orEmpty())
     }
     val live = sets.count { it.reps > 0 }
+    val nothingToFileUnder = chosen == null && candidates.isEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (chosen == null) "Write this run down" else "Write this run down?") },
+        title = {
+            Text(
+                when {
+                    // named for what is happening, because nothing here can be answered
+                    nothingToFileUnder -> "Nowhere to write this run"
+                    chosen == null -> "Write this run down"
+                    else -> "Write this run down?"
+                }
+            )
+        },
         text = {
-            Column(
-                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                Text(
-                    // side-suffixed the same way a card names itself (WorkoutLogScreen), so an
-                    // offer from the left card and one from the right read as two sessions and
-                    // not as the same run asked about twice
-                    (chosen?.name ?: outcome.programName).let { name ->
-                        outcome.sideOf?.let { "$name - ${it.label()}" } ?: name
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    runSummaryLine(sets),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.inkSecondary,
-                )
+            /*
+             * The middle scrolls between the fixed title and the fixed buttons. With four
+             * sets this dialog is taller than a small phone, and before the redraw the
+             * whole of it scrolled — including the question at the top and, on a short
+             * window, the buttons that answer it. The two hairlines are the only thing on
+             * a still picture that says there is more; on the phone the inertia says it.
+             */
+            Column(modifier = Modifier.fillMaxWidth()) {
+                HorizontalDivider(color = colors.grid)
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = Spacing.Block),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Block),
+                ) {
+                    RunHead(outcome, chosen, sets)
+                    RunFacts(outcome, sets, nowWallMs)
 
-                // a run answered later must say so rather than pretending it just happened
-                if (!outcome.isFresh(nowWallMs)) {
-                    Text(
-                        "This run ended ${endedAtLabel(outcome.endedAtWallMs)}, and its sets " +
-                            "will be written under ${outcome.opDate}.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkMuted,
-                    )
-                }
-                if (outcome.interrupted) {
-                    Text(
-                        "The run was stopped part-way, so only what it actually got " +
-                            "through is offered.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkMuted,
-                    )
-                }
-
-                if (chosen == null) {
-                    ExerciseChoice(candidates = candidates) { chosen = it }
-                } else {
-                    /*
-                     * WHAT IS BEING ASKED, said in words before the first stepper.
-                     *
-                     * The owner's report on this form was "it is offering me to do something
-                     * with sets, some pluses, I have no idea what this is". Everything on the
-                     * row was true and none of it was named: "Set 1", a bare number, and "of
-                     * 6". So the number gets a heading that says what it counts, and the form
-                     * gets one line saying why it is being shown at all — read after a
-                     * hangboard session, with the fingers that just did it.
-                     */
-                    HorizontalDivider(
-                        color = colors.grid,
-                        modifier = Modifier.padding(top = Spacing.Line, bottom = Spacing.Tight),
-                    )
-                    Text(
-                        "Efforts held in each set",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    Text(
-                        "This is what the schedule counted. Turn a set down if you came off " +
-                            "early - it cannot go above what was planned, because the count " +
-                            "has already run out.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkMuted,
-                        modifier = Modifier.padding(bottom = Spacing.Tight),
-                    )
-
-                    sets.forEach { set ->
-                        SetRow(
-                            set = set,
-                            onRepsChange = { reps ->
-                                sets = sets.map {
-                                    if (it.setNumber == set.setNumber) it.copy(reps = reps) else it
-                                }
-                            },
-                            onIncompleteChange = { incomplete ->
-                                sets = sets.map {
-                                    if (it.setNumber == set.setNumber) it.copy(incomplete = incomplete) else it
-                                }
-                            },
+                    if (chosen == null) {
+                        ExerciseChoice(candidates = candidates) { chosen = it }
+                    } else {
+                        SetsBlock(
+                            sets = sets,
+                            onSetsChange = { sets = it },
                         )
-                    }
 
-                    StepperField(
-                        label = "Added weight, kg (empty for none)",
-                        value = weight,
-                        onValueChange = { weight = it },
-                        steps = listOf(1.0, 5.0),
-                        modifier = Modifier.padding(top = Spacing.Tight),
-                        placeholder = "0",
-                    )
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+                            BlockHeading("Added weight, kg")
+                            StepperField(
+                                label = null,
+                                value = weight,
+                                onValueChange = { weight = it },
+                                steps = listOf(1.0, 5.0),
+                                placeholder = "0",
+                                stacked = true,
+                                fieldDescription = "Added weight, kg",
+                            )
+                        }
 
-                    sets.firstOrNull { it.restAfterSec != null }?.restAfterSec?.let { rest ->
-                        Text(
-                            "The pause between sets is written as ${formatClock(rest)} - the " +
-                                "program counted it, so it does not have to be guessed from the " +
-                                "gap between entries.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.inkMuted,
-                        )
-                    }
-                    if (outcome.programId != 0L && outcome.exerciseId != chosen?.id) {
-                        Text(
-                            "\"${outcome.programName}\" will be linked to this exercise, so " +
-                                "next time it offers the sets straight away.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.inkMuted,
-                        )
+                        if (outcome.programId != 0L && outcome.exerciseId != chosen?.id) {
+                            Text(
+                                "\"${outcome.programName}\" will be linked to this exercise.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.inkMuted,
+                            )
+                        }
                     }
                 }
+                HorizontalDivider(color = colors.grid)
             }
         },
         confirmButton = {
             chosen?.let { target ->
-                TextButton(
+                /*
+                 * FILLED, against a text button to decline: the good news must not be the
+                 * paler of the two (SYSTEM.md rule 7). It also carries the only statement
+                 * of how many sets are about to be written, and it is live — a set turned
+                 * down to zero is not written, and the button says so before the tap.
+                 */
+                Button(
                     enabled = live > 0,
                     onClick = { onLog(target, sets, parseNumber(weight)?.takeIf { it != 0.0 }) },
-                ) { Text(if (live == 1) "Log 1 set" else "Log $live sets") }
+                ) { Text(if (live == 1) "Write down 1 set" else "Write down $live sets") }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Not this time") } },
+        dismissButton = {
+            // there is nothing to decline when the catalog cannot hold this run at all
+            TextButton(onClick = onDismiss) {
+                Text(if (nothingToFileUnder) "Close" else "Not this time")
+            }
+        },
+    )
+}
+
+/** Which run this is, and what it came to — the two lines the whole offer hangs off. */
+@Composable
+private fun RunHead(outcome: RunOutcome, chosen: ExerciseRef?, sets: List<CompletedSet>) {
+    val colors = LocalGachiColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+        Text(
+            // side-suffixed the same way a card names itself (WorkoutLogScreen), so an
+            // offer from the left card and one from the right read as two sessions and
+            // not as the same run asked about twice
+            (chosen?.name ?: outcome.programName).let { name ->
+                outcome.sideOf?.let { "$name - ${it.label()}" } ?: name
+            },
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            runSummaryLine(sets),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.inkSecondary,
+        )
+    }
+}
+
+/**
+ * Everything this offer has to disclaim, in one recessed block.
+ *
+ * They were four separate grey lines in two places before, two of them below the weight
+ * field, where they read as a note about the weight buttons rather than about the run. They
+ * are all the same kind of statement — a fact about the run that is not being asked about —
+ * so they are one block, immediately under the name they are facts about. Absent entirely
+ * when the run has nothing to disclaim, which is the ordinary case of answering straight
+ * away.
+ */
+@Composable
+private fun RunFacts(outcome: RunOutcome, sets: List<CompletedSet>, nowWallMs: Long) {
+    val colors = LocalGachiColors.current
+    val rest = sets.firstOrNull { it.restAfterSec != null }?.restAfterSec
+    val facts = buildList {
+        // a run answered later must say so rather than pretending it just happened
+        if (!outcome.isFresh(nowWallMs)) {
+            add("Ended ${endedAtLabel(outcome.endedAtWallMs)}, written under ${outcome.opDate}")
+        }
+        if (outcome.interrupted) {
+            add("Stopped part-way - only what it got through is offered")
+        }
+        if (rest != null) {
+            add("Rest between sets ${formatClock(rest)}, counted by the program")
+        }
+    }
+    if (facts.isEmpty()) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.recessed, RoundedCornerShape(Radius.Small))
+            .padding(Spacing.Inset),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        facts.forEach {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = colors.inkSecondary)
+        }
+    }
+}
+
+/** The heading of one block of the offer: the size a card title is, one step above its text. */
+@Composable
+private fun BlockHeading(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
     )
 }
 
 /**
+ * The sets, one row each, under one heading that says what the number in them counts.
+ *
+ * Two rows per set became one. The "not completed" mark used to be a chip of its own
+ * underneath each row — four identical chips reading the same two words, taking half the
+ * height of the list to say something about none of them. The words are now the heading of
+ * a column of checkboxes, said once.
+ */
+@Composable
+private fun SetsBlock(sets: List<CompletedSet>, onSetsChange: (List<CompletedSet>) -> Unit) {
+    val colors = LocalGachiColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+        BlockHeading("Efforts held in each set")
+        Text(
+            "The timer counted these; turn a set down if you came off early.",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.inkSecondary,
+        )
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ColumnLabel("SET", Modifier.weight(1f))
+            ColumnLabel("NOT COMPLETED")
+        }
+        Column {
+            sets.forEach { set ->
+                HorizontalDivider(color = colors.grid)
+                SetRow(
+                    set = set,
+                    onRepsChange = { reps ->
+                        onSetsChange(
+                            sets.map {
+                                if (it.setNumber == set.setNumber) it.copy(reps = reps) else it
+                            }
+                        )
+                    },
+                    onIncompleteChange = { incomplete ->
+                        onSetsChange(
+                            sets.map {
+                                if (it.setNumber == set.setNumber) {
+                                    it.copy(incomplete = incomplete)
+                                } else {
+                                    it
+                                }
+                            }
+                        )
+                    },
+                )
+            }
+            HorizontalDivider(color = colors.grid)
+        }
+    }
+}
+
+/** The name of a column of the table: the floor of the type scale, and the only caps here. */
+@Composable
+private fun ColumnLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.8.sp,
+        color = LocalGachiColors.current.inkMuted,
+    )
+}
+
+/**
+ * One set of the offer, in one row: which set, what it held, and whether it was carried
+ * through.
+ *
+ * The number in the middle is HOW MANY EFFORTS WERE HELD inside this set, and the heading
+ * above the rows is what says so — on its own the row read "Set 1", a bare figure and "of 6",
+ * which is what the owner could not decode. The ceiling now travels WITH the number, as
+ * "4/6", because that is where it is looked at.
+ *
+ * The "+" stops at [CompletedSet.plannedReps] and not at a global maximum. A schedule is
+ * strict about this: the run counted down a fixed number of efforts and ended, so a set can
+ * come out SHORT of what was planned and can never come out over it. The button is disabled
+ * at the ceiling rather than silently ignoring the tap, so the limit is visible before it is
+ * hit.
+ *
+ * The checkbox is per row and not once for the whole offer, because a fingerboard session is
+ * six hangs and falling off on the fourth says nothing about the other five: see
+ * [xyz.oleolegka.gachimuchi.domain.holdSetsFromRun], which is what turns [onIncompleteChange]
+ * into the same [xyz.oleolegka.gachimuchi.domain.LoadedSet.incomplete] mark the rest of the
+ * app sets by hand.
+ */
+@Composable
+private fun SetRow(
+    set: CompletedSet,
+    onRepsChange: (Int) -> Unit,
+    onIncompleteChange: (Boolean) -> Unit,
+) {
+    val colors = LocalGachiColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Text(
+            "Set ${set.setNumber}",
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        RepButton("-", enabled = set.reps > 0) {
+            onRepsChange((set.reps - 1).coerceAtLeast(0))
+        }
+        Row(
+            modifier = Modifier.width(44.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(
+                set.reps.toString(),
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                "/${set.plannedReps}",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+            )
+        }
+        RepButton("+", enabled = set.reps < set.plannedReps) {
+            onRepsChange((set.reps + 1).coerceAtMost(set.plannedReps))
+        }
+        Checkbox(
+            checked = set.incomplete,
+            onCheckedChange = onIncompleteChange,
+            modifier = Modifier.semantics {
+                contentDescription = "Set ${set.setNumber} not completed"
+            },
+        )
+    }
+}
+
+/**
  * The "which exercise was that" step.
+ *
+ * A list of buttons, marked as one: a row is 56dp, separated from its neighbours, and
+ * carries the chevron that says it leads somewhere. Before the redraw these were plain
+ * lines of text with nothing about them to suggest they could be tapped at all.
  *
  * An empty list is the interesting case and is spelled out rather than left blank: a run of
  * a program on a phone whose catalog has no hold exercise in it cannot be written down, and
@@ -235,117 +438,62 @@ fun RunLogDialog(
 @Composable
 private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) -> Unit) {
     val colors = LocalGachiColors.current
-    HorizontalDivider(color = colors.grid, modifier = Modifier.padding(vertical = Spacing.Line))
 
     if (candidates.isEmpty()) {
         Text(
-            "There is no hold exercise in the catalog to file this under. Create one (name " +
-                "and work:rest) and this program can be logged next time - the numbers " +
-                "above are what it counted.",
+            "There is no hold exercise in the catalog to file this under. Create one - name " +
+                "and work:rest - and this program can be logged next time.",
             style = MaterialTheme.typography.bodyMedium,
-            color = colors.inkMuted,
+            color = colors.inkSecondary,
         )
         return
     }
 
-    Text(
-        "Which exercise was this?",
-        style = MaterialTheme.typography.labelSmall,
-        color = colors.inkMuted,
-    )
-    candidates.forEach { candidate ->
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onPick(candidate) }
-                .heightIn(min = 48.dp)
-                .padding(vertical = Spacing.Line),
-        ) {
-            Text(candidate.name, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                buildString {
-                    candidate.protocol?.let {
-                        append("${formatNumber(it.first)}:${formatNumber(it.second)}")
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+        BlockHeading("Which exercise was this?")
+        Text(
+            "Asked once - the answer is remembered on the program.",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.inkSecondary,
+        )
+        Column {
+            candidates.forEach { candidate ->
+                HorizontalDivider(color = colors.grid)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(candidate) }
+                        .heightIn(min = 56.dp)
+                        .padding(vertical = Spacing.Line),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Inset),
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        Text(candidate.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            // an empty protocol used to be an empty line: buildString on a
+                            // null pair wrote nothing, and the row carried a blank 11sp gap
+                            // where the answer should have been
+                            candidate.protocol?.let {
+                                "${formatNumber(it.first)}:${formatNumber(it.second)}"
+                            } ?: "no protocol",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkMuted,
+                        )
                     }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
-            )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null, // decoration: the row's own name is the label
+                        tint = colors.inkMuted,
+                    )
+                }
+            }
+            HorizontalDivider(color = colors.grid)
         }
     }
-}
-
-/**
- * One set of the offer.
- *
- * The number in the middle is HOW MANY EFFORTS WERE HELD inside this set, and the heading
- * above the rows is what says so — on its own the row read "Set 1", a bare figure and "of 6",
- * which is what the owner could not decode.
- *
- * The "+" stops at [CompletedSet.plannedReps] and not at a global maximum. A schedule is
- * strict about this: the run counted down a fixed number of efforts and ended, so a set can
- * come out SHORT of what was planned and can never come out over it. The button is disabled
- * at the ceiling rather than silently ignoring the tap, so the limit is visible before it is
- * hit.
- *
- * Also here: the rep count, correctable the same way it always was, and — new —
- * whether THIS set was carried through. Per row and not once for the whole offer, because a
- * fingerboard session is six hangs and falling off on the fourth says nothing about the other
- * five: see [xyz.oleolegka.gachimuchi.domain.holdSetsFromRun], which is what turns
- * [onIncompleteChange] into the same [xyz.oleolegka.gachimuchi.domain.LoadedSet.incomplete] mark
- * the rest of the app sets by hand.
- */
-@Composable
-private fun SetRow(set: CompletedSet, onRepsChange: (Int) -> Unit, onIncompleteChange: (Boolean) -> Unit) {
-    val colors = LocalGachiColors.current
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Text(
-                "Set ${set.setNumber}",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            RepButton("-", enabled = set.reps > 0) {
-                onRepsChange((set.reps - 1).coerceAtLeast(0))
-            }
-            Text(
-                set.reps.toString(),
-                modifier = Modifier.width(32.dp),
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            RepButton("+", enabled = set.reps < set.plannedReps) {
-                onRepsChange((set.reps + 1).coerceAtMost(set.plannedReps))
-            }
-            Text(
-                "of ${set.plannedReps} planned",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
-            )
-        }
-        RunSetIncompleteChip(set.incomplete) { onIncompleteChange(!set.incomplete) }
-    }
-}
-
-/**
- * The "not completed" toggle for one row of the offer — the same fact
- * [xyz.oleolegka.gachimuchi.ui.screens.IncompleteChip] sets when logging by hand and
- * [xyz.oleolegka.gachimuchi.ui.components.EntryEditor]'s own toggle corrects afterwards, styled
- * to match both. A third copy of the same small [FilterChip] rather than a shared one, on the
- * same footing those two already stand on — see either of their own KDoc for the same choice
- * made before this one existed.
- */
-@Composable
-private fun RunSetIncompleteChip(selected: Boolean, onToggle: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onToggle,
-        label = { Text("Not completed") },
-        modifier = Modifier.heightIn(min = 40.dp),
-    )
 }
 
 @Composable
@@ -353,18 +501,18 @@ private fun RepButton(label: String, enabled: Boolean = true, onClick: () -> Uni
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(44.dp),
+        modifier = Modifier.size(48.dp),
         contentPadding = PaddingValues(0.dp),
         shape = MaterialTheme.shapes.small,
     ) { Text(label) }
 }
 
-/** "at 19:42" — the plain fact, so a late offer is not mistaken for a fresh one. */
+/** "19:42" — the plain fact, so a late offer is not mistaken for a fresh one. */
 private fun endedAtLabel(wallMs: Long): String =
     if (wallMs <= 0) {
         "earlier"
     } else {
-        "at " + Instant.ofEpochMilli(wallMs)
+        Instant.ofEpochMilli(wallMs)
             .atZone(ZoneId.systemDefault())
             .format(DateTimeFormatter.ofPattern("HH:mm"))
     }

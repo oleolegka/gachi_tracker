@@ -70,7 +70,7 @@ class RunLogDialogCeilingTest : ScreenTest() {
             settle()
         }
 
-        compose.onNodeWithText("Log 1 set").performClick()
+        compose.onNodeWithText("Write down 1 set").performClick()
         settle()
         assertEquals(listOf(6), logged?.map { it.reps })
     }
@@ -85,6 +85,7 @@ class RunLogDialogCeilingTest : ScreenTest() {
     fun `the row's number is named as efforts held, and the planned count says so too`() {
         dialog(reps = 4, planned = 6)
         compose.onNodeWithText("Efforts held in each set").assertExists()
-        compose.onNodeWithText("of 6 planned").assertExists()
+        // the ceiling travels with the number now, rather than trailing the row as prose
+        compose.onNodeWithText("/6").assertExists()
     }
 }
