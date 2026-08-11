@@ -224,6 +224,10 @@ fun CatalogRow.toRef(program: WorkoutProgram? = null): ExerciseRef {
         defaultRestSec = defaultRestSec,
         ledByProtocolFlag = ledByProtocol,
         oneSided = oneSided,
+        // the WHOLE schedule and not only the pair its first block makes: a run of a strict
+        // schedule plays it as written, and there is nothing else in the app that resolves it
+        // between the catalog row and the conductor (§18.15, [ExerciseRef.schedule])
+        schedule = program,
     )
 }
 

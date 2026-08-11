@@ -59,6 +59,7 @@ import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.isSimplePair
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
+import xyz.oleolegka.gachimuchi.domain.scheduledRun
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
 import xyz.oleolegka.gachimuchi.domain.resolveRestSec
 import xyz.oleolegka.gachimuchi.domain.restHintSec
@@ -895,6 +896,21 @@ class MainViewModel(
      */
     fun startProgramForExercise(start: ProgramStart) {
         _entryAddedKg.value = start.addedKg
+
+        /*
+         * A STRICT SCHEDULE PLAYS ITSELF (§18.15), and it does so before anything below is
+         * read. The schedule fixes every temporal thing about the run — which efforts, how
+         * long, in what order, with what pauses, how many repeats, how many sets — so the rep
+         * count off the last logged set, the set count off the settings and the pause off the
+         * journal have no say in it. They are not merely overridden here, they are never
+         * fetched: the one variable left before a strict run is the plate, and the caller has
+         * already answered that.
+         */
+        scheduledRun(start.exercise)?.let { schedule ->
+            timer.start(schedule, start.exercise.id, RunOrigin.EXERCISE, start.side)
+            return
+        }
+
         viewModelScope.launch {
             /*
              * A STRICT schedule is run exactly as it was written, and nothing about it is

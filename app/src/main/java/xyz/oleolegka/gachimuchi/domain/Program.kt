@@ -388,6 +388,80 @@ fun WorkoutProgram.flatten(): List<WorkoutStep> {
  */
 fun WorkoutProgram.firstBlock(): ProgramBlock? = groups.firstOrNull()?.blocks?.firstOrNull()
 
+/**
+ * Which of the three shapes a hold exercise's SCHEDULE is (§18.15).
+ *
+ * "Schedule" is the owner's own word for the timed scenario of a hold, and in code it is a
+ * [WorkoutProgram] — there is no separate entity. The three shapes are already distinguishable
+ * in the data, which is why this is a function over what is stored and not a new column: a
+ * migration for a fact the rows already state would be a second copy of it to keep in step.
+ *
+ * *The one thing this cannot tell apart, stated rather than hidden:* a schedule typed by hand
+ * into the program editor as one group of one block with no repeats is indistinguishable from a
+ * plain work:rest pair, because it IS one. Such an exercise takes the [PAIR] road.
+ */
+enum class ScheduleKind {
+    /** No schedule at all: a free hold, written by hand, no conductor involved. */
+    NONE,
+
+    /**
+     * One group, one block, no repeats on either — the plain "work : rest" pair the exercise
+     * form has always spoken. The run is BUILT around it from the rep count, the set count and
+     * the pause, none of which the pair itself fixes ([programFromExercise]).
+     */
+    PAIR,
+
+    /**
+     * Anything richer. It fixes every temporal thing there is — which efforts, how long, in
+     * what order, with what pauses, how many repeats, how many sets — so a run PLAYS IT AS
+     * WRITTEN ([scheduledRun]) and the only variable left before starting is the plate.
+     */
+    STRICT,
+}
+
+/**
+ * Reads a resolved schedule as one of [ScheduleKind].
+ *
+ * A schedule with nothing to count — no groups, or groups whose blocks are all empty — is
+ * [ScheduleKind.NONE] rather than [ScheduleKind.STRICT]: it would flatten to no work step at
+ * all, and calling it strict would put a "start" button on a run that ends the instant it
+ * begins.
+ */
+fun scheduleKindOf(schedule: WorkoutProgram?): ScheduleKind {
+    if (schedule == null) return ScheduleKind.NONE
+    if (schedule.groups.none { it.blocks.any { block -> block.workSec > 0 } }) return ScheduleKind.NONE
+    val group = schedule.groups.singleOrNull() ?: return ScheduleKind.STRICT
+    val block = group.blocks.singleOrNull() ?: return ScheduleKind.STRICT
+    return if (group.repeats <= 1 && block.repeats <= 1) ScheduleKind.PAIR else ScheduleKind.STRICT
+}
+
+/**
+ * The run a STRICT schedule performs: the schedule itself, not a program rebuilt out of it.
+ *
+ * ── The defect this replaces ────────────────────────────────────────────────────
+ * Every protocol-led run used to go through [programFromExercise], which reads
+ * [WorkoutProgram.firstBlock] — the FIRST BLOCK OF THE FIRST GROUP — and rebuilds a program
+ * around it from a rep count taken off the last logged set, a set count taken off the settings
+ * and a pause taken off the journal. For a plain pair that is exactly right, because a pair is
+ * all its schedule ever said. For a richer schedule it is a silent collapse: a second block, a
+ * changed order, a group repeat, a pause between groups — everything past the first block
+ * meant nothing at all, and the run that played was not the one the schedule described.
+ *
+ * So a strict schedule runs as written, and the three derived numbers do not enter into it.
+ * The only thing supplied from outside is the exercise link, which makes the finished run
+ * offerable as sets of THIS exercise ([RunOrigin.EXERCISE]) — twins that deliberately share one
+ * schedule (§18.15) each get a run named after themselves rather than after the shared row.
+ *
+ * [WorkoutProgram.prepareSec] is deliberately the SCHEDULE'S OWN and not the global timer
+ * setting: the lead-in is a stretch of time inside the scenario, and the scenario is the thing
+ * that is strict. Returns null for anything that is not [ScheduleKind.STRICT].
+ */
+fun scheduledRun(exercise: ExerciseRef): WorkoutProgram? {
+    val schedule = exercise.schedule ?: return null
+    if (scheduleKindOf(schedule) != ScheduleKind.STRICT) return null
+    return schedule.copy(name = exercise.name, exerciseId = exercise.id)
+}
+
 /** Total length of a program once expanded, in seconds. */
 fun WorkoutProgram.totalSec(): Int = flatten().sumOf { it.durationSec }
 
