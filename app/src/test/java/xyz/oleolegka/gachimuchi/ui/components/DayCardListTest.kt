@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performTouchInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import xyz.oleolegka.gachimuchi.domain.DraftSummary
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.dayCards
@@ -62,7 +63,10 @@ class DayCardListTest : ScreenTest() {
     private var edited: Long? = null
     private var deleted: Long? = null
     private var deletedWorkout: Long? = null
+    private var deletedEntries: Pair<List<Long>, Long?>? = null
     private var renamed: Pair<Long, String?>? = null
+    private var resumedDraft = false
+    private var discardedDraft = false
 
     private fun actions(withSlotIcons: Boolean = false) = DayActions(
         startFromPlan = { id, date -> startedFromPlan = id to date },
@@ -72,7 +76,10 @@ class DayCardListTest : ScreenTest() {
         openWorkout = { id -> opened = id },
         openExercise = { id, date -> openedExercise = id to date },
         deleteWorkout = { id -> deletedWorkout = id },
+        deleteSingleEntries = { ids, exerciseId -> deletedEntries = ids to exerciseId },
         renameWorkout = { id, name -> renamed = id to name },
+        resumeDraft = { resumedDraft = true },
+        discardDraft = { discardedDraft = true },
         editSlot = if (withSlotIcons) ({ id -> edited = id }) else null,
         deleteSlot = if (withSlotIcons) ({ id -> deleted = id }) else null,
     )
@@ -83,8 +90,9 @@ class DayCardListTest : ScreenTest() {
         slots: List<Slot> = emptyList(),
         date: LocalDate = today,
         withSlotIcons: Boolean = false,
+        draft: DraftSummary? = null,
     ) {
-        val cards = dayCards(events, slots, date, today, today.atTime(12, 0))
+        val cards = dayCards(events, slots, date, today, today.atTime(12, 0), draft)
         screen { DayCardList(day = cards, date = date, actions = actions(withSlotIcons)) }
     }
 
@@ -332,25 +340,116 @@ class DayCardListTest : ScreenTest() {
         assertNull("answering no must write nothing", deletedWorkout)
     }
 
-    /**
-     * The two kinds that answer a long press with nothing, each for its own reason: a plan
-     * already carries its actions as icons, and a single-entry card is a GROUP whose entries
-     * are removed one at a time from the breakdown behind it.
-     */
+    /** A plan answers a long press with nothing: it already carries its actions as icons. */
     @Test
-    fun `a planned card and a loose entry card raise no menu`() {
-        val journal = Journal()
-        journal.strengthSet(fingerboard, today.toString(), at = "12:00")
-        day(journal.events, slots = listOf(slot(7, "Gym", "18:00", today.toString())))
+    fun `a planned card raises no menu`() {
+        day(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
         compose.onNodeWithText("Gym").performTouchInput { longClick() }
         settle()
         compose.onNodeWithText("Delete workout").assertDoesNotExist()
+        compose.onNodeWithText("Delete entry").assertDoesNotExist()
+        assertNull(deletedWorkout)
+    }
+
+    /*
+     * §23.A1, from the phone: a single entry could be emptied out one set at a time until it
+     * vanished, and could not be deleted. A card is an object and every object of the log is
+     * removed the same way — by the same long press a workout card answers.
+     */
+    @Test
+    fun `a long press on a loose card offers to delete the whole group and names the rows`() {
+        val journal = Journal()
+        journal.strengthSet(fingerboard, today.toString(), at = "12:00")
+        journal.strengthSet(fingerboard, today.toString(), at = "12:04")
+        val ids = journal.events.map { it.id }
+
+        day(journal.events)
+
+        compose.onNodeWithText("Delete these entries").assertDoesNotExist()
 
         compose.onNodeWithText("Fingerboard 20 mm").performTouchInput { longClick() }
         settle()
-        compose.onNodeWithText("Delete workout").assertDoesNotExist()
-        assertNull(deletedWorkout)
+        compose.onNodeWithText("Delete these entries").performClick()
+        settle()
+
+        compose.onNodeWithText("Delete these entries?").assertExists()
+        assertNull("nothing may be written before the question is answered", deletedEntries)
+
+        compose.onNodeWithText("Delete").performClick()
+        assertEquals(ids to fingerboard.id, deletedEntries)
+    }
+
+    /** A card that names no exercise (a weigh-in) is deleted the same way, with a null id. */
+    @Test
+    fun `a weigh-in card can be deleted too`() {
+        val journal = Journal()
+        journal.weighIn(today.toString(), kg = 74.2)
+
+        day(journal.events)
+
+        compose.onNodeWithText("Body weight").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Delete entry").performClick()
+        settle()
+        compose.onNodeWithText("Delete this entry?").assertExists()
+        compose.onNodeWithText("Delete").performClick()
+
+        assertEquals(journal.events.map { it.id } to null, deletedEntries)
+    }
+
+    // --- the draft, which is not in the journal at all (§23.A3) ----------------------------
+
+    @Test
+    fun `a workout composed and not started is a card that says so and leads back into it`() {
+        day(draft = DraftSummary(today.toString(), "Legs", exerciseCount = 3))
+
+        compose.onNodeWithText("Legs").assertIsDisplayed()
+        compose.onNodeWithText("not started - 3 exercises").assertIsDisplayed()
+
+        compose.onNodeWithText("Continue").performClick()
+        assertEquals(true, resumedDraft)
+    }
+
+    @Test
+    fun `the draft card belongs to its own day and appears on no other`() {
+        day(date = yesterday, draft = DraftSummary(today.toString(), "Legs", exerciseCount = 3))
+
+        compose.onNodeWithText("Legs").assertDoesNotExist()
+    }
+
+    /*
+     * The whole of §23.A3 in one assertion: throwing the draft away is an ANSWER to a
+     * question, never a side effect. The cross on the logging screen used to do it silently.
+     */
+    @Test
+    fun `discarding a draft is behind a long press and a question`() {
+        day(draft = DraftSummary(today.toString(), null, exerciseCount = 2))
+
+        // an unnamed draft is shown the way an unnamed workout is
+        compose.onNodeWithText("Workout").assertIsDisplayed()
+
+        compose.onNodeWithText("Workout").performTouchInput { longClick() }
+        settle()
+        compose.onNodeWithText("Discard draft").performClick()
+        settle()
+
+        compose.onNodeWithText("Discard this draft?").assertExists()
+        assertEquals("the question alone must throw nothing away", false, discardedDraft)
+
+        compose.onNodeWithText("Discard").performClick()
+        assertEquals(true, discardedDraft)
+    }
+
+    /** One draft at a time, and the menu says why rather than hiding the answer. */
+    @Test
+    fun `the Add menu refuses a second workout while one is being composed`() {
+        day(draft = DraftSummary(today.toString(), "Legs", exerciseCount = 1))
+
+        compose.onNodeWithText("Add").performClick()
+        settle()
+        compose.onNodeWithText("Workout - one is already open").assertIsDisplayed()
+        compose.onNodeWithText("Single entry").assertIsDisplayed()
     }
 
     // --- the pencil and the bin, which belong to the calendar only -------------------------

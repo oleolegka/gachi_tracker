@@ -65,6 +65,7 @@ import xyz.oleolegka.gachimuchi.domain.restSourceLabel
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
+import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.workoutEventIds
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.timer.TimerController
@@ -634,6 +635,40 @@ class MainViewModel(
     }
 
     /**
+     * Takes one exercise CARD out of a workout: its rows, and the rest counting under it.
+     *
+     * ── Why the rest is dismissed twice, by two different rules ─────────────────
+     * First by CARD — (exerciseId, side) — which is right and is what the left hand's card
+     * being removed must not do to the right hand's countdown.
+     *
+     * Then, once the rows are gone, by EXERCISE, but only if the workout no longer holds any
+     * card of it. That second pass is the belt to the first one's braces, and it exists because
+     * the two keys are written by different code paths: a floor is keyed by the side of the SET
+     * that started it, a card by the side of the row that added it, and any journal where those
+     * two disagree (a set recorded with no side on a one-sided exercise — see WorkoutExercise's
+     * own KDoc for how that produces a third, sideless block) leaves a countdown alive with
+     * nothing left on screen to stop it. That is §23.A2 as reported from the phone: the exercise
+     * is gone and the rest goes on counting, and speaking, in the background.
+     */
+    fun removeWorkoutExercise(
+        workoutId: Long,
+        eventIds: List<Long>,
+        exerciseId: Long?,
+        side: HoldSide? = null,
+    ) {
+        exerciseId?.let { timer.floors.dismiss(it, side?.code) }
+        viewModelScope.launch {
+            if (eventIds.isNotEmpty()) repo.deleteEntries(eventIds)
+            if (exerciseId != null) {
+                val stillThere = buildWorkout(repo.allEvents(), workoutId)
+                    ?.exercises.orEmpty()
+                    .any { it.exerciseId == exerciseId }
+                if (!stillThere) timer.floors.dismissAllOf(exerciseId)
+            }
+        }
+    }
+
+    /**
      * Removes a workout and everything recorded into it.
      *
      * ── Why the whole thing and not just the start event ────────────────────────
@@ -654,7 +689,18 @@ class MainViewModel(
      */
     fun deleteWorkout(workoutId: Long) {
         viewModelScope.launch {
-            repo.deleteEntries(workoutEventIds(repo.allEvents(), workoutId))
+            val events = repo.allEvents()
+            /*
+             * The countdowns first, and from the workout as it still reads — after the rows are
+             * gone there is nothing left to ask which exercises it held. A rest outlives the
+             * screen it was started from (it is a foreground service, a notification and an
+             * alarm), so deleting the workout without this leaves the phone counting, and
+             * eventually speaking, for a session that is no longer in the log (§23.A2).
+             */
+            buildWorkout(events, workoutId)?.exercises?.forEach { exercise ->
+                exercise.exerciseId?.let { timer.floors.dismiss(it, exercise.side?.code) }
+            }
+            repo.deleteEntries(workoutEventIds(events, workoutId))
         }
     }
 
@@ -766,6 +812,22 @@ class MainViewModel(
      * the OTHER hand's own countdown either.
      */
     fun dismissFloor(exerciseId: Long, side: HoldSide? = null) = timer.floors.dismiss(exerciseId, side?.code)
+
+    /** Both cards of it, when the exercise itself is what is going — see [FloorController.dismissAllOf]. */
+    fun dismissFloorsOf(exerciseId: Long) = timer.floors.dismissAllOf(exerciseId)
+
+    /**
+     * Removes a whole SINGLE-entry card of a day: its rows, and the rest its exercise may still
+     * be counting.
+     *
+     * The two halves are one act because they were one object on the screen. Deleting the rows
+     * and leaving the countdown was the shape of §23.A2 — a bar, a notification and eventually a
+     * beep for something the log no longer contains.
+     */
+    fun deleteSingleEntries(eventIds: List<Long>, exerciseId: Long?) {
+        exerciseId?.let { dismissFloorsOf(it) }
+        deleteEntries(eventIds)
+    }
 
     /**
      * The plate answered on the way INTO the set that is running, or null when none was.

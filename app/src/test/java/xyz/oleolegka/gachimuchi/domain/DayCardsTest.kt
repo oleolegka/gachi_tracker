@@ -123,7 +123,8 @@ class DayCardsTest {
         slots: List<Slot> = emptyList(),
         date: LocalDate = today,
         now: LocalDateTime = noon(today),
-    ) = dayCards(events, slots, date, today, now)
+        draft: DraftSummary? = null,
+    ) = dayCards(events, slots, date, today, now, draft)
 
     // --- an empty day ------------------------------------------------------------------
 
@@ -295,6 +296,74 @@ class DayCardsTest {
 
         assertEquals("outside a workout - 1 entry", day.cards[1].subtitle)
         assertEquals("20:00", day.cards[1].timeLabel)
+    }
+
+    /*
+     * §23.A1: the card has to name the rows it stands for, or there is no way to delete the
+     * object — only a way to empty it out one entry at a time until it disappears by itself.
+     */
+    @Test
+    fun `a loose card carries every row it stands for, so it can be removed whole`() {
+        val iso = today.toString()
+        val rows = listOf(set(fingerboard, iso, at = "19:00"), set(fingerboard, iso, at = "19:05"))
+        val day = cardsOf(rows + set(stretching, iso, at = "20:00"))
+
+        assertEquals(rows.map { it.id }, day.cards.first().entryIds)
+        // and only its own: the other exercise's row is on the other card
+        assertEquals(1, day.cards[1].entryIds.size)
+    }
+
+    /** A weigh-in names no exercise and still has to be deletable — the rows are what it has. */
+    @Test
+    fun `a weigh-in card carries its row even though it names no exercise`() {
+        val row = weighIn(today.toString())
+        val card = cardsOf(listOf(row)).cards.single()
+
+        assertNull(card.exerciseId)
+        assertEquals(listOf(row.id), card.entryIds)
+    }
+
+    // --- the workout being composed (§23.A3) --------------------------------------------
+
+    @Test
+    fun `a draft is a card of its own day, and says it has not been started`() {
+        val day = cardsOf(emptyList(), draft = DraftSummary(today.toString(), "Legs", 3))
+
+        val card = day.cards.single()
+        assertEquals(DayCardKind.DRAFT, card.kind)
+        assertEquals("Legs", card.title)
+        assertEquals("not started - 3 exercises", card.subtitle)
+        assertEquals(DayCardAction.RESUME, card.action)
+        // §13.1 is untouched: nothing about a draft is in the journal, so nothing on the day
+        // reads as a workout in progress
+        assertEquals("", card.timeLabel)
+    }
+
+    @Test
+    fun `a draft with nothing in it yet is still a card`() {
+        val card = cardsOf(emptyList(), draft = DraftSummary(today.toString(), null, 0)).cards.single()
+
+        assertEquals("Workout", card.title)
+        assertEquals("not started - nothing added yet", card.subtitle)
+    }
+
+    @Test
+    fun `a draft appears on its own day and on no other`() {
+        val draft = DraftSummary(today.toString(), "Legs", 1)
+
+        assertTrue(cardsOf(emptyList(), date = yesterday, draft = draft).isEmpty)
+        assertTrue(cardsOf(emptyList(), date = tomorrow, draft = draft).isEmpty)
+    }
+
+    @Test
+    fun `a draft never pushes what is already recorded down the day`() {
+        val iso = today.toString()
+        val day = cardsOf(
+            listOf(set(fingerboard, iso, at = "19:00")),
+            draft = DraftSummary(iso, "Legs", 1),
+        )
+
+        assertEquals(listOf(DayCardKind.SINGLE, DayCardKind.DRAFT), day.cards.map { it.kind })
     }
 
     /**

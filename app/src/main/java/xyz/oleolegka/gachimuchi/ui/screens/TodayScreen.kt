@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.oleolegka.gachimuchi.domain.DraftSummary
 import xyz.oleolegka.gachimuchi.domain.dayCards
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.DayActions
@@ -54,6 +55,8 @@ fun TodayScreen(
     today: LocalDate,
     actions: DayActions,
     modifier: Modifier = Modifier,
+    /** The workout being composed, when there is one — see [DraftSummary]. */
+    draft: DraftSummary? = null,
 ) {
     val colors = LocalGachiColors.current
 
@@ -64,8 +67,8 @@ fun TodayScreen(
      * calendar makes, and one recomposition away from correct.
      */
     val now: LocalDateTime = remember(state.events, state.slots, today) { LocalDateTime.now() }
-    val day = remember(state.events, state.slots, today, now) {
-        dayCards(state.events, state.slots, today, today, now)
+    val day = remember(state.events, state.slots, today, now, draft) {
+        dayCards(state.events, state.slots, today, today, now, draft)
     }
 
     LazyColumn(

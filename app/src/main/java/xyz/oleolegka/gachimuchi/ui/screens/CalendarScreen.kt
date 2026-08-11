@@ -52,6 +52,7 @@ import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.SlotState
 import xyz.oleolegka.gachimuchi.domain.activityStamps
 import xyz.oleolegka.gachimuchi.domain.calendarDots
+import xyz.oleolegka.gachimuchi.domain.DraftSummary
 import xyz.oleolegka.gachimuchi.domain.dayCards
 import xyz.oleolegka.gachimuchi.domain.journalInstanceCounts
 import xyz.oleolegka.gachimuchi.domain.planVsFact
@@ -154,6 +155,8 @@ fun CalendarScreen(
         restSec: Double?,
         then: (Long) -> Unit,
     ) -> Unit)? = null,
+    /** The workout being composed, when there is one — see [DraftSummary]. */
+    draft: DraftSummary? = null,
 ) {
     var monthOffset by rememberSaveable { mutableIntStateOf(0) }
     var selected by rememberSaveable { mutableStateOf(today.toString()) }
@@ -196,8 +199,8 @@ fun CalendarScreen(
     }
 
     val selectedDate = remember(selected) { runCatching { LocalDate.parse(selected) }.getOrDefault(today) }
-    val selectedDay = remember(state.events, state.slots, selectedDate, today, now) {
-        dayCards(state.events, state.slots, selectedDate, today, now)
+    val selectedDay = remember(state.events, state.slots, selectedDate, today, now, draft) {
+        dayCards(state.events, state.slots, selectedDate, today, now, draft)
     }
     // the pencil and the bin belong to the calendar and only to the calendar; the same
     // component draws no icons on Today, where the two lambdas are left null
