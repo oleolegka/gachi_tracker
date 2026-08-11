@@ -60,14 +60,20 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * Same reason as the logging screen: seven seconds becomes eight with one tap and no
  * keyboard. The text field is still there underneath for the cases a stepper is slow at.
  *
- * ── [locked]: an existing exercise's protocol, opened for a look ────────────────
- * True when some exercise's protocol currently IS [initial] — see
- * [xyz.oleolegka.gachimuchi.data.ProgramRepository.isReferenced], which this is computed from
- * before the screen ever opens. Locked, the lead-in and every group and block are shown as
- * READ TEXT rather than fields: "such a thing cannot happen: it breaks the statistics. If
- * yesterday it was one protocol and today another, that is a NEW exercise" is the owner's own
- * words for why this screen must not be the second door onto the same mistake the exercise
- * editor already closed (`ui/screens/EditExerciseScreen.kt`).
+ * ── [locked]: a schedule that has been trained on, opened for a look ────────────
+ * True when a set has been recorded by some exercise whose protocol [initial] is — the same
+ * question [xyz.oleolegka.gachimuchi.data.ProgramRepository.isFrozen] asks, computed from the
+ * same domain function (`domain/ScheduleFreeze.kt`) before the screen ever opens. Locked, the
+ * lead-in and every group and block are shown as READ TEXT rather than fields: "such a thing
+ * cannot happen: it breaks the statistics. If yesterday it was one protocol and today another,
+ * that is a NEW exercise" is the owner's own words for why this screen must not be the second
+ * door onto the same mistake the exercise editor already closed
+ * (`ui/screens/EditExerciseScreen.kt`).
+ *
+ * NOT locked merely by being somebody's schedule (§18.19, superseding §18.9). A schedule with
+ * no sets against it yet has no history to put out of step, so a wrong number in it is a typo
+ * and gets to be corrected. Sharing matters here: twins point at one schedule on purpose, so
+ * the question is asked of ALL the exercises pointing at it, never of one.
  *
  * NOT locked: the name, the category and the exercise link. None of the three is part of an
  * identity keyed on the program's uid (`domain/Catalog.kt`'s `ExerciseIdentity`), and a name a
@@ -86,7 +92,7 @@ fun ProgramEditorScreen(
     candidates: List<ExerciseRef>,
     /** Headings already in use, so the same one is not spelled two ways. */
     categories: List<String>,
-    /** Whether [initial] is some exercise's protocol right now — see the KDoc above. */
+    /** Whether [initial] has had a set recorded against it — see the KDoc above. */
     locked: Boolean = false,
     /**
      * This editor is building the SCHEDULE of an exercise that does not exist yet — opened in
@@ -369,10 +375,10 @@ private fun LockedNotice() {
     val colors = LocalGachiColors.current
     Card(Modifier.fillMaxWidth()) {
         Text(
-            "This program is a running exercise's protocol, so its timing is fixed: " +
-                "changing it here would change the exercise's history along with it. Rename " +
-                "it or move it to another category freely - to change the timing, create a " +
-                "new exercise with the protocol you want.",
+            "Sets have been recorded against this schedule, so its timing is fixed: " +
+                "changing it here would change that history along with it. Rename it or move " +
+                "it to another category freely - to change the timing, create a new exercise " +
+                "with the protocol you want.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkSecondary,
             modifier = Modifier.padding(12.dp),

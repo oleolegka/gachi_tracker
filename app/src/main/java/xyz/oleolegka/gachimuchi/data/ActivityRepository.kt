@@ -68,6 +68,7 @@ import xyz.oleolegka.gachimuchi.domain.resolvedCards
 import xyz.oleolegka.gachimuchi.domain.wantsBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.withBodyweightSnapshot
 import xyz.oleolegka.gachimuchi.domain.openWorkout
+import xyz.oleolegka.gachimuchi.domain.abandonedWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.domain.payloadJson
 import xyz.oleolegka.gachimuchi.domain.restHintSec
@@ -192,21 +193,47 @@ class ActivityRepository(private val db: AppDatabase) {
          * in whatever happened to be open instead, which is either another workout or nothing.
          */
         intoWorkoutId: Long? = null,
-    ): Long {
+    ): Long = db.withTransaction {
+        /*
+         * TRANSACTED because this can now be TWO inserts: closing an abandoned workout
+         * (§18.18) and then writing the entry that would otherwise have joined it. Half of that
+         * pair landing — the entry written, the close lost — is the exact defect being fixed,
+         * arrived at by a different road; the other half alone is a workout closed for a set
+         * that never got written.
+         */
         // one read, shared by both consumers, and skipped entirely when neither wants it —
         // a named workout is looked up by id and needs no fold
         val needsEvents = form.wantsBodyweightSnapshot || (attachToWorkout && intoWorkoutId == null)
         val events = if (needsEvents) allEvents() else emptyList()
         val workout: JournalEvent? = when {
             intoWorkoutId != null -> db.events().byId(intoWorkoutId)?.toJournalEvent()
-            attachToWorkout -> openWorkoutRow(events)
+            /*
+             * THE FORGOTTEN ONE IS CLOSED ON THE WAY IN, and this set does not join it
+             * (§18.18). Without this, a set logged a week after the last one — no workout
+             * started in between, nobody having pressed finish — was filed inside that week-old
+             * workout, whose end time then moved a week forward to meet it. The set lands
+             * outside any workout instead, which is where a set recorded with nothing running
+             * belongs, and it is still on its own day and in every total.
+             *
+             * ONLY for the fold. A caller naming [intoWorkoutId] is a screen that is DRAWING a
+             * particular workout, and deliberately writing into an old one is exactly the case
+             * "finishing is a status and not a lock" exists for — the forgotten set typed up
+             * afterwards. Explicit beats the timeout, always.
+             */
+            attachToWorkout -> when (val abandoned = abandonedWorkoutRow(events, LocalDateTime.now())) {
+                null -> openWorkoutRow(events)
+                else -> {
+                    finishWorkout(abandoned.id, auto = true)
+                    null
+                }
+            }
             else -> null
         }
         // the body-weight snapshot is stamped HERE for the same reason the workout link is:
         // one method sees every write, and a screen that forgot would log a set with no
         // volume at all. See [withBodyweightSnapshot].
         val stamped = form.withBodyweightSnapshot { day -> bodyweightAt(events, day) }
-        return db.events().insert(
+        db.events().insert(
             event(
                 type = stamped.type, payload = stamped.toPayload(),
                 // both links, and the uid is the one the reducers believe: see EventEntity
@@ -271,13 +298,18 @@ class ActivityRepository(private val db: AppDatabase) {
      * No time is recorded — the end is read off the last set (see [Workout.endTs]) — and
      * nothing is locked: the workout can still be opened and written into afterwards, which is
      * how the set forgotten in the changing room gets in.
+     *
+     * [auto] = true is the app closing it rather than the user, and it is written into the
+     * event so the screen can say so — see [WorkoutFinished.auto] and
+     * [closeAbandonedWorkout]. The row is otherwise identical, deliberately: "Reopen" undoes
+     * an automatic close exactly as it undoes a pressed one.
      */
-    suspend fun finishWorkout(workoutId: Long): Long {
+    suspend fun finishWorkout(workoutId: Long, auto: Boolean = false): Long {
         val uid = db.events().byId(workoutId)?.uid
         return db.events().insert(
             event(
                 type = TYPE_WORKOUT_FINISHED,
-                payload = payloadJson.encodeToString(WorkoutFinished(workoutId, uid)),
+                payload = payloadJson.encodeToString(WorkoutFinished(workoutId, uid, auto)),
                 // the link in the column as well as the payload, so one query finds every row
                 // of a workout whatever its type — same as the "exercise added" event
                 workoutId = workoutId, workoutUid = uid,
@@ -294,6 +326,51 @@ class ActivityRepository(private val db: AppDatabase) {
      * Returns the id of the deletion, or null when [eventId] names no row here.
      */
     suspend fun unfinishWorkout(eventId: Long): Long? = deleteEntry(eventId)
+
+    /**
+     * Closes the workout nobody finished, if it has been left alone long enough
+     * ([abandonedWorkoutRow]). Returns the id of the finish event written, or null when there
+     * was nothing to close.
+     *
+     * ── Why a written EVENT and not a rule the fold applies ──────────────────────
+     * The tempting cheaper answer is to teach [openWorkoutRow] the timeout and write nothing:
+     * no row invented on the user's behalf, no decision taken by the app. It cannot work,
+     * because the owner's justification for closing automatically at all is that it is
+     * reversible — "we gave a button to resume a workout, so even if we close the wrong one it
+     * is not critical". That button ([unfinishWorkout]) DELETES the finish event. With no
+     * event there is nothing to delete, and a workout the clock had disowned would be reopened
+     * and then disowned again by the same clock a moment later. A fact in the journal can be
+     * taken back; a rule cannot.
+     *
+     * The honest cost of that choice, named rather than buried: this writes a
+     * [TYPE_WORKOUT_FINISHED] row the user did not ask for, into a journal whose whole premise
+     * is that it records what happened. It is marked as the app's own
+     * ([WorkoutFinished.auto]), the workout screen says which of the two closed it, and the
+     * end time it implies is the last set's rather than this moment's — so the invented row
+     * states only the thing that was already true.
+     *
+     * ── Where this is called from, and why those two places ──────────────────────
+     * 1. [xyz.oleolegka.gachimuchi.ui.MainViewModel]'s startup, so that opening the app the
+     *    morning after does not show yesterday's workout as still running. The screen has to
+     *    agree with the rule, or the user taps a card that should not have been there.
+     * 2. [record], BEFORE a new entry is filed — see its own body. That is the defect §18.18
+     *    is actually about: a set logged a week later with no workout started went INTO the
+     *    forgotten one. Closing it in the same call is what sends that set somewhere sane
+     *    instead.
+     *
+     * The gap between them, stated: an app left in the foreground across the threshold with
+     * nothing recorded goes on showing the workout as open until something is written or it is
+     * next started. Closing that would need a clock running against the journal, which is a
+     * background job this app deliberately does not have.
+     *
+     * TRANSACTED for the same reason [startWorkout] is: the read that decides and the insert
+     * that acts must not be separated by another write.
+     */
+    suspend fun closeAbandonedWorkout(now: LocalDateTime = LocalDateTime.now()): Long? =
+        db.withTransaction {
+            val abandoned = abandonedWorkoutRow(allEvents(), now) ?: return@withTransaction null
+            finishWorkout(abandoned.id, auto = true)
+        }
 
     /**
      * Marks one CARD of a workout done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. The per-card
@@ -1002,14 +1079,16 @@ class ActivityRepository(private val db: AppDatabase) {
      * hand — one group, one block, no repeats, 7 s and 3 s — is indistinguishable by shape
      * from what the block below writes, so creating an exercise with those two numbers ADOPTED
      * it: the hand-written program silently became that exercise's protocol, jumped out of its
-     * own category into the schedules section, and froze forever (§18.9 — a referenced program
-     * cannot have its content edited or be deleted, and a catalog row is never deleted, so
-     * there is no way back). The user asked for an exercise and lost a program.
+     * own category into the schedules section, and froze the moment a set was recorded against
+     * it (a frozen schedule cannot have its content edited or be deleted, and a catalog row is
+     * never deleted, so there is no way back). The user asked for an exercise and lost a
+     * program. §18.19's mild freeze narrows the window — the adoption is repairable until the
+     * first set — but it does not close it, so the origin rule below stays.
      *
      * The line drawn instead is ORIGIN, not shape: a program is reusable here only if it is
      * ALREADY some exercise's protocol. That is a fact the schema already holds
-     * (`exercises.protocol_program_id`, the same one [ProgramRepository.isReferenced] asks
-     * about) — NO new column and no migration — and it says exactly the right thing:
+     * (`exercises.protocol_program_id`, asked directly through
+     * `ExerciseDao.withProtocolProgram`) — NO new column and no migration — and it says exactly the right thing:
      *
      * - the programs this method wrote are referenced the moment their exercise is inserted,
      *   so the twins case §18.15 calls normal still works: "hangs 20 mm" and "hangs 15 mm" at
@@ -1020,8 +1099,8 @@ class ActivityRepository(private val db: AppDatabase) {
      *
      * A program the owner deliberately POINTED an exercise at (the strict branch of the create
      * form) is referenced too, so a later exercise with matching numbers could still land on
-     * it. That is the residue, and it is small on purpose: such a program is already frozen and
-     * already a schedule, so nothing new is lost, and the strict branch only offers programs
+     * it. That is the residue, and it is small on purpose: such a program is already a schedule
+     * the owner chose, so nothing new is lost, and the strict branch only offers programs
      * that are strict (`ui/screens/ExercisePicker.kt`'s `protocolCandidates`), which the
      * one-block-no-repeats shape this method matches never is.
      *
@@ -1041,8 +1120,11 @@ class ActivityRepository(private val db: AppDatabase) {
             .firstOrNull {
                 it.isMinimalProtocol(workInt, restInt) &&
                     // already somebody's schedule — see this method's KDoc for why origin and
-                    // not shape is what decides
-                    db.exercises().existsWithProtocolProgram(it.id)
+                    // not shape is what decides. A REFERENCE, deliberately, not
+                    // ProgramRepository.isFrozen: the question here is "is this a schedule at
+                    // all", and a schedule nobody has trained on yet is still a schedule and
+                    // still the row a twin has to land on (§18.15)
+                    db.exercises().withProtocolProgram(it.id).isNotEmpty()
             }
             ?.let { return it }
         val id = programRepo.save(

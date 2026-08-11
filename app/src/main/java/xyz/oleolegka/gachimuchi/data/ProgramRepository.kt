@@ -7,10 +7,13 @@ import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ProgramBlockEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramEntity
 import xyz.oleolegka.gachimuchi.data.db.ProgramGroupEntity
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
+import xyz.oleolegka.gachimuchi.domain.scheduleFrozen
 import xyz.oleolegka.gachimuchi.domain.starterPrograms
+import xyz.oleolegka.gachimuchi.domain.trainedExercises
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -53,16 +56,21 @@ class ProgramRepository(private val db: AppDatabase) {
      * Groups and blocks keep the order they have in the value — [ProgramGroup] and
      * [ProgramBlock] carry no position of their own, the list order IS the order.
      *
-     * ── A REFERENCED program does not rewrite its content ────────────────────────
-     * Once [isReferenced] says an exercise's protocol IS this program, `prepare_sec` and
-     * every group and block are left exactly as stored — the loop below is skipped entirely,
-     * `deleteGroupsOf` included, so nothing about the CONTENT of a running exercise's protocol
-     * can move underneath it. The owner's rule, verbatim: "such a thing cannot happen: it
-     * breaks the statistics. If yesterday it was one protocol and today another, that is a NEW
-     * exercise" — and the library editor used to be exactly that hole, because the same stored
-     * program is what several exercises' protocols collapse onto (identical numbers share one
-     * row), so editing it by content moved every one of them at once, silently, under
-     * `identity_key`s that never changed to say so.
+     * ── A TRAINED-ON program does not rewrite its content ────────────────────────
+     * Once [isFrozen] says a set has been recorded by some exercise this program is the
+     * schedule of, `prepare_sec` and every group and block are left exactly as stored — the
+     * loop below is skipped entirely, `deleteGroupsOf` included, so nothing about the CONTENT
+     * of a running exercise's protocol can move underneath it. The owner's rule, verbatim:
+     * "such a thing cannot happen: it breaks the statistics. If yesterday it was one protocol
+     * and today another, that is a NEW exercise" — and the library editor used to be exactly
+     * that hole, because the same stored program is what several exercises' protocols collapse
+     * onto (identical numbers share one row), so editing it by content moved every one of them
+     * at once, silently, under `identity_key`s that never changed to say so.
+     *
+     * UNTIL THEN IT IS EDITABLE, which is the change §18.19 made: a schedule assembled and not
+     * yet trained on has no history under it to put out of step, so correcting a number in it
+     * is a correction. The rule this replaced froze it in the second the exercise was created,
+     * and the only repair left was to abandon the exercise and build another.
      *
      * NAME, CATEGORY and the exercise link are NOT frozen — identity is keyed on the program's
      * `uid`, never on what it is called or filed under, and correcting a name a migration
@@ -99,7 +107,7 @@ class ProgramRepository(private val db: AppDatabase) {
             )
         } else {
             val existing = db.programs().programById(program.id)
-            val frozen = isReferenced(program.id)
+            val frozen = isFrozen(program.id)
             db.programs().updateProgram(
                 ProgramEntity(
                     id = program.id,
@@ -183,16 +191,28 @@ class ProgramRepository(private val db: AppDatabase) {
     }
 
     /**
-     * Removes a program, unless it is some exercise's schedule. Returns whether it went.
+     * Removes a program, unless it is a schedule that has been trained on. Returns whether it
+     * went.
      *
-     * ── Why a referenced program cannot be deleted at all ────────────────────────
-     * [save] already refuses to move the CONTENT of a program an exercise is keyed to, on the
-     * owner's rule that a protocol which changes is a new exercise. Deleting the whole row was
-     * the hole left beside that door: the `exercises` row keeps `protocol_program_id` — nothing
-     * cascades, there is no foreign key — so the exercise came out the other side with a
-     * dangling reference, reading as "no protocol", while its `identity_key` still carried the
-     * uid of a program that no longer existed. That is the same identity break the freeze
-     * exists to prevent, only unrecoverable rather than silent.
+     * ── Why a frozen program cannot be deleted at all ────────────────────────────
+     * [save] already refuses to move the CONTENT of a program an exercise with history is keyed
+     * to, on the owner's rule that a protocol which changes is a new exercise. Deleting the
+     * whole row was the hole left beside that door: the `exercises` row keeps
+     * `protocol_program_id` — nothing cascades, there is no foreign key — so the exercise came
+     * out the other side with a dangling reference, reading as "no protocol", while its
+     * `identity_key` still carried the uid of a program that no longer existed. That is the
+     * same identity break the freeze exists to prevent, only unrecoverable rather than silent.
+     *
+     * ── The same question all three doors ask, and what it now costs ─────────────
+     * [isFrozen] rather than "is it referenced" (§18.19): the editor, this method and the
+     * library's delete entry are required to agree, and a delete refused on a rule the screen
+     * does not share is a menu entry that does nothing. The consequence, named rather than
+     * hidden: a schedule that IS somebody's and has no sets yet can now be deleted, and its
+     * exercise comes out with a dangling `protocol_program_id` reading as "no protocol". That
+     * is a real loss of the schedule — but of a schedule nothing was ever recorded against, on
+     * an exercise with no history to break, which is the whole premise of the mild freeze. It
+     * is not cleared here on purpose: `identity_key` is derived from that column, so clearing
+     * it would silently move the exercise's identity as a side effect of a library delete.
      *
      * The exercise's own removal does NOT free it either, and that is deliberate rather than
      * overlooked: [xyz.oleolegka.gachimuchi.data.ActivityRepository.deleteExercise] writes an
@@ -207,23 +227,48 @@ class ProgramRepository(private val db: AppDatabase) {
      * cannot go stale between the question and the DELETE.
      */
     suspend fun delete(id: Long): Boolean = db.withTransaction {
-        if (isReferenced(id)) return@withTransaction false
+        if (isFrozen(id)) return@withTransaction false
         db.programs().deleteProgram(id)
         true
     }
 
     /**
-     * Whether some exercise's protocol currently IS this program — the live fact [save] freezes
-     * a program's content against, and the same fact
-     * [xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen] is shown so its content
-     * controls can be locked before a doomed edit is even typed.
+     * Whether this program's content has hardened into history — the live fact [save] freezes a
+     * program against, [delete] refuses on, and
+     * [xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen] is shown so its content controls
+     * can be locked before a doomed edit is even typed.
      *
-     * Public rather than private for that second reason: the screen that hosts the editor has
-     * to ask this BEFORE calling [save], not learn about the freeze from a save that silently
-     * did less than it was asked.
+     * ── The freeze is MILD, and this is where that is decided ────────────────────
+     * True once SOME EXERCISE POINTING HERE HAS A RECORDED SET, not from the mere fact of a
+     * reference (decisions §18.19, superseding §18.9). A schedule assembled and not yet trained
+     * on is still a draft: correcting one number in it is a correction, not a rewriting of
+     * history, because there is no history under it yet.
+     *
+     * SOME exercise, not the one being asked about — a schedule is deliberately shared by twins
+     * (§18.15), so an edit made for the untouched 15 mm hang would land under the 20 mm hang's
+     * sets. [db.exercises().withProtocolProgram] is what hands back all of them and
+     * [xyz.oleolegka.gachimuchi.domain.scheduleFrozen] is what asks the journal about the lot.
+     *
+     * ── The cost of folding the journal here ────────────────────────────────────
+     * This is no longer one `SELECT EXISTS`: it reads the whole event table and folds it
+     * ([trainedExercises]). It is called on a save, on a delete and nowhere in a loop, at
+     * personal scale (thousands of rows), which is the same trade
+     * [xyz.oleolegka.gachimuchi.data.ActivityRepository.record] already makes to keep ONE
+     * definition of a rule instead of a second one written in SQL that would drift from it.
+     * The screen does not call this at all — it folds once for the whole library, see
+     * [xyz.oleolegka.gachimuchi.domain.frozenScheduleIds].
+     *
+     * Public rather than private because the screen that hosts the editor has to know the
+     * answer BEFORE calling [save], not learn about the freeze from a save that silently did
+     * less than it was asked.
      */
-    suspend fun isReferenced(programId: Long): Boolean =
-        programId != 0L && db.exercises().existsWithProtocolProgram(programId)
+    suspend fun isFrozen(programId: Long): Boolean {
+        if (programId == 0L) return false
+        val owners = db.exercises().withProtocolProgram(programId)
+        if (owners.isEmpty()) return false
+        val events = db.events().all().map { it.toJournalEvent() }
+        return scheduleFrozen(owners.map { ExerciseLink(it.uid, it.id) }, trainedExercises(events))
+    }
 
     /** Keeps a program out of the library list, or brings it back — see [setHidden] callers. */
     suspend fun setHidden(id: Long, hidden: Boolean) = db.programs().setHidden(id, hidden)
