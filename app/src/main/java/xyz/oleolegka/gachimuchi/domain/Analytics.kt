@@ -766,6 +766,28 @@ fun journalInstanceCounts(
 internal fun workoutDays(events: List<JournalEvent>): Set<String> =
     workoutStarts(events).mapTo(HashSet()) { (row, started) -> started?.opDate ?: row.writeDay() }
 
+/**
+ * THE ONE ANSWER TO "WAS THIS DAY TRAINING", over the inclusive [dateFrom]..[dateTo] range.
+ *
+ * A day counts when something was recorded on it ([activeDays]) OR when a workout was started
+ * on it ([workoutDays]) — a session with nothing written inside it is still a session. The
+ * owner's rule, 2026-08-11: "what we show, we count, or the user will lose his mind." The
+ * heatmap had started colouring such a day in while the hero counters and the streak went on
+ * ignoring it, so the same square was training on one part of the screen and a rest day two
+ * blocks up.
+ *
+ * A DRAFT IS NOT TRAINING and never reaches here: it has written no start row at all, so
+ * [workoutDays] cannot see it. Neither is a weigh-in, which [activeDays] excludes through
+ * [FACT_TYPES] — stepping on the scales is not a session, and a morning on the scales must not
+ * cover up a missed evening.
+ *
+ * Everything that asks the question goes through this, and there is a test that fails when a
+ * fourth way of asking it appears (`AnalyticsTest`, "every counter agrees ...").
+ */
+fun trainingDays(events: List<JournalEvent>, dateFrom: String, dateTo: String): Set<String> =
+    activeDays(events, dateFrom, dateTo) +
+        workoutDays(events).filter { it >= dateFrom && it <= dateTo }
+
 /** One cell: the day, how many activities it holds and its intensity level (0 = nothing). */
 data class HeatmapDay(val opDate: String, val count: Int, val level: Int)
 
@@ -821,6 +843,9 @@ internal fun heatmapLevel(count: Int, levels: Int): Int = count.coerceIn(0, leve
  *
  * The fallback only applies where there is nothing else: a workout that DOES hold exercises is
  * already counted by them, and is not given an extra point for being a workout.
+ *
+ * Which days end up with a non-zero count here is [trainingDays] by construction — same two
+ * sources, same union — and there is a test that fails if the two ever drift apart.
  */
 fun activityHeatmap(
     events: List<JournalEvent>,
@@ -946,7 +971,13 @@ fun workingSetTally(
  *
  * A "workout" is an ACTIVE DAY, not an event: logging fifteen sets on Monday is one
  * workout, and counting events here would make the hero number swing on how finely the
- * day happened to be logged.
+ * day happened to be logged. Which days those are is [trainingDays] and nothing local — a
+ * session started and left empty is one of them.
+ *
+ * [entries] is the exception and it is deliberate: it counts what was WRITTEN DOWN, which is a
+ * different question from whether the day happened, and an empty workout genuinely contributes
+ * nothing to it. A week holding only such a session therefore reads "1 workout ... 0 entries",
+ * which is true but does look odd; changing it would mean redefining what an entry is.
  */
 data class HeroStats(
     val windowDays: Int,
@@ -981,11 +1012,11 @@ fun heroStats(events: List<JournalEvent>, today: LocalDate, windowDays: Int = 7)
     val prevTo = from.minusDays(1)
     val prevFrom = prevTo.minusDays((windowDays - 1).toLong())
 
-    val current = activeDays(events, from.toString(), today.toString())
-    val previous = activeDays(events, prevFrom.toString(), prevTo.toString())
+    val current = trainingDays(events, from.toString(), today.toString())
+    val previous = trainingDays(events, prevFrom.toString(), prevTo.toString())
     val entries = readActivities(events, FACT_TYPES, from.toString(), today.toString()).size
     // the streak is read over a wide window so that a long one is not clipped by it
-    val streakDays = activeDays(events, today.minusDays(365).toString(), today.toString())
+    val streakDays = trainingDays(events, today.minusDays(365).toString(), today.toString())
 
     return HeroStats(
         windowDays = windowDays,

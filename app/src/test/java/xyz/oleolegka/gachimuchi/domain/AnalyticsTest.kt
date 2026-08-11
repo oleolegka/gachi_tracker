@@ -1,6 +1,7 @@
 package xyz.oleolegka.gachimuchi.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -365,30 +366,127 @@ class AnalyticsTest {
     }
 
     /**
-     * The canary the two counters needed: the calendar has always drawn a dot for a workout
-     * whatever it held ([journalInstanceCounts]), and the heatmap counted exercises, so the two
-     * screens disagreed about whether an empty session was a day of training at all.
+     * THE CANARY: every counter of "was this day training" is asked here, about the same
+     * journal, in one place. A fifth way of asking the question that forgets the rule fails
+     * here as well as wherever its own test would have been.
+     *
+     * The owner's rule, 2026-08-11: "what we show, we count, or the user will lose his mind."
+     * Before it, the four answers below genuinely disagreed about one empty session: the
+     * calendar drew a dot for it, the heatmap left the square blank, the hero counted no
+     * workout and no streak day, and the plan beside it went MISS.
      */
     @Test
-    fun `the heatmap and the calendar dots agree on whether a day had training`() {
+    fun `every counter agrees on whether a day was training`() {
         val journal = Journal()
-        journal.startWorkout("2026-08-05")
-        journal.weighIn("2026-08-07")
+        journal.startWorkout("2026-08-05")           // a session with nothing logged inside it
+        journal.strengthSet(bench, "2026-08-06")     // an ordinary entry, no workout around it
+        journal.weighIn("2026-08-07")                // not training, and it is the one exception
 
-        val dots = journalInstanceCounts(journal.events, "2026-08-03", "2026-08-09")
-        val heat = weekOf(journal.events)
+        val events = journal.events
+        val dots = journalInstanceCounts(events, "2026-08-03", "2026-08-09")
+        val heat = weekOf(events)
+        val hero = trainingDays(events, "2026-08-03", "2026-08-09")
 
         for (day in listOf("2026-08-04", "2026-08-05", "2026-08-06")) {
-            assertEquals(
-                "the two screens must answer the same on $day",
-                dots.containsKey(day),
-                heat.days.first { it.opDate == day }.count > 0,
-            )
+            val byHeatmap = heat.days.first { it.opDate == day }.count > 0
+            assertEquals("the heatmap and the calendar dots differ on $day", dots.containsKey(day), byHeatmap)
+            assertEquals("the heatmap and the hero counters differ on $day", byHeatmap, day in hero)
         }
-        // NOT the weigh-in, and this is the one place they part on purpose: a dot is drawn for
-        // it (it gets a card on the day) and the heatmap leaves it out (it is not training)
+        assertEquals(setOf("2026-08-05", "2026-08-06"), hero)
+
+        // NOT the weigh-in, and this is the one place they part ON PURPOSE: the day screen gives
+        // it a card, so the calendar gives it a dot; it is not training, so it colours nothing
+        // and it neither counts as a workout nor holds a streak together
         assertEquals(1, dots.getValue("2026-08-07"))
         assertEquals(0, heat.days.first { it.opDate == "2026-08-07" }.count)
+        assertFalse("stepping on the scales is not a day of training", "2026-08-07" in hero)
+    }
+
+    /**
+     * The fourth counter, which needs a plan to be visible at all: the slot the empty session
+     * was started from. It used to go MISS once its window closed — a red "you skipped it" dot
+     * beside the green dot the same session had already earned.
+     */
+    @Test
+    fun `an empty workout closes the slot it was started from`() {
+        val slot = Slot(7, "Climbing", "18:00", REPEAT_NONE, "2026-08-05")
+        val journal = Journal()
+        journal.startWorkout("2026-08-05", at = "18:00", slotId = 7)
+
+        val status = planVsFact(
+            listOf(slot),
+            activityStamps(journal.events, "2026-08-05", "2026-08-05"),
+            LocalDate.parse("2026-08-05"),
+            LocalDate.parse("2026-08-05"),
+            LocalDate.parse("2026-08-05").atTime(23, 30),
+        ).single()
+
+        assertEquals(SlotState.DONE, status.slots.single().state)
+        assertEquals(DayState.DONE, status.state)
+        // and the dots stop contradicting each other: one green, no red
+        val dots = calendarDots(status, journalInstanceCounts(journal.events, "2026-08-05", "2026-08-05")["2026-08-05"] ?: 0)
+        assertEquals(listOf(SlotState.DONE), dots.states)
+    }
+
+    @Test
+    fun `a workout that logged something is not also stamped as an empty one`() {
+        val slots = listOf(
+            Slot(7, "Gym", "18:00", REPEAT_NONE, "2026-08-05"),
+            Slot(8, "Stretching", "08:00", REPEAT_NONE, "2026-08-05"),
+        )
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05", at = "18:00", slotId = 7)
+        journal.strengthSet(bench, "2026-08-05", at = "18:10", workoutId = workout)
+
+        val status = planVsFact(
+            slots,
+            activityStamps(journal.events, "2026-08-05", "2026-08-05"),
+            LocalDate.parse("2026-08-05"),
+            LocalDate.parse("2026-08-05"),
+            LocalDate.parse("2026-08-05").atTime(23, 30),
+        ).single()
+
+        // the session closes the slot it was started from and NOT the other one: an extra stamp
+        // for the workout itself would have let one session close two plans
+        assertEquals(SlotState.DONE, status.slots.first { it.occurrence.slot.id == 7L }.state)
+        assertEquals(SlotState.MISS, status.slots.first { it.occurrence.slot.id == 8L }.state)
+    }
+
+    @Test
+    fun `a deleted workout closes nothing`() {
+        val slot = Slot(7, "Climbing", "18:00", REPEAT_NONE, "2026-08-05")
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05", at = "18:00", slotId = 7)
+        journal.deleteEntry(workout)
+
+        val status = planVsFact(
+            listOf(slot),
+            activityStamps(journal.events, "2026-08-05", "2026-08-05"),
+            LocalDate.parse("2026-08-05"),
+            LocalDate.parse("2026-08-05"),
+            LocalDate.parse("2026-08-05").atTime(23, 30),
+        ).single()
+
+        assertEquals(SlotState.MISS, status.slots.single().state)
+    }
+
+    // --- the hero counters see the empty session too ----------------------------------------
+
+    @Test
+    fun `an empty workout is a day with training for the hero and the streak`() {
+        val today = LocalDate.parse("2026-08-07")
+        val journal = Journal()
+        journal.strengthSet(bench, "2026-08-05")
+        journal.startWorkout("2026-08-06")  // nothing logged inside it
+        journal.startWorkout("2026-08-07")
+
+        val hero = heroStats(journal.events, today)
+
+        assertEquals(3, hero.workouts)
+        assertEquals(3, hero.currentStreak)
+        // entries counts what was WRITTEN DOWN, and the two empty sessions wrote nothing - the
+        // one deliberate difference, spelled out in heroStats' own KDoc
+        assertEquals(1, hero.entries)
     }
 
     @Test
