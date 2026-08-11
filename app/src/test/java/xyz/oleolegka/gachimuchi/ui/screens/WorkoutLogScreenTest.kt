@@ -249,6 +249,31 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("0 sets").assertIsDisplayed()
     }
 
+    /**
+     * The three things the set block does that the joined line could not: count the sets (asked
+     * for outright — "нет общего какого-то счётчика 'сделано 5 сетов', а мы хотели"), say the
+     * protocol ONCE instead of once per set, and mark the sets that are not ordinary working
+     * ones. The warm-up is inside the count, because it is a set.
+     */
+    @Test
+    fun `the card counts its sets, says the protocol once, and marks the two that are not ordinary`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, hangs, restSec = 240)
+        journal.holdSet(hangs, iso, at = "18:10", addedKg = 5.0, warmup = true, workoutId = workout)
+        journal.holdSet(hangs, iso, at = "18:14", addedKg = 7.5, workoutId = workout)
+        journal.holdSet(hangs, iso, at = "18:18", addedKg = 7.5, incomplete = true, workoutId = workout)
+        show(journal, workout)
+
+        compose.onNodeWithText("3 sets \u00b7 7:3 protocol").assertIsDisplayed()
+        compose.onNodeWithText("Warm-up").assertIsDisplayed()
+        compose.onNodeWithText("Not completed").assertIsDisplayed()
+        // and the load stands in a column of its own: the ramp-up hang at +5, the working
+        // ones at +7.5 (two rows, not collapsed into one — the second fell short)
+        compose.onNodeWithText("+5 kg").assertIsDisplayed()
+        compose.onNodeWithText("+7.5 kg").assertIsDisplayed()
+    }
+
     @Test
     fun `each card names the rest chosen for it, and that is the control that changes it`() {
         val journal = Journal()
