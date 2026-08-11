@@ -1070,7 +1070,7 @@ private fun ExerciseCard(
                 shape = RoundedCornerShape(Radius.Card)
                 clip = false
             },
-    ) { press ->
+    ) { press, openMenu ->
     GachiCard(
         Modifier.fillMaxWidth().then(press),
         background = if (lifted) MaterialTheme.colorScheme.surfaceVariant else null,
