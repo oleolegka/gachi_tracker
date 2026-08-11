@@ -157,7 +157,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 floors = floors,
                 actions = WorkoutLogActions(
                     addExercise = { id, rest, side -> added += Triple(id, rest, side) },
-                    createExercise = { _, _, _, _, _ -> },
+                    createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
                     removeExercise = { ids, exerciseId, side -> removedRows += ids; removedFor += exerciseId to side },
@@ -194,7 +194,7 @@ class WorkoutLogScreenTest : ScreenTest() {
                 floors = emptyList(),
                 actions = WorkoutLogActions(
                     addExercise = { id, rest, side -> added += Triple(id, rest, side) },
-                    createExercise = { _, _, _, _, _ -> },
+                    createExercise = { _, _ -> },
                     addSet = { form -> logged += form },
                     undoSet = { id -> undone += id },
                     removeExercise = { ids, exerciseId, side -> removedRows += ids; removedFor += exerciseId to side },

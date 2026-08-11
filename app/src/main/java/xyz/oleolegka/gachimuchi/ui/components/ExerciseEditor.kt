@@ -39,6 +39,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
+import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 
 /**
  * Correcting a catalog exercise, taking one out of the pickers, removing one for good, or
@@ -88,7 +89,7 @@ class ExerciseEditor internal constructor(
      * find-or-create used by every other caller, so a name that already exists is quietly
      * reused rather than duplicated.
      */
-    val create: (name: String, form: ExerciseForm, workSec: Double?, restSec: Double?) -> Unit,
+    val create: (new: NewExercise) -> Unit,
 )
 
 @Composable
@@ -199,8 +200,17 @@ fun rememberExerciseEditor(): ExerciseEditor {
             delete = { exercise ->
                 scope.launch { repo.deleteExercise(exercise) }
             },
-            create = { name, form, workSec, restSec ->
-                scope.launch { repo.ensureExercise(name, form, workSec, restSec) }
+            create = { new ->
+                scope.launch {
+                    repo.ensureExercise(
+                        name = new.name,
+                        form = new.form,
+                        workSec = new.workSec,
+                        restSec = new.restSec,
+                        oneSided = new.oneSided,
+                        protocolProgramId = new.protocolProgramId,
+                    )
+                }
             },
         )
     }

@@ -67,6 +67,7 @@ import xyz.oleolegka.gachimuchi.domain.strengthSetsOfExercise
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
 import xyz.oleolegka.gachimuchi.domain.workoutEventIds
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
+import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -679,15 +680,16 @@ class MainViewModel(
      * cannot be put until the row it is about exists. A caller that only needs the exercise to
      * become the active one leaves it out and reads [activeExerciseId] as before.
      */
-    fun createExercise(
-        name: String,
-        form: ExerciseForm,
-        workSec: Double? = null,
-        restSec: Double? = null,
-        then: ((Long) -> Unit)? = null,
-    ) {
+    fun createExercise(new: NewExercise, then: ((Long) -> Unit)? = null) {
         viewModelScope.launch {
-            val id = repo.ensureExercise(name.trim(), form, workSec, restSec)
+            val id = repo.ensureExercise(
+                name = new.name.trim(),
+                form = new.form,
+                workSec = new.workSec,
+                restSec = new.restSec,
+                oneSided = new.oneSided,
+                protocolProgramId = new.protocolProgramId,
+            )
             _activeExerciseId.value = id
             then?.invoke(id)
         }

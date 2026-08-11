@@ -453,9 +453,7 @@ fun GachiApp(viewModel: MainViewModel) {
                         addExercise = { exerciseId, restSec, side ->
                             viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec, side)
                         },
-                        createExercise = { name, form, work, rest, then ->
-                            viewModel.createExercise(name, form, work, rest, then)
-                        },
+                        createExercise = { new, then -> viewModel.createExercise(new, then) },
                         /*
                          * INTO THIS WORKOUT, named rather than looked up. The screen is drawing
                          * a particular workout and that is the one a set typed on it belongs to
@@ -506,9 +504,7 @@ fun GachiApp(viewModel: MainViewModel) {
                         addExercise = { exerciseId, restSec, side ->
                             viewModel.updateDraftCard(exerciseId, restSec, side)
                         },
-                        createExercise = { name, form, work, rest, then ->
-                            viewModel.createExercise(name, form, work, rest, then)
-                        },
+                        createExercise = { new, then -> viewModel.createExercise(new, then) },
                         addSet = { form ->
                             viewModel.promoteDraft { id ->
                                 loggingWorkoutId = id
@@ -569,9 +565,7 @@ fun GachiApp(viewModel: MainViewModel) {
                 onEnableTimer = enableTimer,
                 onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
                 onSelectExercise = viewModel::selectExercise,
-                onCreateExercise = { name, form, work, rest ->
-                    viewModel.createExercise(name, form, work, rest)
-                },
+                onCreateExercise = { new -> viewModel.createExercise(new) },
                 // an entry logged with no workout behind it must not be swallowed by the
                 // workout that happens to be open — see ActivityRepository.record
                 onAddSet = { form -> viewModel.addSet(form, attachToWorkout = false) },
@@ -648,9 +642,7 @@ fun GachiApp(viewModel: MainViewModel) {
                     modifier = inner,
                     onSaveSlot = viewModel::saveSlot,
                     onDeleteSlot = viewModel::deleteSlot,
-                    onCreateExercise = { name, form, work, rest, then ->
-                        viewModel.createExercise(name, form, work, rest, then)
-                    },
+                    onCreateExercise = { new, then -> viewModel.createExercise(new, then) },
                 )
 
                 Tab.TIMER -> {

@@ -147,13 +147,7 @@ fun CalendarScreen(
     onSaveSlot: (SlotDraft, Long?) -> Unit,
     onDeleteSlot: (Long) -> Unit,
     /** Lets the plan's exercise picker create a row it does not have yet. */
-    onCreateExercise: ((
-        name: String,
-        form: ExerciseForm,
-        workSec: Double?,
-        restSec: Double?,
-        then: (Long) -> Unit,
-    ) -> Unit)? = null,
+    onCreateExercise: ((new: NewExercise, then: (Long) -> Unit) -> Unit)? = null,
 ) {
     var monthOffset by rememberSaveable { mutableIntStateOf(0) }
     var selected by rememberSaveable { mutableStateOf(today.toString()) }

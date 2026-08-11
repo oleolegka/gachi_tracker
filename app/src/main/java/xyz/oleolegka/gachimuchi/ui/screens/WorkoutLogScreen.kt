@@ -179,13 +179,7 @@ data class WorkoutLogActions(
      * asked for straight afterwards and the question needs the id, which only exists once the
      * row has been written.
      */
-    val createExercise: (
-        name: String,
-        form: ExerciseForm,
-        workSec: Double?,
-        restSec: Double?,
-        then: (Long) -> Unit,
-    ) -> Unit,
+    val createExercise: (new: NewExercise, then: (Long) -> Unit) -> Unit,
 
     /** Append a set. The form is already stamped with the workout's day. */
     val addSet: (ActivityForm) -> Unit,
@@ -730,8 +724,8 @@ fun WorkoutLogScreen(
             startInCreate = state.exercises.isEmpty(),
             // picked or created, the next question is the same one, so both land on it
             onPick = { id -> askingRestFor = id; askingRestSide = null; askingRestIsNew = true },
-            onCreate = { name, form, work, rest ->
-                actions.createExercise(name, form, work, rest) { id ->
+            onCreate = { new ->
+                actions.createExercise(new) { id ->
                     askingRestFor = id
                     askingRestSide = null
                     askingRestIsNew = true

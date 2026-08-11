@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.data.ExercisePictureStore
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
 import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
@@ -58,6 +59,34 @@ import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.fmtDay
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
+
+/**
+ * Everything the create form collected, in one value.
+ *
+ * ── Why a value and not five more parameters ───────────────────────────────────
+ * The chain from the form to `ActivityRepository.ensureExercise` is four callbacks long
+ * (sheet, screen, `GachiApp`, ViewModel) and every one of them used to spell out
+ * `(String, ExerciseForm, Double?, Double?)`. Two of those are the same TYPE, so a sixth
+ * question — is it one side at a time — could be added at the form and dropped anywhere
+ * along the way without a single compile error. That is exactly how the switch came to
+ * exist in the edit dialog and nowhere else (backlog §23.4). One value travelling the
+ * whole way makes a dropped answer a missing field rather than a silent default.
+ */
+data class NewExercise(
+    val name: String,
+    val form: ExerciseForm,
+    /** The protocol as two typed numbers, when a new one is being described. */
+    val workSec: Double? = null,
+    val restSec: Double? = null,
+    /** §18.2: each side keeps its own record, and every set is asked which side it was. */
+    val oneSided: Boolean = false,
+    /**
+     * An EXISTING library program to be led by, instead of [workSec]/[restSec] describing a
+     * new one. Set only at creation — §18.9 freezes the protocol from then on — and the two
+     * are exclusive: a picked program is the protocol, and nothing is invented beside it.
+     */
+    val protocolProgramId: Long? = null,
+)
 
 /**
  * Picking the exercise to log — a bottom sheet over the session, never a separate screen.
@@ -100,7 +129,7 @@ fun ExercisePickerSheet(
      * Nullable rather than defaulted, so that every caller has to say which it is: a create
      * button wired to nothing is exactly the failure this is meant to make impossible.
      */
-    onCreate: ((String, ExerciseForm, Double?, Double?) -> Unit)?,
+    onCreate: ((NewExercise) -> Unit)?,
     onDismiss: () -> Unit,
     /**
      * Skip the list and open on the create form. Set when the catalog is empty: a search
@@ -134,10 +163,14 @@ fun ExercisePickerSheet(
             if (creating && onCreate != null) {
                 CreateExerciseForm(
                     initialName = query,
+                    // the library as candidates for "led by this protocol" — see the form
+                    programs = remember(state.programsById) {
+                        state.programsById.values.sortedBy { it.name.lowercase() }
+                    },
                     confirmLabel = createLabel,
                     onCancel = { creating = false },
-                    onCreate = { name, form, work, rest ->
-                        onCreate(name, form, work, rest)
+                    onCreate = { new ->
+                        onCreate(new)
                         creating = false
                         onDismiss()
                     },
@@ -345,21 +378,50 @@ private const val PICKER_THUMB_MAX_PX = 96
  * of the exercise, not of a set. For holds the work:rest protocol is asked in the same
  * breath, because §12-A makes it part of the identity — the same hangs on a different
  * protocol are a DIFFERENT exercise with its own history and its own record.
+ *
+ * ── "One side at a time" is asked HERE, not only in the edit dialog ────────────
+ * It used to live only in the correction dialog of an EXISTING exercise, so one-sidedness
+ * was unreachable at the one moment an exercise is described — and everything downstream
+ * of it (two cards in a workout, a rest floor per side, a record per side) was dead for
+ * every exercise as it was created. Reported from the phone, 2026-08-11, as the critical
+ * one of four. Gated on the same forms the edit dialog gates it on: a hang and a pistol
+ * squat are the same asymmetry, a run and a weigh-in have no sides.
+ *
+ * ── An existing program can BE the protocol ────────────────────────────────────
+ * Typing two numbers makes a minimal one-block program in the library, which is all this
+ * form could ever produce: "the protocol ended up created in the programs, but it is very
+ * simple" (owner, 2026-08-11). So the library is offered as well — a hang that should be
+ * led by a program with a warm-up and several groups can say so at creation, which is the
+ * ONLY moment it can: §18.9 freezes an exercise's protocol from then on. With an empty
+ * library nothing is offered and the two numbers are the whole question, as before.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateExerciseForm(
     initialName: String,
+    /** The library, as candidates to be led by. Programs with no usable first block are
+     *  filtered out here — see [protocolCandidates]. */
+    programs: List<WorkoutProgram>,
     /** See [ExercisePickerSheet.createLabel]. */
     confirmLabel: String,
     onCancel: () -> Unit,
-    onCreate: (String, ExerciseForm, Double?, Double?) -> Unit,
+    onCreate: (NewExercise) -> Unit,
 ) {
     val colors = LocalGachiColors.current
     var name by rememberSaveable { mutableStateOf(initialName) }
     var form by rememberSaveable { mutableStateOf(ExerciseForm.STRENGTH) }
     var work by rememberSaveable { mutableStateOf("") }
     var rest by rememberSaveable { mutableStateOf("") }
+    var oneSided by rememberSaveable { mutableStateOf(false) }
+    // null means "describe a new protocol with the two numbers below"
+    var programId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    val hold = form == ExerciseForm.HOLD
+    // the same gate the edit dialog applies: what is lifted has sides, what is timed or
+    // ticked off does not
+    val lifted = hold || form == ExerciseForm.STRENGTH
+    val candidates = remember(programs) { protocolCandidates(programs) }
+    val picked = candidates.firstOrNull { it.id == programId }
 
     Text("New exercise", style = MaterialTheme.typography.titleMedium)
     OutlinedTextField(
@@ -381,23 +443,73 @@ private fun CreateExerciseForm(
         }
     }
 
-    if (form == ExerciseForm.HOLD) {
+    if (lifted) {
+        FilterChip(
+            selected = oneSided,
+            onClick = { oneSided = !oneSided },
+            label = { Text("One side at a time") },
+        )
         Text(
-            "The work:rest protocol is part of the identity: hangs on another protocol are " +
-                "a separate exercise with a separate record.",
+            "Each side keeps its own record, and every set of this exercise is asked which " +
+                "side it was. It joins a workout as two cards, one per side.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkSecondary,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
-                singleLine = true, label = { Text("Work, s") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            )
-            OutlinedTextField(
-                value = rest, onValueChange = { rest = it }, modifier = Modifier.weight(1f),
-                singleLine = true, label = { Text("Rest, s") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    }
+
+    if (hold) {
+        Text(
+            "The work:rest protocol is part of the identity: hangs on another protocol are " +
+                "a separate exercise with a separate record, and this is the only moment it " +
+                "can be chosen.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkSecondary,
+        )
+        if (candidates.isNotEmpty()) {
+            Text("Protocol", style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = programId == null,
+                    onClick = { programId = null },
+                    label = { Text("New") },
+                )
+                candidates.forEach { program ->
+                    val block = program.firstBlock()
+                    FilterChip(
+                        selected = programId == program.id,
+                        onClick = { programId = program.id },
+                        label = {
+                            Text(
+                                if (block != null) {
+                                    "${program.name} - ${block.workSec}:${block.restSec}"
+                                } else {
+                                    program.name
+                                }
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        if (picked == null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
+                    singleLine = true, label = { Text("Work, s") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+                OutlinedTextField(
+                    value = rest, onValueChange = { rest = it }, modifier = Modifier.weight(1f),
+                    singleLine = true, label = { Text("Rest, s") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+            }
+        } else {
+            Text(
+                "Led by \"${picked.name}\", exactly as it stands in the library. Editing that " +
+                    "program is closed off once an exercise is led by it.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkSecondary,
             )
         }
     }
@@ -410,7 +522,6 @@ private fun CreateExerciseForm(
         OutlinedButton(onClick = onCancel, modifier = Modifier.heightIn(min = 48.dp)) { Text("Back") }
         Button(
             onClick = {
-                val hold = form == ExerciseForm.HOLD
                 /*
                  * Every number here is "positive, or it was never filled in". A zero (or a
                  * minus, which some keyboards offer on the decimal layout) is not a 0-second
@@ -424,14 +535,44 @@ private fun CreateExerciseForm(
                  * the same validator on the very first set.
                  */
                 // whole seconds only, and rounded rather than truncated: see
-                // [parseProtocolSeconds] for why the rule lives in the domain
-                val w = if (hold) parseProtocolSeconds(work) else null
-                val r = if (hold) parseProtocolSeconds(rest) else null
+                // [parseProtocolSeconds] for why the rule lives in the domain. Skipped
+                // entirely for a picked program: that program IS the protocol, and a
+                // half-typed pair left behind the chips must not travel beside it.
+                val typing = hold && picked == null
+                val w = if (typing) parseProtocolSeconds(work) else null
+                val r = if (typing) parseProtocolSeconds(rest) else null
                 val pair = if (w != null && r != null) w to r else null
-                onCreate(name.trim(), form, pair?.first, pair?.second)
+                onCreate(
+                    NewExercise(
+                        name = name.trim(),
+                        form = form,
+                        workSec = pair?.first,
+                        restSec = pair?.second,
+                        // a form with no sides never reports one, whatever the chip was
+                        // left at before the form was switched
+                        oneSided = lifted && oneSided,
+                        protocolProgramId = if (hold) picked?.id else null,
+                    )
+                )
             },
             enabled = name.isNotBlank(),
             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
         ) { Text(confirmLabel) }
     }
 }
+
+/**
+ * The library programs an exercise can be led by: those with a first block that is a real
+ * work:rest pair.
+ *
+ * A block of zero seconds is not a protocol — `HoldSet`'s validator refuses one by throwing,
+ * which on the logging screen surfaces as a crash on the Add button rather than as a message
+ * — so such a program is not offered rather than offered and then refused. Everything else is
+ * fair game, INCLUDING programs with several groups and a warm-up: that richness is the whole
+ * point of picking one instead of typing two numbers.
+ */
+internal fun protocolCandidates(programs: List<WorkoutProgram>): List<WorkoutProgram> =
+    programs.filter { program ->
+        val block = program.firstBlock()
+        block != null && block.workSec > 0 && block.restSec > 0
+    }

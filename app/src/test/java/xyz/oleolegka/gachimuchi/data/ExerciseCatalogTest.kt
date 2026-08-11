@@ -262,4 +262,71 @@ class ExerciseCatalogTest {
         assertEquals("the hidden row is the row, not a gap to fill", id, hangs(7.0, 3.0))
         assertEquals(1, repo.allExercises().size)
     }
+
+    // --- what the create form is now allowed to say about a new row ---------------------
+
+    /**
+     * "One side at a time" asked at creation reaches the row. Until 2026-08-11 the flag had
+     * one writer, the edit dialog of an EXISTING exercise, so a new one could not be declared
+     * one-sided at the moment it was described (backlog §23.4).
+     */
+    @Test
+    fun `an exercise can be created one-sided`() = runTest {
+        val id = repo.ensureExercise("One-arm row", ExerciseForm.STRENGTH, oneSided = true)
+
+        assertTrue(repo.exercise(id)!!.oneSided)
+    }
+
+    /**
+     * A row that is FOUND rather than inserted keeps what it says about itself.
+     *
+     * The create form defaults the switch to off, and a name that already exists is quietly
+     * reused — so writing the answer onto a found row would let an unrelated "create" silently
+     * un-split the records of an exercise trained one hand at a time. Correcting an existing
+     * one is the edit dialog's job.
+     */
+    @Test
+    fun `creating over an existing name does not rewrite what that exercise says about itself`() = runTest {
+        val id = repo.ensureExercise("One-arm row", ExerciseForm.STRENGTH, oneSided = true)
+
+        val again = repo.ensureExercise("one-arm row", ExerciseForm.STRENGTH, oneSided = false)
+
+        assertEquals(id, again)
+        assertTrue("a found row keeps its own answer", repo.exercise(id)!!.oneSided)
+    }
+
+    /**
+     * A hold can be pointed at a program that is ALREADY in the library, instead of having a
+     * minimal one invented for it — the owner's fourth report of 2026-08-11: "nowhere was I
+     * offered to attach a program; the protocol ended up created in the programs, but it is
+     * very simple".
+     */
+    @Test
+    fun `a hold can be created led by an existing program`() = runTest {
+        val existing = hangs(7.0, 3.0)
+        val program = repo.exercise(existing)!!.protocolProgramId!!
+        val before = ProgramRepository(db).allPrograms().size
+
+        val id = repo.ensureExercise(
+            "Fingerboard", ExerciseForm.HOLD, protocolProgramId = program,
+        )
+
+        assertNotEquals(existing, id)
+        assertEquals(program, repo.exercise(id)!!.protocolProgramId)
+        assertEquals(
+            "an existing program is used, not copied",
+            before, ProgramRepository(db).allPrograms().size,
+        )
+    }
+
+    /** The picked program decides the identity, exactly as an invented one would. */
+    @Test
+    fun `two holds on the same picked program are the same exercise`() = runTest {
+        val program = repo.exercise(hangs(7.0, 3.0))!!.protocolProgramId!!
+
+        val first = repo.ensureExercise("Fingerboard", ExerciseForm.HOLD, protocolProgramId = program)
+        val second = repo.ensureExercise("fingerboard", ExerciseForm.HOLD, protocolProgramId = program)
+
+        assertEquals(first, second)
+    }
 }

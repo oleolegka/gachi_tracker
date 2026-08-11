@@ -137,7 +137,7 @@ fun LogScreen(
      */
     onStartExerciseProgram: (ProgramStart) -> Unit,
     onSelectExercise: (Long?) -> Unit,
-    onCreateExercise: (String, ExerciseForm, Double?, Double?) -> Unit,
+    onCreateExercise: (NewExercise) -> Unit,
     onAddSet: (ActivityForm) -> Unit,
     onUndoSet: (Long) -> Unit,
     onClose: () -> Unit,
