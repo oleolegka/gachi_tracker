@@ -60,7 +60,10 @@ class DayCardNamingTest : ScreenTest() {
                     openWorkout = {},
                     openExercise = { _, _ -> },
                     deleteWorkout = {},
+                    deleteSingleEntries = { _, _ -> },
                     renameWorkout = { id, name -> renamed = id to name },
+                    resumeDraft = {},
+                    discardDraft = {},
                 ),
                 pastWorkoutNames = pastWorkoutNames,
             )

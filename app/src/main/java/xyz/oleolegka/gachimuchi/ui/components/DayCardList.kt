@@ -71,11 +71,15 @@ import java.time.LocalDate
  * see [ItemActions] for why the gesture rather than a bin on the row, and why removal is
  * behind one more question.
  *
- * The other three kinds answer nothing, and each for its own reason. A PLANNED card already
- * carries its two actions as icons where they belong, and giving it a second way to reach the
- * same pair would be the duplication this change is undoing rather than more of it. A SINGLE
- * card is a GROUP of entries, and "delete these five" is not a thing anyone means by long
- * pressing one card — its entries are removed one at a time from the breakdown the card opens.
+ * A SINGLE card answers it too, and that is a correction rather than an extension (§23.A1).
+ * The argument used to be that "delete these five" is not what anyone means by long pressing
+ * one card, so its entries were removed one at a time from the breakdown. On the phone that
+ * came out as an object with no way to delete it: emptying it by hand made it vanish as a
+ * side effect, which is not the same thing as a delete and reads as the app losing track. A
+ * card is an object, and every object of the log is removed the same way.
+ *
+ * A PLANNED card still answers nothing: it already carries its two actions as icons where they
+ * belong, and a second way to reach the same pair would be duplication rather than a fix.
  */
 @Immutable
 data class DayActions(
@@ -97,6 +101,20 @@ data class DayActions(
     /** Go back into the workout in progress. */
     val continueWorkout: (Long) -> Unit,
 
+    /**
+     * Go back into the workout being composed — the one the DRAFT card stands for.
+     *
+     * Takes no id because a draft has none: it is not a row, there is at most one, and the
+     * ViewModel that holds it is the thing that knows which day it is for.
+     */
+    val resumeDraft: () -> Unit,
+
+    /**
+     * Throw the composed-but-not-started workout away. ASKED FOR, never a side effect of
+     * leaving a screen — that was §23.A3.
+     */
+    val discardDraft: () -> Unit,
+
     /** Look inside a workout that is not running. */
     val openWorkout: (Long) -> Unit,
 
@@ -115,6 +133,16 @@ data class DayActions(
      * confirmation, never on a tap.
      */
     val deleteWorkout: (Long) -> Unit,
+
+    /**
+     * Remove a SINGLE-entry card whole — every row it stands for, in one act, and the rest
+     * countdown its exercise may still be running with them.
+     *
+     * The rows travel from the card ([DayCard.entryIds]) because the grouping that put them on
+     * one card is the domain's, not the screen's; [exerciseId] is null for a card that names no
+     * catalog exercise (a weigh-in), which has no countdown to stop and is deleted just the same.
+     */
+    val deleteSingleEntries: (eventIds: List<Long>, exerciseId: Long?) -> Unit,
 
     /** Name a workout that is already going, or clear its name with null. */
     val renameWorkout: (workoutId: Long, name: String?) -> Unit,
@@ -172,6 +200,14 @@ fun DayCardList(
             AddMenuButton(
                 onWorkout = { naming = true },
                 onSingleEntry = { actions.logSingleEntry(date) },
+                /*
+                 * There is at most ONE draft in the app, so starting a second workout would
+                 * replace the one being composed — silently, which is the very thing §23.A3
+                 * rules out. While its card is on this day the item is offered and refused
+                 * rather than hidden: a menu that changes shape is harder to read than one
+                 * that says why.
+                 */
+                workoutEnabled = day.cards.none { it.kind == DayCardKind.DRAFT },
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
@@ -228,6 +264,8 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             else -> card.workoutId?.let { id -> { actions.openWorkout(id) } }
         }
 
+        DayCardAction.RESUME -> ({ actions.resumeDraft() })
+
         DayCardAction.NONE -> null
     }
     val spine = when (card.kind) {
@@ -235,23 +273,33 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         DayCardKind.RUNNING -> colors.good
         DayCardKind.DONE -> colors.inkSecondary
         DayCardKind.SINGLE -> colors.inkMuted
+        // the same accent a plan gets: both are things not done yet, and the subtitle is
+        // what says which is which — no kind is ever told by colour alone here
+        DayCardKind.DRAFT -> colors.accent
     }
 
     /** The workout this card is about, for the actions a long press offers. */
     val workoutId = card.workoutId.takeIf {
         card.kind == DayCardKind.RUNNING || card.kind == DayCardKind.DONE
     }
+    /** Whether this card can be removed whole, and under which label. */
+    val deleteLabel: String? = when {
+        workoutId != null -> "Delete workout"
+        card.kind == DayCardKind.SINGLE && card.entryIds.isNotEmpty() ->
+            if (card.entryIds.size == 1) "Delete entry" else "Delete these entries"
+
+        card.kind == DayCardKind.DRAFT -> "Discard draft"
+        else -> null
+    }
     var confirmingDelete by remember(card.key) { mutableStateOf(false) }
     var renaming by remember(card.key) { mutableStateOf(false) }
-    val menu = if (workoutId == null) {
-        emptyList()
-    } else {
-        listOf(
-            // the harmless one first: a menu whose top entry deletes is a menu that gets
-            // dismissed rather than read
-            ItemAction(if (card.workoutName == null) "Name it" else "Rename") { renaming = true },
-            ItemAction("Delete workout", destructive = true) { confirmingDelete = true },
-        )
+    val menu = buildList {
+        // the harmless one first: a menu whose top entry deletes is a menu that gets
+        // dismissed rather than read
+        if (workoutId != null) {
+            add(ItemAction(if (card.workoutName == null) "Name it" else "Rename") { renaming = true })
+        }
+        deleteLabel?.let { add(ItemAction(it, destructive = true) { confirmingDelete = true }) }
     }
 
     ItemActions(
@@ -327,6 +375,10 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             DayCardAction.CONTINUE ->
                 card.workoutId?.let { id -> "Continue" to { actions.continueWorkout(id) } }
 
+            // "Continue", the same word the running workout gets: from the user's side both
+            // are "the session I am in the middle of", and only one of them can exist at once
+            DayCardAction.RESUME -> "Continue" to { actions.resumeDraft() }
+
             DayCardAction.OPEN, DayCardAction.NONE -> null
         }
         if (begin != null) {
@@ -359,22 +411,56 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         )
     }
 
-    if (confirmingDelete && workoutId != null) {
-        ConfirmRemoveDialog(
-            title = "Delete this workout?",
-            // the card's own two lines, so the dialog is unmistakably about the card that
-            // was pressed and not about the one next to it
-            subject = listOf(card.title, card.subtitle).filter { it.isNotEmpty() }
-                .joinToString(" - "),
-            explanation = "Everything recorded in it goes too - its sets stop counting " +
-                "towards volume, records and the streak. $REMOVAL_IS_REVERSIBLE",
-            confirmLabel = "Delete",
-            onConfirm = {
-                confirmingDelete = false
-                actions.deleteWorkout(workoutId)
-            },
-            onDismiss = { confirmingDelete = false },
-        )
+    if (confirmingDelete) {
+        // the card's own two lines, so the dialog is unmistakably about the card that was
+        // pressed and not about the one next to it
+        val subject = listOf(card.title, card.subtitle).filter { it.isNotEmpty() }
+            .joinToString(" - ")
+        if (card.kind == DayCardKind.DRAFT) {
+            ConfirmRemoveDialog(
+                title = "Discard this draft?",
+                subject = subject,
+                // no REMOVAL_IS_REVERSIBLE here, and that is the honest difference: a deleted
+                // entry is a row that can be brought back, a discarded draft was never written
+                explanation = "It was never started, so nothing recorded goes with it - but " +
+                    "the exercises picked for it are not kept anywhere and cannot be brought " +
+                    "back.",
+                confirmLabel = "Discard",
+                onConfirm = {
+                    confirmingDelete = false
+                    actions.discardDraft()
+                },
+                onDismiss = { confirmingDelete = false },
+            )
+        } else if (workoutId != null) {
+            ConfirmRemoveDialog(
+                title = "Delete this workout?",
+                subject = subject,
+                explanation = "Everything recorded in it goes too - its sets stop counting " +
+                    "towards volume, records and the streak. $REMOVAL_IS_REVERSIBLE",
+                confirmLabel = "Delete",
+                onConfirm = {
+                    confirmingDelete = false
+                    actions.deleteWorkout(workoutId)
+                },
+                onDismiss = { confirmingDelete = false },
+            )
+        } else {
+            val n = card.entryIds.size
+            ConfirmRemoveDialog(
+                title = if (n == 1) "Delete this entry?" else "Delete these entries?",
+                subject = subject,
+                explanation = "${if (n == 1) "It stops" else "All $n stop"} counting towards " +
+                    "volume, records and the streak, and any rest still counting for this " +
+                    "exercise stops with them. $REMOVAL_IS_REVERSIBLE",
+                confirmLabel = "Delete",
+                onConfirm = {
+                    confirmingDelete = false
+                    actions.deleteSingleEntries(card.entryIds, card.exerciseId)
+                },
+                onDismiss = { confirmingDelete = false },
+            )
+        }
     }
 }
 
@@ -398,6 +484,8 @@ private fun AddMenuButton(
     onWorkout: () -> Unit,
     onSingleEntry: () -> Unit,
     modifier: Modifier = Modifier,
+    /** False while a draft is already being composed — see the call site. */
+    workoutEnabled: Boolean = true,
 ) {
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
@@ -410,7 +498,8 @@ private fun AddMenuButton(
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text("Workout") },
+                text = { Text(if (workoutEnabled) "Workout" else "Workout - one is already open") },
+                enabled = workoutEnabled,
                 onClick = {
                     open = false
                     onWorkout()

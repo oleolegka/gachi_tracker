@@ -117,6 +117,40 @@ class FloorControllerTest {
 
     // --- keeping floors at all -------------------------------------------------------------
 
+    /*
+     * §23.A2, from the phone: an exercise was taken out of a running workout and its rest went
+     * on counting in the background. Removing the EXERCISE — as opposed to marking one of its
+     * cards done — has to take both cards' rests with it, and the caller doing so (a day card,
+     * a workout being deleted) does not know which sides exist.
+     */
+    @Test
+    fun `dismissing an exercise takes every card of it, and leaves the other exercises alone`() {
+        val timer = newController()
+
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - left", orderedMs = 240_000, side = "L")
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - right", orderedMs = 240_000, side = "R")
+        timer.floors.start(exerciseId = 2, exerciseName = "Bench", orderedMs = 180_000)
+
+        timer.floors.dismissAllOf(1)
+
+        assertEquals(listOf(2L), timer.floors.floors.value.map { it.exerciseId })
+        // and off disk too, or the next process brings them back
+        assertEquals(listOf(2L), store().load().map { it.exerciseId })
+    }
+
+    /** One CARD is still one card: taking the left hand out leaves the right hand counting. */
+    @Test
+    fun `dismissing one side leaves the other side running`() {
+        val timer = newController()
+
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - left", orderedMs = 240_000, side = "L")
+        timer.floors.start(exerciseId = 1, exerciseName = "Fingerboard - right", orderedMs = 240_000, side = "R")
+
+        timer.floors.dismiss(1, "L")
+
+        assertEquals(listOf("R"), timer.floors.floors.value.map { it.side })
+    }
+
     @Test
     fun `starting a rest puts a floor on the state, on disk and on the clock`() {
         val timer = newController()

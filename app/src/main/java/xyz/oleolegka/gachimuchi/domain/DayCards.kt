@@ -43,6 +43,20 @@ enum class DayCardKind {
 
     /** Entries of one exercise recorded outside any workout. */
     SINGLE,
+
+    /**
+     * A workout composed but not started — exercises picked, nothing recorded, no start event.
+     *
+     * It is a card and not a workout because §13.1 is still in force: adding exercises does NOT
+     * start a workout, only the button or the first set does. It is a card AT ALL because of
+     * §23.A3 — leaving the screen used to throw the composition away, and a thing the user
+     * assembled disappearing without being asked is the one behaviour the owner ruled out
+     * outright ("we delete only when the user asks; we gave him a button").
+     *
+     * Unlike every other kind it is NOT folded out of the journal: nothing about it is written
+     * down. See [DraftSummary].
+     */
+    DRAFT,
 }
 
 /** What the card's primary tap does. */
@@ -55,6 +69,9 @@ enum class DayCardAction {
 
     /** Open what is behind the card, to look at it. */
     OPEN,
+
+    /** Go back into the workout being composed — see [DayCardKind.DRAFT]. */
+    RESUME,
 
     /** Nothing to do here — see [dayCards] for the two cases that produce it. */
     NONE,
@@ -93,6 +110,40 @@ data class DayCard(
     val workoutName: String? = null,
     /** [DayCardKind.SINGLE]: the exercise its entries are about, when they name one. */
     val exerciseId: Long? = null,
+    /**
+     * [DayCardKind.SINGLE]: the journal rows the card stands for, so it can be removed WHOLE.
+     *
+     * Carried on the card rather than looked up again by the screen, because the grouping that
+     * decided which rows belong together happened here — a weigh-in has no exercise id to look
+     * anything up by, and a card the screen cannot name the rows of is a card with no way to
+     * delete it. That was the actual bug (§23.A1): the entries could be removed one at a time
+     * from the breakdown until the card evaporated, and the object itself had no removal at all.
+     */
+    val entryIds: List<Long> = emptyList(),
+)
+
+/**
+ * The workout being composed right now, as much of it as a day card needs to say.
+ *
+ * Deliberately not the draft itself: the draft is a ViewModel-held list of staged cards, and
+ * this file is a pure function over the journal. Passing a three-field summary keeps the
+ * dependency pointing the way it already does everywhere else, and makes the card testable
+ * without staging anything.
+ *
+ * ── What it costs, stated ───────────────────────────────────────────────────────
+ * A draft lives in memory only. It survives leaving the screen, switching tabs and coming back
+ * — which is the whole of §23.A3 — and it does NOT survive the process being killed. Making it
+ * survive that means writing it down, and there is nowhere in an append-only journal of FACTS
+ * to write a workout that has not happened; the honest place would be a table of its own, which
+ * is a schema change and a bigger piece of work than the bug asked for.
+ */
+data class DraftSummary(
+    /** The day it is being composed for, as the journal writes dates. */
+    val date: String,
+    /** What it was named on the way in, or null — shown exactly as a real workout's name is. */
+    val name: String?,
+    /** How many exercise cards are staged in it. Zero is an ordinary state. */
+    val exerciseCount: Int,
 )
 
 /** The whole day: its cards, and whether anything may still be recorded against it. */
@@ -143,6 +194,8 @@ fun dayCards(
     date: LocalDate,
     today: LocalDate,
     now: LocalDateTime,
+    /** The workout being composed, when there is one — see [DraftSummary]. */
+    draft: DraftSummary? = null,
 ): DayCards {
     val iso = date.toString()
     val canRecord = !date.isAfter(today)
@@ -175,6 +228,8 @@ fun dayCards(
     for (group in looseGroups(events, iso)) {
         rows += placedSingle(group, recordOf)
     }
+
+    if (draft != null && draft.date == iso) rows += placedDraft(draft)
 
     rows.sortWith(compareBy({ it.minute ?: Int.MAX_VALUE }, { it.rank }, { it.tiebreak }))
     return DayCards(date = iso, cards = rows.map { it.card }, canRecord = canRecord)
@@ -233,6 +288,34 @@ private fun planSubtitle(status: SlotStatus, canRecord: Boolean): String = when 
     !canRecord -> "planned"
     else -> "not started yet"
 }
+
+/**
+ * The workout being composed, as a card.
+ *
+ * Undated on purpose — nothing has happened yet, so there is no clock reading to sort it by —
+ * and ranked with the FACTS rather than with the plans: it is the thing the user is in the
+ * middle of doing, and it belongs next to what is already recorded rather than below tonight's
+ * schedule. The tiebreak puts it last among undated facts, so it never pushes a real card down.
+ */
+private fun placedDraft(draft: DraftSummary): Placed = Placed(
+    minute = null,
+    rank = RANK_FACT,
+    tiebreak = Long.MAX_VALUE,
+    card = DayCard(
+        kind = DayCardKind.DRAFT,
+        key = "draft",
+        title = draft.name ?: "Workout",
+        // says what it IS and what is in it: "not started" is the whole status, and the count
+        // is what tells the user whether the thing they assembled is still assembled
+        subtitle = "not started - " + if (draft.exerciseCount == 0) {
+            "nothing added yet"
+        } else {
+            count(draft.exerciseCount, "exercise", "exercises")
+        },
+        timeLabel = "",
+        action = DayCardAction.RESUME,
+    ),
+)
 
 private fun placedWorkout(
     workout: Workout,
@@ -309,6 +392,7 @@ private fun placedSingle(group: LooseGroup, recordOf: Map<Long, RecordHit?>): Pl
             action = if (group.exerciseId != null) DayCardAction.OPEN else DayCardAction.NONE,
             recordLine = recordLine(group.entries.map { it.id }, recordOf),
             exerciseId = group.exerciseId,
+            entryIds = group.entries.map { it.id },
         ),
     )
 }

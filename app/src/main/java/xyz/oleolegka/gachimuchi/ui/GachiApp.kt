@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import xyz.oleolegka.gachimuchi.domain.DraftSummary
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.ProgramStart
@@ -130,6 +131,16 @@ fun GachiApp(viewModel: MainViewModel) {
     var loggingDate by rememberSaveable { mutableStateOf<String?>(null) }
     /** The workout the entry card is writing into, or null for an entry on its own. */
     var loggingWorkoutId by rememberSaveable { mutableStateOf<Long?>(null) }
+    /*
+     * Whether the screen in front is the DRAFT.
+     *
+     * Needed only since a draft stopped being thrown away on the way out (§23.A3): "there is a
+     * draft" and "the draft is what I am looking at" used to be the same statement, and are not
+     * any more. Without this, tapping "Add - single entry" on a day that holds a draft would
+     * open the draft instead of the entry card, because both ask for the same two pieces of
+     * state (a day, and no workout id).
+     */
+    var loggingDraft by rememberSaveable { mutableStateOf(false) }
     var viewingWorkoutId by rememberSaveable { mutableStateOf<Long?>(null) }
     /*
      * Whether the conductor has the screen — a BOOLEAN and not "which exercise", because the
@@ -243,12 +254,30 @@ fun GachiApp(viewModel: MainViewModel) {
     val startWorkoutNow by rememberUpdatedState<(LocalDate, Long?, String?) -> Unit> {
         day, slotId, name ->
         viewModel.beginDraft(day, slotId, name)
+        loggingDraft = true
         openLoggingNow(day.toString(), null)
     }
 
     // the day comes from the WORKOUT, never from any screen's idea of today (see [loggingDay])
     val continueWorkoutNow by rememberUpdatedState<(Long) -> Unit> { id ->
+        loggingDraft = false
         openLoggingNow(loggingDay(buildWorkout(state.events, id), iso), id)
+    }
+
+    /*
+     * The draft as a DAY CARD sees it (§23.A3). A workout composed and not started is not in
+     * the journal, so the day screens cannot fold it out of one — it is handed to them.
+     */
+    val draftSummary = remember(draft) {
+        draft?.let { DraftSummary(it.day.toString(), it.name, it.cards.size) }
+    }
+
+    /* Back into the draft, on the day it is being composed for. */
+    val resumeDraftNow by rememberUpdatedState<() -> Unit> {
+        draft?.let {
+            loggingDraft = true
+            openLoggingNow(it.day.toString(), null)
+        }
     }
 
     val dayActions = remember {
@@ -257,7 +286,10 @@ fun GachiApp(viewModel: MainViewModel) {
             // not asked for one — see ActivityRepository.startWorkout
             startFromPlan = { slotId, day -> startWorkoutNow(day, slotId, null) },
             startWorkout = { day, name -> startWorkoutNow(day, null, name) },
-            logSingleEntry = { day -> openLoggingNow(day.toString(), null) },
+            logSingleEntry = { day ->
+                loggingDraft = false
+                openLoggingNow(day.toString(), null)
+            },
             continueWorkout = { id -> continueWorkoutNow(id) },
             openWorkout = { id -> viewingWorkoutId = id },
             openExercise = { id, day ->
@@ -265,7 +297,12 @@ fun GachiApp(viewModel: MainViewModel) {
                 entriesDate = day.toString()
             },
             deleteWorkout = viewModel::deleteWorkout,
+            deleteSingleEntries = viewModel::deleteSingleEntries,
             renameWorkout = viewModel::renameWorkout,
+            resumeDraft = { resumeDraftNow() },
+            // ASKED FOR. The only place a draft is thrown away now; leaving its screen does
+            // not, which is the whole of §23.A3
+            discardDraft = viewModel::discardDraft,
         )
     }
 
@@ -300,10 +337,11 @@ fun GachiApp(viewModel: MainViewModel) {
             // the set keeps running, keeps speaking, and the card leads back to it
             BackStep.CloseConductor -> conductorOpen = false
             BackStep.CloseLogging -> {
-                // a no-op when there was none — see [MainViewModel.discardDraft]
-                viewModel.discardDraft()
+                // LEAVING, not deleting: back out of a draft and it is still there, on its
+                // day, exactly as the cross now behaves (§23.A3)
                 loggingDate = null
                 loggingWorkoutId = null
+                loggingDraft = false
             }
 
             BackStep.CloseWorkout -> viewingWorkoutId = null
@@ -435,7 +473,7 @@ fun GachiApp(viewModel: MainViewModel) {
          * still [LogScreen], because there is no workout there to draw the cards of and the
          * old screen answers that case exactly.
          */
-        loggingOn != null && (loggingWorkout != null || draft != null) -> {
+        loggingOn != null && (loggingWorkout != null || (draft != null && loggingDraft)) -> {
             val workoutBeingLogged = loggingWorkout
             /*
              * Built once per workout rather than per recomposition: the screen holds a rest
@@ -492,6 +530,7 @@ fun GachiApp(viewModel: MainViewModel) {
                         close = {
                             loggingDate = null
                             loggingWorkoutId = null
+                            loggingDraft = false
                         },
                     )
                 } else {
@@ -533,10 +572,16 @@ fun GachiApp(viewModel: MainViewModel) {
                             }
                         },
                         openConductor = { conductorOpen = true },
-                        // leaving a draft leaves nothing behind: it was never written
+                        /*
+                         * LEAVING, not deleting (§23.A3). The cross used to discard the draft
+                         * on the way out, so a workout with exercises picked and nothing logged
+                         * yet evaporated when the screen closed. It stays now, as a card on its
+                         * day, and the only thing that throws it away is the user asking —
+                         * "Discard draft" on that card.
+                         */
                         close = {
-                            viewModel.discardDraft()
                             loggingDate = null
+                            loggingDraft = false
                         },
                     )
                 }
@@ -579,6 +624,7 @@ fun GachiApp(viewModel: MainViewModel) {
                 onClose = {
                     loggingDate = null
                     loggingWorkoutId = null
+                    loggingDraft = false
                 },
             )
         }
@@ -637,7 +683,7 @@ fun GachiApp(viewModel: MainViewModel) {
             // no floating button on any tab any more: the primary action is on the cards
             val inner = Modifier.padding(padding)
             when (tab) {
-                Tab.TODAY -> TodayScreen(state, today, dayActions, inner)
+                Tab.TODAY -> TodayScreen(state, today, dayActions, inner, draftSummary)
                 Tab.OVERVIEW ->
                     OverviewScreen(state, today, inner, onOpenForm = { detailExerciseId = it })
 
@@ -651,6 +697,7 @@ fun GachiApp(viewModel: MainViewModel) {
                     onCreateExercise = { name, form, work, rest, then ->
                         viewModel.createExercise(name, form, work, rest, then)
                     },
+                    draft = draftSummary,
                 )
 
                 Tab.TIMER -> {

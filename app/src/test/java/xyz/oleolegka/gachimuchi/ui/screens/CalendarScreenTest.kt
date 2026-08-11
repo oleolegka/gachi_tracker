@@ -60,7 +60,10 @@ class CalendarScreenTest : ScreenTest() {
         openWorkout = {},
         openExercise = { _, _ -> },
         deleteWorkout = {},
+        deleteSingleEntries = { _, _ -> },
         renameWorkout = { _, _ -> },
+        resumeDraft = {},
+        discardDraft = {},
     )
 
     private fun calendar(slots: List<Slot> = emptyList(), journal: Journal = Journal()) {
