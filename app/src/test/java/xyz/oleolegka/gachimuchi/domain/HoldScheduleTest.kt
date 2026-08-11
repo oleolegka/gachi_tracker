@@ -129,7 +129,7 @@ class HoldScheduleTest {
     @Test
     fun `the summary names the pair, the effort count and the length`() {
         val program = starterPrograms().first() // 7:3 x 6, four sets, 180 s between
-        assertEquals("7:3 - 24 efforts, ${formatClock(program.totalSec())}", program.scheduleSummary())
+        assertEquals("7:3 · 24 efforts · ${formatClock(program.totalSec())}", program.scheduleSummary())
     }
 
     // --- the caption the three list rows share -------------------------------------------

@@ -3,7 +3,7 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
-import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -78,7 +78,8 @@ class ExercisePickerCreateTest : ScreenTest() {
         name("One-arm row")
 
         tap("One side at a time")
-        compose.onNodeWithText("One side at a time").assertIsSelected()
+        // a switch, as it already is in the edit dialog — not the filter chip it used to be
+        compose.onNodeWithText("One side at a time").assertIsOn()
         tap("Create and use")
 
         assertEquals("One-arm row", created?.name)

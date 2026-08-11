@@ -46,8 +46,8 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
  *
  * ── [stacked]: the same field with its buttons UNDERNEATH ────────────────────
  * Beside the field is right where the field has a screen's width to sit in. Inside a
- * DIALOG it is not: four buttons of 50dp each, plus the gaps, leave the value itself
- * about 48dp — narrower than any one of the buttons changing it, which is what the run
+ * DIALOG it is not: four buttons plus the gaps leave the value itself about 48dp —
+ * narrower than any one of the buttons changing it, which is what the run
  * offer looked like. [stacked] is the layout [TimeField] already uses for exactly this
  * reason: the field takes the full width and the four buttons share it out below, a
  * quarter each, which on the narrowest phone this app targets is still 57dp.
@@ -185,8 +185,8 @@ private fun NumberField(
 /**
  * Shared with [TimeField].
  *
- * [modifier] exists for that other caller: this one packs its buttons beside the field and
- * wants them a fixed 50dp wide, while [TimeField] puts a row of four UNDER its field and
+ * [modifier] exists for that other caller: this one packs its buttons beside the field at a
+ * fixed [STEP_BUTTON_WIDTH], while [TimeField] puts a row of four UNDER its field and
  * shares the width out between them. The default keeps this file's own layout unchanged.
  */
 @Composable
@@ -201,5 +201,17 @@ internal fun StepButton(label: String, modifier: Modifier = Modifier, onClick: (
     }
 }
 
-/** How wide a step button is when it sits BESIDE the field, as it does on this one. */
-private val STEP_BUTTON_WIDTH = 50.dp
+/**
+ * How wide a step button is when it sits BESIDE the field, as it does on this one.
+ *
+ * ── Forty-four, measured on 360 (SYSTEM.md rule 8) ─────────────────────────────
+ * It was 50, and 50 is what makes the field too narrow on the phone this app is actually
+ * built for. A stepper with two steps has four of these: on a 360 dp screen, inside a card
+ * (360 - 32 of screen margin - 24 of card padding = 304), four buttons of 50 plus four gaps
+ * of 4 take 216 and leave the VALUE 88 dp — less than two buttons, for the number all four
+ * of them exist to change. At 44 the same row leaves 112.
+ *
+ * The height stays 48: this is the width of the target, not its reach, and 48 is the floor
+ * a thumb needs whatever the mock-ups draw.
+ */
+private val STEP_BUTTON_WIDTH = 44.dp
