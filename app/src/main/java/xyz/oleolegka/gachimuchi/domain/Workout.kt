@@ -597,7 +597,7 @@ fun WorkoutStarted.slotLink(): SlotLink? =
     if (slotUid == null && slotId == null) null else SlotLink(slotUid, slotId)
 
 /** The day a row was WRITTEN on, which is not the day the training it records belongs to. */
-private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
+internal fun JournalEvent.writeDay(): String = ts.substringBefore('T')
 
 /**
  * The workout in progress, or null when there is none.

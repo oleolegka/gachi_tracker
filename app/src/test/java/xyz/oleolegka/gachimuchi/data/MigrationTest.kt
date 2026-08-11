@@ -2520,11 +2520,10 @@ class MigrationTest {
         )
         assertEquals(1, records.size)
         assertNull(records.single().side)
-        assertFalse(records.single().sideMissing)
     }
 
     @Test
-    fun `marking an exercise one-sided turns its sideless history into a stated defect`() = runTest {
+    fun `marking an exercise one-sided reads its sideless history as both hands`() = runTest {
         val phone = writeVersion12()
 
         val repo = ActivityRepository(openCurrent())
@@ -2532,20 +2531,24 @@ class MigrationTest {
         assertTrue(repo.exercise(phone.exerciseId)!!.oneSided)
 
         /*
-         * THE POINT OF THE FLAG BEING A COLUMN AND THE SIDE BEING A PAYLOAD FIELD. Turning it
-         * on cannot rewrite the sets already logged — they genuinely do not say which hand did
-         * them — so the reducers report a record whose side is unknown rather than filing it
-         * as "both hands", which is the one answer that is certainly wrong.
+         * THE POINT OF THE FLAG BEING A COLUMN AND THE SIDE BEING A PAYLOAD FIELD. Turning it on
+         * cannot rewrite the sets already logged, and it does not: the payload still names no
+         * hand. What the flag changes is how they are READ. The owner's ruling (2026-08-11) is
+         * that work done before the tick was symmetric, so each hand is credited with it — one
+         * record per hand, and no third record of unknown side, which is what used to draw a
+         * third column on the statistics.
          */
         val records = xyz.oleolegka.gachimuchi.domain.holdRecord(
             xyz.oleolegka.gachimuchi.domain.readActivities(repo.allEvents()),
             ExerciseLink.ofId(phone.exerciseId),
             oneSided = true,
         )
-        assertEquals(1, records.size)
-        assertNull(records.single().side)
-        assertTrue(records.single().sideMissing)
-        assertTrue(records.single().text, records.single().text.contains("side not recorded"))
+        assertEquals(2, records.size)
+        assertEquals(
+            listOf(xyz.oleolegka.gachimuchi.domain.HoldSide.LEFT, xyz.oleolegka.gachimuchi.domain.HoldSide.RIGHT),
+            records.map { it.side },
+        )
+        assertTrue(records.none { it.text.contains("side not recorded") })
     }
 
     // --- version 13 -> 14: the share of body weight, and the snapshots behind it -------------

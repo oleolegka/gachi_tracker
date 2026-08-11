@@ -750,6 +750,22 @@ fun journalInstanceCounts(
     return out
 }
 
+/**
+ * The days a WORKOUT was started on.
+ *
+ * Dated exactly the way [workoutsOn] dates one — the start event's own `op_date`, falling back
+ * to the day the row was written — so that a session cannot land on one day for the calendar
+ * and another for the heatmap.
+ *
+ * A DRAFT IS NOT IN HERE, and that is the point of reading start rows rather than the ViewModel:
+ * a workout still being assembled has written no row at all (domain/Workout.kt's `draftWorkout`
+ * builds a synthetic one with sentinel ids), so a session that was never begun paints nothing.
+ * Deleted and re-dated workouts are handled too, because [workoutStarts] goes through
+ * `liveEvents`.
+ */
+internal fun workoutDays(events: List<JournalEvent>): Set<String> =
+    workoutStarts(events).mapTo(HashSet()) { (row, started) -> started?.opDate ?: row.writeDay() }
+
 /** One cell: the day, how many activities it holds and its intensity level (0 = nothing). */
 data class HeatmapDay(val opDate: String, val count: Int, val level: Int)
 
@@ -790,6 +806,21 @@ internal fun heatmapLevel(count: Int, levels: Int): Int = count.coerceIn(0, leve
  * Builds the heatmap over [dateFrom]..[dateTo], expanded to full Monday-to-Sunday weeks so
  * the columns line up. The padding days are real days with real counts; they simply fall
  * outside the requested range.
+ *
+ * ── A WORKOUT WITH NOTHING IN IT STILL COLOURS ITS DAY ──────────────────────────
+ * The count is exercises, and an empty workout has none, so a session with no sets logged
+ * inside it used to leave the year blank on that day. Owner's report, 2026-08-11: "even an
+ * empty workout should colour in the square underneath it on overview. I log a session of
+ * climbing on rock as a workout, for instance — there is nothing inside it, but it is a heap
+ * of physical activity."
+ *
+ * Such a day counts as ONE activity, which is the lowest step of the ramp. That is a choice and
+ * not a measurement: the session happened, and how hard it was is exactly what the journal does
+ * not know. Counting it higher would let a day nobody wrote anything about outrank a day
+ * somebody logged three exercises on.
+ *
+ * The fallback only applies where there is nothing else: a workout that DOES hold exercises is
+ * already counted by them, and is not given an extra point for being a workout.
  */
 fun activityHeatmap(
     events: List<JournalEvent>,
@@ -802,11 +833,13 @@ fun activityHeatmap(
     val gridEnd = dateTo.plusDays((7 - dateTo.dayOfWeek.value).toLong())
 
     val perDay = activitiesByDay(events, gridStart.toString(), gridEnd.toString())
+    val sessions = workoutDays(events)
     val total = ChronoUnit.DAYS.between(gridStart, gridEnd).toInt() + 1
 
     val days = (0 until total).map { offset ->
         val iso = gridStart.plusDays(offset.toLong()).toString()
-        val c = perDay[iso]?.size ?: 0
+        val logged = perDay[iso]?.size ?: 0
+        val c = if (logged == 0 && iso in sessions) 1 else logged
         HeatmapDay(iso, c, heatmapLevel(c, levels))
     }
     return Heatmap(

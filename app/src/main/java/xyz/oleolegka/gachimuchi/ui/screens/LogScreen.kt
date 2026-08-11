@@ -777,11 +777,15 @@ internal fun StrengthEntry(
  * ── The side is asked for, and it cannot be skipped ─────────────────────────────
  * A record on a one-sided exercise is per (exercise, side): the weaker hand has its own
  * history and the gap between the two is what the training exists to close. A set that names
- * no side on such an exercise is therefore NOT "both hands" — it is a set that failed to say,
- * and the readers report it as a defect rather than guessing
- * ([xyz.oleolegka.gachimuchi.domain.holdRecord] files it under "side not recorded"). So the
- * primary button stays disabled until one is chosen, with a line underneath saying why: a
- * dead button that explains nothing is the worst thing on a screen used mid-set.
+ * no side on such an exercise is a set that failed to say. So the primary button stays disabled
+ * until one is chosen, with a line underneath saying why: a dead button that explains nothing is
+ * the worst thing on a screen used mid-set.
+ *
+ * The readers no longer report such a set as a defect — a sideless set counts for both hands
+ * now ([xyz.oleolegka.gachimuchi.domain.holdRecord]), which is the only sane reading of a
+ * history logged before the exercise was ever ticked one-sided. That is a rule for the PAST.
+ * It is not a reason to let a new set skip the question: "both hands did this" is a guess this
+ * card does not have to make, because the person filling it in knows the answer.
  *
  * NOT PREFILLED FROM THE LAST SET, unlike every other field on this card. One-sided work
  * alternates, so last time's answer is the wrong one about as often as it is right — and the

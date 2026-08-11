@@ -316,6 +316,81 @@ class AnalyticsTest {
         assertEquals(LocalDate.parse("2026-08-03"), map.weekStart(0))
     }
 
+    // --- an empty workout is still a day of training (2026-08-11) --------------------------
+
+    private fun weekOf(events: List<JournalEvent>) =
+        activityHeatmap(events, LocalDate.parse("2026-08-03"), LocalDate.parse("2026-08-09"))
+
+    /**
+     * The owner logs a session of climbing on rock as a workout with nothing inside it. Counting
+     * exercises left that day blank, which read as a rest day it was not.
+     */
+    @Test
+    fun `a workout with nothing logged inside it still colours its day`() {
+        val journal = Journal()
+        journal.startWorkout("2026-08-05")
+
+        val cell = weekOf(journal.events).days.first { it.opDate == "2026-08-05" }
+        assertEquals(1, cell.count)
+        // the lowest step of the ramp: it happened, and nothing says how hard
+        assertEquals(1, cell.level)
+    }
+
+    @Test
+    fun `a finished but empty workout colours its day too`() {
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05")
+        journal.finishWorkout(workout, "2026-08-05")
+
+        assertEquals(1, weekOf(journal.events).days.first { it.opDate == "2026-08-05" }.count)
+    }
+
+    @Test
+    fun `a workout that does hold exercises is not given an extra point for being one`() {
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05")
+        journal.strengthSet(bench, "2026-08-05", at = "09:05", workoutId = workout)
+        journal.strengthSet(squat, "2026-08-05", at = "09:20", workoutId = workout)
+
+        assertEquals(2, weekOf(journal.events).days.first { it.opDate == "2026-08-05" }.count)
+    }
+
+    @Test
+    fun `a deleted workout stops colouring its day`() {
+        val journal = Journal()
+        val workout = journal.startWorkout("2026-08-05")
+        journal.deleteEntry(workout)
+
+        assertEquals(0, weekOf(journal.events).days.first { it.opDate == "2026-08-05" }.count)
+    }
+
+    /**
+     * The canary the two counters needed: the calendar has always drawn a dot for a workout
+     * whatever it held ([journalInstanceCounts]), and the heatmap counted exercises, so the two
+     * screens disagreed about whether an empty session was a day of training at all.
+     */
+    @Test
+    fun `the heatmap and the calendar dots agree on whether a day had training`() {
+        val journal = Journal()
+        journal.startWorkout("2026-08-05")
+        journal.weighIn("2026-08-07")
+
+        val dots = journalInstanceCounts(journal.events, "2026-08-03", "2026-08-09")
+        val heat = weekOf(journal.events)
+
+        for (day in listOf("2026-08-04", "2026-08-05", "2026-08-06")) {
+            assertEquals(
+                "the two screens must answer the same on $day",
+                dots.containsKey(day),
+                heat.days.first { it.opDate == day }.count > 0,
+            )
+        }
+        // NOT the weigh-in, and this is the one place they part on purpose: a dot is drawn for
+        // it (it gets a card on the day) and the heatmap leaves it out (it is not training)
+        assertEquals(1, dots.getValue("2026-08-07"))
+        assertEquals(0, heat.days.first { it.opDate == "2026-08-07" }.count)
+    }
+
     @Test
     fun `heatmap cells are addressable by week and weekday`() {
         val map = activityHeatmap(emptyList(), LocalDate.parse("2026-08-03"), LocalDate.parse("2026-08-16"))
