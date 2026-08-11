@@ -54,7 +54,18 @@ data class TimerSettings(
     val countdownTicks: Boolean = true,
     /** Spoken step names, when an engine exists. */
     val speak: Boolean = false,
-    /** Default number of sets when a program is generated from an exercise. */
+    /**
+     * DEAD SINCE §18.17, and kept only so that stored settings and exported journals still
+     * read back.
+     *
+     * It used to be the number of sets a program generated from an exercise was built with —
+     * silently, which is the bug the owner reported from the phone ("it puts four by default,
+     * and that is a plain bug"). A conducted run is one set now, and how many sets are planned
+     * is a fact of the workout card ([xyz.oleolegka.gachimuchi.domain.WorkoutExercise.plannedSets]),
+     * so nothing reads this. No settings screen has ever drawn it, so there is nothing on
+     * screen to take away; removing the field itself would break the stored preferences and the
+     * transfer format for a number nobody sees, which is a migration this change does not need.
+     */
     val defaultSets: Int = 4,
 )
 
