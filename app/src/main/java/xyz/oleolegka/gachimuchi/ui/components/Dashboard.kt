@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Radius
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * The dashboard building blocks of `design/design-system/dashboard/`: the card shell, the
@@ -116,7 +117,7 @@ fun SectionHeader(title: String, note: String? = null, modifier: Modifier = Modi
             modifier = Modifier.weight(1f, fill = false),
         )
         if (note != null) {
-            Text(note, fontSize = 10.5.sp, color = colors.inkMuted, maxLines = 1)
+            Text(note, fontSize = TextSize.Caption, color = colors.inkMuted, maxLines = 1)
         }
     }
 }
@@ -223,7 +224,7 @@ fun RecordBadge(date: String?, modifier: Modifier = Modifier) {
         CheckGlyph(colors.goodText, 11.dp)
         Text(
             if (date == null) "Record" else "Record - $date",
-            fontSize = 9.5.sp,
+            fontSize = TextSize.Caption,
             fontWeight = FontWeight.Bold,
             color = colors.goodText,
             maxLines = 1,
@@ -324,7 +325,7 @@ fun DoorTile(
                 if (unit != null) {
                     Text(
                         " $unit",
-                        fontSize = 10.sp,
+                        fontSize = TextSize.Caption,
                         fontWeight = FontWeight.Medium,
                         color = colors.inkMuted,
                         modifier = Modifier.padding(bottom = 1.dp),
@@ -332,7 +333,7 @@ fun DoorTile(
                 }
             }
             if (delta != null) {
-                Text(delta, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.goodText)
+                Text(delta, fontSize = TextSize.Caption, fontWeight = FontWeight.SemiBold, color = colors.goodText)
             }
         }
         Chevron(Modifier.padding(start = Spacing.Line))
@@ -470,7 +471,7 @@ fun StatCard(
             if (`when` != null) {
                 Text(
                     `when`,
-                    fontSize = 10.5.sp,
+                    fontSize = TextSize.Caption,
                     color = colors.inkMuted,
                     modifier = Modifier.padding(top = Spacing.Tight),
                 )

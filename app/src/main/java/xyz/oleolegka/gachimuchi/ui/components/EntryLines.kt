@@ -32,6 +32,7 @@ import xyz.oleolegka.gachimuchi.ui.theme.Radius
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.Duration
 import java.time.LocalDateTime
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * The width of the set-number gutter, and therefore the indent of every line that hangs
@@ -182,7 +183,7 @@ private fun EntryLine(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "$number",
-                    fontSize = 10.sp,
+                    fontSize = TextSize.Caption,
                     color = colors.inkMuted,
                     modifier = Modifier.width(NumberColumn),
                 )
@@ -194,7 +195,7 @@ private fun EntryLine(
                 )
                 if (warmup) WarmupBadge(Modifier.padding(end = Spacing.Tight))
                 if (incomplete) IncompleteBadge(Modifier.padding(end = Spacing.Tight))
-                clockOf(entry)?.let { Text(it, fontSize = 10.sp, color = colors.inkMuted) }
+                clockOf(entry)?.let { Text(it, fontSize = TextSize.Caption, color = colors.inkMuted) }
             }
             /*
              * The pause that was actually taken, which is a MEASUREMENT and says so: it counts
@@ -256,7 +257,7 @@ private fun WarmupBadge(modifier: Modifier = Modifier) {
             .background(colors.recessed)
             .border(1.dp, colors.border, RoundedCornerShape(Radius.Small))
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
-        fontSize = 9.5.sp,
+        fontSize = TextSize.Caption,
         fontWeight = FontWeight.Medium,
         color = colors.inkMuted,
     )
@@ -284,7 +285,7 @@ private fun IncompleteBadge(modifier: Modifier = Modifier) {
             .background(colors.recessed)
             .border(1.dp, colors.warning, RoundedCornerShape(Radius.Small))
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
-        fontSize = 9.5.sp,
+        fontSize = TextSize.Caption,
         fontWeight = FontWeight.Medium,
         color = colors.warning,
     )

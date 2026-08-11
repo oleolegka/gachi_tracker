@@ -29,6 +29,7 @@ import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.theme.GachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * The charts, drawn on a Compose [Canvas] with no charting library behind them.
@@ -58,9 +59,12 @@ import java.time.LocalDate
  * The arithmetic lives in `ChartMath.kt` and is unit-tested; this file is only pixels.
  */
 
-/** Text sizes of chart furniture. Small, but not below the 10 sp that stops being legible. */
-private val AXIS_TEXT_SIZE = 10.sp
-private val VALUE_TEXT_SIZE = 10.sp
+/**
+ * Text sizes of chart furniture: the floor of the type scale, because chart furniture is
+ * the smallest text in the app and the scale says where that stops.
+ */
+private val AXIS_TEXT_SIZE = TextSize.Caption
+private val VALUE_TEXT_SIZE = TextSize.Caption
 
 private fun axisTextStyle(color: Color) = TextStyle(fontSize = AXIS_TEXT_SIZE, color = color)
 
