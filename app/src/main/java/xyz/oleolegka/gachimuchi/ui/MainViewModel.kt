@@ -991,16 +991,17 @@ class MainViewModel(
             val settings = timerSettings.value
             /*
              * THE ANSWER FIRST, the guess only when there was no question (see [ProgramStart.holds]).
-             * Both of these used to be derived unconditionally — the holds off the last set in the
-             * journal, the sets off a setting the owner had never opened — which is how a run came
-             * to have four sets nobody chose.
+             * The holds used to be derived unconditionally, off the last set in the journal.
+             *
+             * ONE SET, and no pause after it (§18.17). The set count and the rest between sets
+             * used to be multiplied into the program here; the pause that follows this set is a
+             * floor now, started by [startRestAfterRun] when the offer is answered, so that the
+             * conductor is free the moment the holds are done and the other hand can have it.
              */
             val reps = start.holds ?: lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
             val program = programFromExercise(
                 exercise = start.exercise,
                 reps = reps,
-                sets = start.sets ?: settings.defaultSets,
-                restBetweenSetsSec = resolveRestSec(settings, events, start.exercise.id),
                 prepareSec = settings.prepareSec,
             ) ?: return@launch
             timer.start(program, start.exercise.id, RunOrigin.EXERCISE, start.side)

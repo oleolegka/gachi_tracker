@@ -30,7 +30,7 @@ import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
-import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.multiSetProgram
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.flatten
 import xyz.oleolegka.gachimuchi.domain.totalSec
@@ -147,7 +147,7 @@ class RunLoggingChainTest {
     @Test
     fun `an exercise, a program built from it, a run on the clock, and a set in the journal`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(
+        val program = multiSetProgram(
             exercise = exercise, reps = 2, sets = 2, restBetweenSetsSec = 60, prepareSec = 10,
         )!!
         val timer = newController()
@@ -186,7 +186,7 @@ class RunLoggingChainTest {
         val exercise = hangs()
         // saved in the editor and linked to the exercise, which is what the timer tab runs
         val id = programs.save(
-            programFromExercise(exercise, reps = 3, sets = 2, restBetweenSetsSec = 30, prepareSec = 5)!!
+            multiSetProgram(exercise, reps = 3, sets = 2, restBetweenSetsSec = 30, prepareSec = 5)!!
                 .copy(name = "Repeaters 7:3", category = "Hangboard")
         )
         val stored = programs.programById(id)!!
@@ -209,7 +209,7 @@ class RunLoggingChainTest {
     fun `an unlinked program leaves an offer that names no exercise, and the answer sticks`() = runTest {
         val exercise = hangs()
         val id = programs.save(
-            programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+            multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
                 .copy(name = "Repeaters", exerciseId = null)
         )
         val stored = programs.programById(id)!!
@@ -240,7 +240,7 @@ class RunLoggingChainTest {
     @Test
     fun `an offer survives the process that produced it`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+        val program = multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
 
         val timer = newController()
         timer.start(program, exercise.id, RunOrigin.EXERCISE)
@@ -259,7 +259,7 @@ class RunLoggingChainTest {
     @Test
     fun `answering the offer clears the stored copy too, so it cannot come back`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(exercise, reps = 2, sets = 1, restBetweenSetsSec = 0, prepareSec = 0)!!
+        val program = multiSetProgram(exercise, reps = 2, sets = 1, restBetweenSetsSec = 0, prepareSec = 0)!!
 
         val timer = newController()
         timer.start(program, exercise.id, RunOrigin.EXERCISE)
@@ -298,7 +298,7 @@ class RunLoggingChainTest {
         // 2. a saved program that is linked to an exercise
         val linked = programs.programById(
             programs.save(
-                programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+                multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
                     .copy(name = "Linked")
             )
         )!!
@@ -562,7 +562,7 @@ class RunLoggingChainTest {
         val timer = newController()
         val viewModel = MainViewModel(repo, programs, timer)
         val programId = programs.save(
-            programFromExercise(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
+            multiSetProgram(exercise, reps = 2, sets = 2, restBetweenSetsSec = 30, prepareSec = 0)!!
                 .copy(name = "Repeaters", exerciseId = null)
         )
 
@@ -652,7 +652,7 @@ class RunLoggingChainTest {
     @Test
     fun `a run interrupted by the user is offered for the part that ran`() = runTest {
         val exercise = hangs()
-        val program = programFromExercise(exercise, reps = 2, sets = 3, restBetweenSetsSec = 30, prepareSec = 0)!!
+        val program = multiSetProgram(exercise, reps = 2, sets = 3, restBetweenSetsSec = 30, prepareSec = 0)!!
 
         val timer = newController()
         timer.start(program, exercise.id, RunOrigin.EXERCISE)

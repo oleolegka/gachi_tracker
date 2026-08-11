@@ -23,7 +23,7 @@ class RunLogTest {
     )
 
     /** 15 s lead-in, then four sets of six 7:3 hangs with three minutes between them. */
-    private val program = programFromExercise(
+    private val program = multiSetProgram(
         exercise = hangs, reps = 6, sets = 4, restBetweenSetsSec = 180, prepareSec = 15,
     )!!
 

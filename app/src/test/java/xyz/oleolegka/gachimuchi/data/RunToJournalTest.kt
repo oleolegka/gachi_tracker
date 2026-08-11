@@ -22,7 +22,7 @@ import xyz.oleolegka.gachimuchi.domain.completedSets
 import xyz.oleolegka.gachimuchi.domain.flatten
 import xyz.oleolegka.gachimuchi.domain.holdRecord
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
-import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.multiSetProgram
 import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.readProgramFile
 import xyz.oleolegka.gachimuchi.domain.withUniqueNames
@@ -70,7 +70,7 @@ class RunToJournalTest {
     @Test
     fun `a run stopped after three sets writes three sets the session feed can read`() = runTest {
         val exercise = hangs()
-        val steps = programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180, prepareSec = 15)!!
+        val steps = multiSetProgram(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180, prepareSec = 15)!!
             .flatten()
 
         // stopped on the third hang of set 3
@@ -96,7 +96,7 @@ class RunToJournalTest {
     @Test
     fun `sets written from a run take part in personal records like any other set`() = runTest {
         val exercise = hangs()
-        val steps = programFromExercise(exercise, reps = 3, sets = 2, restBetweenSetsSec = 120)!!.flatten()
+        val steps = multiSetProgram(exercise, reps = 3, sets = 2, restBetweenSetsSec = 120)!!.flatten()
         val sets = completedSets(steps, endedAtIndex = steps.lastIndex, finished = true)
 
         holdSetsFromRun(exercise, "2026-08-01", sets, addedKg = 6.0).forEach { repo.record(it) }
@@ -110,7 +110,7 @@ class RunToJournalTest {
     @Test
     fun `a run of one exercise stays one exercise in the journal, not one per set`() = runTest {
         val exercise = hangs()
-        val steps = programFromExercise(exercise, reps = 2, sets = 3, restBetweenSetsSec = 60)!!.flatten()
+        val steps = multiSetProgram(exercise, reps = 2, sets = 3, restBetweenSetsSec = 60)!!.flatten()
 
         holdSetsFromRun(exercise, day, completedSets(steps, steps.lastIndex, finished = true))
             .forEach { repo.record(it) }

@@ -19,7 +19,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.OUTCOME_MAX_AGE_MS
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.RunOutcome
-import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.multiSetProgram
 import xyz.oleolegka.gachimuchi.domain.restProgram
 
 /**
@@ -46,7 +46,7 @@ class TimerOutcomeTest {
     )
 
     /** Two sets of two hangs, no lead-in: seven steps, four of them efforts. */
-    private val program = programFromExercise(
+    private val program = multiSetProgram(
         exercise = hangs, reps = 2, sets = 2, restBetweenSetsSec = 60, prepareSec = 0,
     )!!
 

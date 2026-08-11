@@ -129,14 +129,13 @@ class ScheduledRunTest {
          * off the first block has a rest of zero, so it builds NOTHING and the card fell
          * through to the manual entry form. The second edge was never the only casualty.
          */
-        assertNull(programFromExercise(exercise, reps = 4, sets = 2, restBetweenSetsSec = 60))
+        assertNull(programFromExercise(exercise, reps = 4))
 
-        // where it does build something, it builds the first block and repeats supplied from
-        // outside: four sets of six become two sets of four, and the schedule is not consulted
-        val collapsed = programFromExercise(
-            hold("Hang 20 mm", repeaters), reps = 4, sets = 2, restBetweenSetsSec = 60,
-        )!!
-        assertEquals(8, collapsed.workStepCount())
+        // where it does build something, it builds the first block and the hold count supplied
+        // from outside: a schedule of four sets of six becomes one set of four, and the
+        // schedule is not consulted
+        val collapsed = programFromExercise(hold("Hang 20 mm", repeaters), reps = 4)!!
+        assertEquals(4, collapsed.workStepCount())
         assertEquals(24, scheduledRun(hold("Hang 20 mm", repeaters))!!.workStepCount())
     }
 

@@ -23,7 +23,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
-import xyz.oleolegka.gachimuchi.domain.programFromExercise
+import xyz.oleolegka.gachimuchi.domain.multiSetProgram
 import xyz.oleolegka.gachimuchi.timer.TimerController
 import xyz.oleolegka.gachimuchi.ui.MainViewModel
 import java.time.LocalDate
@@ -145,7 +145,7 @@ class DeletionSilencesCountdownsTest {
         // 2. and a conducted set on top of it — the second kind of countdown, and the one the
         // first round of this fix never touched
         timer.start(
-            programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
+            multiSetProgram(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
             exercise.id,
             RunOrigin.EXERCISE,
         )
@@ -169,7 +169,7 @@ class DeletionSilencesCountdownsTest {
         vm.addSet(holdSetOf(exercise, today.toString(), reps = 6, holdSec = 7.0), intoWorkoutId = workoutId)
         settle()
         timer.start(
-            programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
+            multiSetProgram(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
             exercise.id,
             RunOrigin.EXERCISE,
         )
@@ -213,7 +213,7 @@ class DeletionSilencesCountdownsTest {
 
         // the conductor is on the RIGHT hand while the LEFT card is taken out
         timer.start(
-            programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
+            multiSetProgram(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
             exercise.id,
             RunOrigin.EXERCISE,
             HoldSide.RIGHT,
@@ -240,7 +240,7 @@ class DeletionSilencesCountdownsTest {
         val rightAdded = repo.addExerciseToWorkout(workoutId, exercise.id, 180, HoldSide.RIGHT)
 
         timer.start(
-            programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
+            multiSetProgram(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180)!!,
             exercise.id,
             RunOrigin.EXERCISE,
             HoldSide.LEFT,

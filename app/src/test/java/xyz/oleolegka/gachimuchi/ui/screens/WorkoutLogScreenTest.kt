@@ -685,12 +685,12 @@ class WorkoutLogScreenTest : ScreenTest() {
 
         compose.onNodeWithText("One-arm hangs - Left").performClick()
         settle()
-        compose.onNodeWithText("Start the run").performClick()
+        compose.onNodeWithText("Start the set").performClick()
         settle()
 
         compose.onNodeWithText("One-arm hangs - Right").performClick()
         settle()
-        compose.onNodeWithText("Start the run").performClick()
+        compose.onNodeWithText("Start the set").performClick()
         settle()
 
         assertEquals(
@@ -871,56 +871,51 @@ class WorkoutLogScreenTest : ScreenTest() {
      * and a form asking for numbers that do not exist yet is in the way.
      *
      * What it raises instead is the RUN PLAN (§18.15), not the entry form: a simple pair's
-     * schedule says how long one effort is and nothing about how many, so the holds and the
-     * sets belong to this run and are asked for.
+     * schedule says how long one effort is and nothing about how many, so the holds belong to
+     * this set and are asked for. The SET COUNT is not asked here any more (§18.17) — a run is
+     * one set, and how many sets are planned lives on the card.
      */
     @Test
-    fun `tapping a protocol-led card asks how long the run is instead of raising the form`() {
+    fun `tapping a protocol-led card asks how long the set is instead of raising the form`() {
         val journal = Journal()
         show(journal, hangWorkout(journal))
 
         compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        compose.onNodeWithText("Before this run").assertExists()
-        compose.onNodeWithText("Holds in each set").assertExists()
-        compose.onNodeWithText("Sets").assertExists()
+        compose.onNodeWithText("Before this set").assertExists()
+        compose.onNodeWithText("Holds in this set").assertExists()
         // and the entry form is still not what a hang gets
         compose.onAllNodesWithText("Repeat set").assertCountEquals(0)
         // nothing has started until the plan is confirmed
         assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
 
-        compose.onNodeWithText("Start the run").performClick()
+        compose.onNodeWithText("Start the set").performClick()
         assertEquals(listOf(Triple("Hangs", null, null)), started)
     }
 
     /**
-     * THE REPORT, in one test: "there is no question about the number of sets anywhere, it puts
-     * four by default, and that is a plain bug".
+     * §18.17: the question that used to be here is gone from here.
      *
-     * The number is on the screen, it is the default the settings carry rather than a hidden
-     * one, and what is typed over it is what the run is started with. The default arriving
-     * visibly is half the fix: the complaint was not that four is wrong, it was that four was
-     * never shown or offered.
+     * "How many sets" was asked before EVERY set, which is asking the same thing over and over
+     * and, worse, got a countdown out of the answer — the pauses between those sets became steps
+     * of the conductor's own program, and while they ran the other hand could not start. The
+     * holds are still this set's own answer; the set count is now a plan on the card.
      */
     @Test
-    fun `the set count is shown before a simple pair run and what is chosen is what starts`() {
+    fun `the run plan asks how long this set is and no longer how many sets there will be`() {
         val journal = Journal()
         show(journal, hangWorkout(journal))
 
         compose.onNodeWithText("Hangs").performClick()
         settle()
 
-        // TimerSettings().defaultSets, drawn rather than applied behind the user's back
-        compose.onNodeWithText("4").assertExists()
+        compose.onNodeWithText("Holds in this set").assertExists()
+        compose.onAllNodesWithText("Sets").assertCountEquals(0)
+        // one stepper on the screen, and it is the holds one
+        compose.onAllNodesWithText("+1").assertCountEquals(1)
 
-        // one press of the sets stepper's plus. Both steppers offer "+1", so the SECOND one
-        // on the screen is the sets field — holds is drawn above it
-        compose.onAllNodesWithText("+1")[1].performClick()
-        settle()
-        compose.onNodeWithText("5").assertExists()
-
-        compose.onNodeWithText("Start the run").performClick()
+        compose.onNodeWithText("Start the set").performClick()
         assertEquals(listOf(Triple("Hangs", null, null)), started)
     }
 
@@ -964,7 +959,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         // nothing has started yet: the question is in front of the set, not beside it
         assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
 
-        compose.onNodeWithText("Start the run").performClick()
+        compose.onNodeWithText("Start the set").performClick()
         assertEquals(listOf(Triple("Hangs", 15.0, null)), started)
     }
 
@@ -982,10 +977,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         settle()
 
         // the run plan is up (a pair always owes its length) and carries no weight field at all
-        compose.onNodeWithText("Before this run").assertExists()
+        compose.onNodeWithText("Before this set").assertExists()
         compose.onAllNodesWithText("Added weight, kg").assertCountEquals(0)
 
-        compose.onNodeWithText("Start the run").performClick()
+        compose.onNodeWithText("Start the set").performClick()
         assertEquals(listOf(Triple("Hangs", null, null)), started)
     }
 

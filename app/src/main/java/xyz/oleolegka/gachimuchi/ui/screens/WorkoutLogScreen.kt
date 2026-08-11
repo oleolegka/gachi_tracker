@@ -908,12 +908,11 @@ fun WorkoutLogScreen(
             // what was done last time, which for a second set of the same session is the set
             // just recorded — the same "one tap to repeat" rule the entry form follows
             initialHolds = lastHoldSet(state.events, ref.link)?.reps ?: DEFAULT_RUN_HOLDS,
-            initialSets = settings.defaultSets,
             // null keeps the plate off the dialog entirely, the same test §13.5 already applies
             initialKg = lastAddedKg(state, ref),
-            onConfirm = { holds, sets, kg ->
+            onConfirm = { holds, kg ->
                 actions.startProtocolSet(
-                    ProgramStart(ref, planningSide?.let(HoldSide::fromCode), kg, holds, sets)
+                    ProgramStart(ref, planningSide?.let(HoldSide::fromCode), kg, holds)
                 )
                 planningFor = null
                 planningSide = null
@@ -1615,59 +1614,59 @@ private fun RestDialog(
 private const val DEFAULT_RUN_HOLDS = 6
 
 /**
- * Ceilings on what the run plan will accept, and they are sanity rails rather than opinions
- * about training: past these the number is a typo, and a run of six hundred sets is a phone
- * counting until the battery goes.
+ * Ceiling on what the run plan will accept, a sanity rail rather than an opinion about
+ * training: past it the number is a typo, and a run of six hundred holds is a phone counting
+ * until the battery goes.
  */
 private const val MAX_RUN_HOLDS = 60
-private const val MAX_RUN_SETS = 30
 
 /**
- * How much of the schedule this run is: the holds, the sets, and the plate when there is one.
+ * How long this ONE set is: the holds, and the plate when there is one.
  *
  * ── The question that was missing entirely ──────────────────────────────────────
  * §18.15 defines the simple pair as the branch whose schedule says only "work this long, rest
- * this long" — so how many holds go in a set, and how many sets in the run, are the run's own
- * to choose, and the document says they are asked before every one. Nothing asked. The holds
- * were copied off the last set in the journal and the sets came out of [TimerSettings.defaultSets],
- * so a first run of a new exercise was four sets that the owner never chose, could not see and
- * could not change. From the phone, 2026-08-11: "there is no question about the number of sets
- * anywhere, it puts four by default, and that is a plain bug".
+ * this long" — so how many holds go in a set is the run's own to choose, and the document says
+ * it is asked before every one. Nothing asked; the holds were copied off the last set in the
+ * journal.
+ *
+ * ── The set count has left this dialog (§18.17) ─────────────────────────────────
+ * It used to be the second field here, and it was the wrong question in the wrong place: a run
+ * is ONE set now, so asking before each set how many sets there will be in total asks the same
+ * thing over and over and gets a countdown out of it either way. The plan lives on the card
+ * instead, answered once when the exercise enters the workout, and the card reads "2 of 5"
+ * against the sets actually recorded.
  *
  * ── Why the plate is in HERE rather than in a second dialog ─────────────────────
  * §13.5 wants the weight answered on the way into the set, and it already is ([WeightDialog]).
  * Putting it in this dialog for the branch that has one anyway makes the run's whole answer one
  * screen and one confirm, instead of two dialogs in a row before a set that used to need none.
  * It is drawn only when the last set carried a plate — the same test [WeightDialog] is raised
- * by, so a bodyweight protocol still sees two fields and not three.
+ * by, so a bodyweight protocol still sees one field and not two.
  *
- * A STRICT schedule never reaches here: it fixes the holds and the sets itself, and the only
- * thing left to ask it is the plate (§18.15). That branching is at the tap, and
- * [ProgramStart.holds] restates it where the values are consumed.
+ * A STRICT schedule never reaches here: it fixes the holds itself, and the only thing left to
+ * ask it is the plate (§18.15). That branching is at the tap, and [ProgramStart.holds] restates
+ * it where the value is consumed.
  */
 @Composable
 internal fun RunPlanDialog(
     exerciseName: String,
     initialHolds: Int,
-    initialSets: Int,
     /** The plate last hung on this exercise, or null when there has never been one (§13.5). */
     initialKg: Double?,
-    onConfirm: (holds: Int, sets: Int, addedKg: Double?) -> Unit,
+    onConfirm: (holds: Int, addedKg: Double?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
     var holdsDraft by remember(exerciseName, initialHolds) { mutableStateOf(initialHolds.toString()) }
-    var setsDraft by remember(exerciseName, initialSets) { mutableStateOf(initialSets.toString()) }
     var kgDraft by remember(exerciseName, initialKg) {
         mutableStateOf(initialKg?.let { formatNumber(it) }.orEmpty())
     }
 
     val holds = parseNumber(holdsDraft)?.toInt()?.takeIf { it in 1..MAX_RUN_HOLDS }
-    val sets = parseNumber(setsDraft)?.toInt()?.takeIf { it in 1..MAX_RUN_SETS }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Before this run") },
+        title = { Text("Before this set") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.Block)) {
                 Text(
@@ -1682,17 +1681,9 @@ internal fun RunPlanDialog(
                  * would have inherited it. A hold is what this exercise records one of.
                  */
                 StepperField(
-                    label = "Holds in each set",
+                    label = "Holds in this set",
                     value = holdsDraft,
                     onValueChange = { holdsDraft = it },
-                    steps = listOf(1.0),
-                    decimal = false,
-                    stacked = true,
-                )
-                StepperField(
-                    label = "Sets",
-                    value = setsDraft,
-                    onValueChange = { setsDraft = it },
                     steps = listOf(1.0),
                     decimal = false,
                     stacked = true,
@@ -1709,10 +1700,11 @@ internal fun RunPlanDialog(
                     )
                 }
                 Text(
-                    if (holds == null || sets == null) {
-                        "Holds and sets are whole numbers, at least one of each."
+                    if (holds == null) {
+                        "Holds is a whole number, at least one."
                     } else {
-                        "The schedule sets the rhythm. How much of it you do is this run's answer."
+                        "The schedule sets the rhythm. This is one set of it - the rest after " +
+                            "it runs under the card."
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.inkSecondary,
@@ -1721,9 +1713,9 @@ internal fun RunPlanDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { if (holds != null && sets != null) onConfirm(holds, sets, parseNumber(kgDraft)) },
-                enabled = holds != null && sets != null,
-            ) { Text("Start the run") }
+                onClick = { if (holds != null) onConfirm(holds, parseNumber(kgDraft)) },
+                enabled = holds != null,
+            ) { Text("Start the set") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
