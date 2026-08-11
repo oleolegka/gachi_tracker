@@ -6,25 +6,27 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,6 +66,9 @@ import xyz.oleolegka.gachimuchi.ui.components.SlotEditorDialog
 import xyz.oleolegka.gachimuchi.ui.fmtMonth
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 import xyz.oleolegka.gachimuchi.ui.weekdayShort
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -124,9 +129,11 @@ import java.time.temporal.ChronoUnit
  * than opening an entry card that would have written today's date onto it.
  *
  * ── Editing happens on the selected day, in a dialog ────────────────────────────
- * "Plan a session" sits under the cards and always means "on the day above it", so the day
- * never has to be picked twice; each planned card carries its own pencil and bin, which
- * only the calendar passes in. The editor is [SlotEditorDialog] and the confirmation
+ * "Planned session" is an item of the one Add menu under the cards and always means "on the
+ * day above it", so the day never has to be picked twice; each planned card carries its own
+ * menu of edit and delete, which only the calendar passes in (there were two buttons and a
+ * pair of icons here before the redraw — see [DayCardList] for both halves of that change).
+ * The editor is [SlotEditorDialog] and the confirmation
  * [DeleteSlotDialog] — both are dialogs so the grid stays visible behind them, which is the
  * context for "which day is this".
  *
@@ -208,8 +215,11 @@ fun CalendarScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = PaddingValues(
+            start = Spacing.Block, end = Spacing.Block,
+            top = Spacing.Line, bottom = Spacing.Section,
+        ),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Cards),
     ) {
         item {
             MonthNavigator(
@@ -232,27 +242,32 @@ fun CalendarScreen(
                     date = selectedDate,
                     actions = cardActions,
                     pastWorkoutNames = state.pastWorkoutNames,
+                    /*
+                     * Null on a day already gone — and null is what makes the menu item
+                     * ABSENT, not refused inside.
+                     *
+                     * The editor's Save has always been dead for a backdated day, and that
+                     * was taken for the whole fix — but the OWNER reads the screen, not the
+                     * dialog: "I am right now on 0.6 able to pick 6 August and there are two
+                     * buttons" (2026-08-11). A control that opens a form you can fill in and
+                     * cannot save says the app plans in the past and then loses the plan.
+                     *
+                     * Recording stays on a past day on purpose: writing down a session that
+                     * really happened is exactly what backdating is FOR. It is the PLAN that
+                     * cannot be made after the fact (§20.1).
+                     *
+                     * This lambda is also the reason planning is a PARAMETER of the shared
+                     * list rather than a button the calendar draws under it: the redraw put
+                     * the three ways to add something into one menu (rule 1), and the menu
+                     * belongs to the component Today draws too — where planning has no place
+                     * and the lambda is left null.
+                     */
+                    onPlanSession = if (selectedDate.isBefore(today)) {
+                        null
+                    } else {
+                        { editing = SlotEditorTarget(null, selectedDate) }
+                    },
                 )
-                /*
-                 * Absent on a day already gone, not merely refused inside.
-                 *
-                 * The editor's Save has always been dead for a backdated day, and that was
-                 * taken for the whole fix — but the OWNER reads the screen, not the dialog:
-                 * "I am right now on 0.6 able to pick 6 August and there are two buttons"
-                 * (2026-08-11). A button that opens a form you can fill in and cannot save
-                 * says the app plans in the past and then loses the plan, which is a worse
-                 * answer than not offering it.
-                 *
-                 * "Add" stays on a past day on purpose: recording a session that really
-                 * happened is exactly what backdating is FOR. It is the PLAN that cannot be
-                 * made after the fact (§20.1), and the two buttons say so by being one.
-                 */
-                if (!selectedDate.isBefore(today)) {
-                    PlanButton(
-                        onClick = { editing = SlotEditorTarget(null, selectedDate) },
-                        modifier = Modifier.padding(top = 9.dp),
-                    )
-                }
             }
         }
     }
@@ -307,18 +322,6 @@ fun CalendarScreen(
  */
 private data class SlotEditorTarget(val slot: Slot?, val day: LocalDate)
 
-/** The one way into the editor for a new slot; it always means "on the day above". */
-@Composable
-private fun PlanButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp),
-    ) {
-        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-        Text("Plan a session", modifier = Modifier.padding(start = 8.dp))
-    }
-}
-
 @Composable
 private fun MonthNavigator(
     month: LocalDate,
@@ -331,8 +334,13 @@ private fun MonthNavigator(
     onNext: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    GachiCard(Modifier.fillMaxWidth(), radius = 18.dp) {
-        Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)) {
+    GachiCard(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(
+                start = Spacing.Inset, end = Spacing.Inset,
+                top = Spacing.Line, bottom = Spacing.Inset,
+            )
+        ) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -347,7 +355,7 @@ private fun MonthNavigator(
                 }
                 Text(
                     fmtMonth(month),
-                    fontSize = 15.sp,
+                    fontSize = TextSize.Title,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -360,11 +368,11 @@ private fun MonthNavigator(
                 }
             }
 
-            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+            Row(Modifier.fillMaxWidth().padding(bottom = Spacing.Line)) {
                 weekdayShort.forEach { label ->
                     Text(
                         label.uppercase(),
-                        fontSize = 10.sp,
+                        fontSize = TextSize.Caption,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.4.sp,
                         color = colors.inkMuted,
@@ -375,7 +383,10 @@ private fun MonthNavigator(
             }
 
             for (week in 0 until (days.size + 6) / 7) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
                     for (index in 0 until 7) {
                         val status = days.getOrNull(week * 7 + index)
                         if (status == null) {
@@ -397,10 +408,10 @@ private fun MonthNavigator(
                 }
             }
 
-            HorizontalDivider(color = colors.grid, modifier = Modifier.padding(top = 12.dp))
+            HorizontalDivider(color = colors.grid, modifier = Modifier.padding(top = Spacing.Line))
             Row(
-                Modifier.fillMaxWidth().padding(top = 11.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                Modifier.fillMaxWidth().padding(top = Spacing.Inset),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Block),
             ) {
                 LegendItem("done", colors.good)
                 LegendItem("missed", colors.critical)
@@ -408,20 +419,31 @@ private fun MonthNavigator(
             }
             Text(
                 "A dot is a whole session or entry. Up to six a day; +N is the rest.",
-                fontSize = 10.sp,
+                fontSize = TextSize.Caption,
+                lineHeight = TextSize.Caption * 1.45f,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = Spacing.Line),
             )
         }
     }
 }
 
+/**
+ * One key of the legend: the mark, then the word for it.
+ *
+ * The mark is a CIRCLE because the thing it explains is a circle. It used to be an 8 dp
+ * rounded square standing for a round dot — a key that has to be decoded before it can
+ * decode anything.
+ */
 @Composable
 private fun LegendItem(label: String, color: Color) {
     val colors = LocalGachiColors.current
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color))
-        Text(label, fontSize = 10.sp, color = colors.inkSecondary, maxLines = 1)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Text(label, fontSize = TextSize.Caption, color = colors.inkSecondary, maxLines = 1)
     }
 }
 
@@ -459,16 +481,17 @@ private fun DayCell(
     val colors = LocalGachiColors.current
     val date = LocalDate.parse(status.day)
     val cellBackground = if (isPast) colors.calendarGone else colors.calendarAhead
+    val shape = RoundedCornerShape(Radius.Small)
     Box(
         modifier
             .aspectRatio(1f / 1.06f)
             .heightIn(min = 44.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(shape)
             // the selection is the strongest signal on the grid and always wins
             .background(if (isSelected) colors.accent else cellBackground)
             .then(
                 if (isToday && !isSelected) {
-                    Modifier.border(1.5.dp, colors.accent, RoundedCornerShape(10.dp))
+                    Modifier.border(1.5.dp, colors.accent, shape)
                 } else {
                     Modifier
                 }
@@ -476,10 +499,13 @@ private fun DayCell(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
             Text(
                 date.dayOfMonth.toString(),
-                fontSize = 13.sp,
+                fontSize = TextSize.Meta,
                 fontWeight = if (isToday || isSelected) FontWeight.Bold else FontWeight.Medium,
                 color = when {
                     isSelected -> Color.White
@@ -489,7 +515,7 @@ private fun DayCell(
                     else -> colors.inkMuted.copy(alpha = 0.5f)
                 },
             )
-            DotRow(status.day, dots)
+            DotRow(status.day, dots, isSelected)
         }
     }
 }
@@ -505,26 +531,44 @@ private fun DayCell(
  * collision, and everything to lose by missing a background this screen adds later that
  * collides with green or red instead.
  *
- * A fixed-height row, always: with zero dots it is still as tall as it is with six, so the
- * day number sits at the same height in every cell of the grid.
+ * ── It WRAPS, because six dots and a "+N" never fitted on one line ───────────────
+ * A cell is about 40 dp wide on a 360 dp phone and 47 on a 411 one. Six dots with their gaps
+ * plus "+N" needs more than either, at any type size that can be read — so the row was
+ * silently cut off, and what got cut was the "+N" telling you something had been left out.
+ * Wrapping into TWO lines (4+2 on 360, 5+1 on 411) is the whole fix, and it is why this is a
+ * [FlowRow] and not a [Row]: a Row cannot wrap, it can only overflow.
+ *
+ * The cap of six is untouched — it is the information model, not a layout decision.
+ *
+ * A fixed-height row, always: with zero dots it is still as tall as it is with six on two
+ * lines, so the day number sits at the same height in every cell of the grid rather than
+ * hopping about as days fill up.
+ *
+ * ── "+N" is 11 sp and drawn out of its own line box ─────────────────────────────
+ * 11 sp is the floor of the type scale (it was 7, the smallest type in the app). At 11 sp a
+ * line box is taller than the 5 dp lane the dots live in, so the mark is measured as 5 dp
+ * tall and allowed to overflow its lane — the same trick the redraw used (`line-height:5px`),
+ * and the reason the second line of dots stays where it is instead of being pushed down by
+ * the label beside it.
  *
  * Each dot carries a [day]-qualified content description, which is what
  * ui/screens/CalendarScreenTest.kt reads to tell one day's dots from another's — there is
  * nothing visible on a dot to query by otherwise, and a colour is not text a test can assert.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DotRow(day: String, dots: DayDots) {
+private fun DotRow(day: String, dots: DayDots, isSelected: Boolean) {
     val colors = LocalGachiColors.current
     val ring = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-    Row(
-        Modifier.heightIn(min = 9.dp).padding(top = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(1.5.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    FlowRow(
+        Modifier.fillMaxWidth().height(DOT_LANE * 2 + Spacing.Tight),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         dots.states.forEach { state ->
             Box(
                 Modifier
-                    .size(4.5.dp)
+                    .size(DOT_LANE)
                     .clip(CircleShape)
                     .background(colors.forSlotState(state))
                     .border(0.6.dp, ring, CircleShape)
@@ -534,16 +578,29 @@ private fun DotRow(day: String, dots: DayDots) {
         if (dots.overflow > 0) {
             Text(
                 "+${dots.overflow}",
-                fontSize = 7.sp,
+                fontSize = TextSize.Caption,
                 fontWeight = FontWeight.Bold,
-                color = colors.inkMuted,
+                // never fainter than the dots it counts: it stands for what was NOT shown,
+                // and inkMuted made the one mark carrying that news the quietest thing here
+                color = if (isSelected) Color.White else colors.inkSecondary,
+                maxLines = 1,
                 modifier = Modifier
-                    .padding(start = 1.dp)
+                    .height(DOT_LANE)
+                    .wrapContentHeight(Alignment.CenterVertically, unbounded = true)
                     .semantics { contentDescription = "$day: ${dots.overflow} more" },
             )
         }
     }
 }
+
+/**
+ * The height of one line of dots, and the diameter of a dot.
+ *
+ * Five, not the 4.5 it was: half a dp is below what a screen can draw, so the old dot was
+ * rounded to whatever the density happened to make of it. Two lanes and the 4 dp between
+ * them are what [DotRow] reserves in every cell.
+ */
+private val DOT_LANE = 5.dp
 
 /** The word the legend uses for [state] — the same three [MonthNavigator] names underneath. */
 private fun dotDescription(state: SlotState): String = when (state) {

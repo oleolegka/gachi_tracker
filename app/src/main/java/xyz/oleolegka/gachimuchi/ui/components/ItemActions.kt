@@ -27,10 +27,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * ONE GESTURE for "what can I do with this": a long press on the thing itself.
@@ -136,7 +136,6 @@ fun ItemActions(
     drag: ItemDrag? = null,
     content: @Composable (press: Modifier, openMenu: () -> Unit) -> Unit,
 ) {
-    val colors = LocalGachiColors.current
     var open by remember { mutableStateOf(false) }
 
     val slopPx = with(LocalDensity.current) { DRAG_INTENT_SLOP.toPx() }
@@ -190,35 +189,64 @@ fun ItemActions(
 
     Box(modifier) {
         content(press) { if (actions.isNotEmpty()) open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            Text(
-                title,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.inkSecondary,
-                modifier = Modifier.padding(
-                    horizontal = Spacing.Inset, vertical = Spacing.Line,
-                ),
-            )
-            HorizontalDivider(color = colors.grid)
-            actions.forEach { action ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            action.label,
-                            color = if (action.destructive) {
-                                colors.critical
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    },
-                    onClick = {
-                        open = false
-                        action.onClick()
-                    },
+        ActionMenu(open, { open = false }, title, actions)
+    }
+}
+
+/**
+ * The menu itself, without the gesture that raises it.
+ *
+ * There is exactly ONE of these per item, and both ways in lead to it: the long press above,
+ * and the `openMenu` lambda [ItemActions] hands its content so that a card can put a visible
+ * three-dot button in front of the same menu (rule 2 of `design-system/app-next/SYSTEM.md` — a
+ * hidden action needs a sign). It is a function of its own only so that the body of the menu
+ * is written once; a second DropdownMenu next to this one would be two menus that drift.
+ *
+ * A DESTRUCTIVE entry is set off by a divider as well as by its colour: the redraw's rule 3
+ * is that a destructive action does not sit flush against a frequent one, and inside a menu
+ * a rule of separation is a line rather than distance.
+ */
+@Composable
+fun ActionMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    title: String,
+    actions: List<ItemAction>,
+) {
+    val colors = LocalGachiColors.current
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(
+            title,
+            fontSize = TextSize.Caption,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.inkSecondary,
+            modifier = Modifier.padding(horizontal = Spacing.Block, vertical = Spacing.Line),
+        )
+        HorizontalDivider(color = colors.grid)
+        actions.forEachIndexed { index, action ->
+            if (action.destructive && index > 0) {
+                HorizontalDivider(
+                    color = colors.grid,
+                    modifier = Modifier.padding(vertical = Spacing.Tight),
                 )
             }
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        action.label,
+                        fontSize = TextSize.Body,
+                        color = if (action.destructive) {
+                            colors.critical
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    action.onClick()
+                },
+            )
         }
     }
 }

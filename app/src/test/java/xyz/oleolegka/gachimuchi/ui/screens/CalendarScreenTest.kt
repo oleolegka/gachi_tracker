@@ -7,7 +7,6 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -193,14 +192,33 @@ class CalendarScreenTest : ScreenTest() {
         ).assertExists()
     }
 
+    /**
+     * The plan's two actions moved behind one kebab (redraw 2026-08-11): a bin eight points
+     * from "Start" was a deleted plan one mis-tap away. What the calendar passes in is
+     * unchanged — Today still gets neither, so it still draws no menu.
+     */
     @Test
-    fun `a planned session on the selected day is drawn with the calendar's own pencil and bin`() {
+    fun `a planned session on the selected day carries the calendar's own menu`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
         compose.onNodeWithText("Gym").assertExists()
-        // Today leaves these two out; only the calendar passes them in
-        compose.onNodeWithContentDescription("Edit \"Gym\"").assertExists()
-        compose.onNodeWithContentDescription("Delete \"Gym\"").assertExists()
+        // named after the session: "More" on a day with two plans is not an answer
+        compose.onNodeWithContentDescription("Actions for \"Gym\"").assertExists()
+        // and the two icons that used to sit beside "Start" are gone
+        compose.onNodeWithContentDescription("Edit \"Gym\"").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Delete \"Gym\"").assertDoesNotExist()
+    }
+
+    /** Opens the plan card's kebab and returns, with the menu on screen. */
+    private fun openPlanMenu(title: String) {
+        compose.onNodeWithContentDescription("Actions for \"$title\"").performClick()
+        settle()
+    }
+
+    /** Opens the one Add menu under the day's cards. */
+    private fun openAddMenu() {
+        compose.onNodeWithText("Add").performClick()
+        settle()
     }
 
     // --- planning, editing, deleting ----------------------------------------------------------
@@ -243,31 +261,50 @@ class CalendarScreenTest : ScreenTest() {
         calendar()
 
         selectAPastDay()
+        openAddMenu()
 
-        compose.onNodeWithText("Plan a session").assertDoesNotExist()
+        // the menu still offers recording -- backdating a session that happened is what it
+        // is FOR -- and simply has no item for planning
+        compose.onNodeWithText("Single entry").assertExists()
+        compose.onNodeWithText("Planned session").assertDoesNotExist()
     }
 
     @Test
-    fun `today and the days ahead are still offered one`() {
+    fun `today is still offered one`() {
         calendar()
 
-        // today, where the screen opens
-        compose.onNodeWithText("Plan a session").assertExists()
+        openAddMenu()
 
-        // and a day ahead: the 15th of next month is past no reading of the calendar
+        compose.onNodeWithText("Planned session").assertExists()
+    }
+
+    @Test
+    fun `so is a day ahead, which cannot be recorded on at all`() {
+        calendar()
+
+        // the 15th of next month is past no reading of the calendar
         compose.onNodeWithContentDescription("Next month").performClick()
         settle()
         compose.onNodeWithText("15").performClick()
         settle()
         compose.onNodeWithText(fmtWeekdayDay(today.plusMonths(1).withDayOfMonth(15))).assertExists()
-        compose.onNodeWithText("Plan a session").assertExists()
+        /*
+         * A day in the future cannot be RECORDED on, so the menu's other two items are
+         * absent -- and the button itself has to be drawn all the same, which is the trap
+         * merging the two buttons set: it used to be gated on "can this day be recorded on"
+         * alone, and a future day would have had no way in at all.
+         */
+        openAddMenu()
+        compose.onNodeWithText("Planned session").assertExists()
+        compose.onNodeWithText("Single entry").assertDoesNotExist()
     }
 
     @Test
-    fun `Plan a session opens the editor on the day that is selected`() {
+    fun `Planned session opens the editor on the day that is selected`() {
         calendar()
 
-        compose.onNodeWithText("Plan a session").performScrollTo().performClick()
+        openAddMenu()
+        compose.onNodeWithText("Planned session").performClick()
 
         settle()
 
@@ -282,7 +319,8 @@ class CalendarScreenTest : ScreenTest() {
     fun `a session planned in the dialog is handed to the caller as a new slot`() {
         calendar()
 
-        compose.onNodeWithText("Plan a session").performScrollTo().performClick()
+        openAddMenu()
+        compose.onNodeWithText("Planned session").performClick()
 
         settle()
         compose.onNodeWithText("Session name").performTextInput("Hangboard")
@@ -300,7 +338,8 @@ class CalendarScreenTest : ScreenTest() {
     fun `the pencil opens the editor on the session it belongs to`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithContentDescription("Edit \"Gym\"").performScrollTo().performClick()
+        openPlanMenu("Gym")
+        compose.onNodeWithText("Edit plan").performClick()
 
         settle()
 
@@ -315,7 +354,8 @@ class CalendarScreenTest : ScreenTest() {
     fun `the bin asks first, and says what deleting a series does`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithContentDescription("Delete \"Gym\"").performScrollTo().performClick()
+        openPlanMenu("Gym")
+        compose.onNodeWithText("Delete plan").performClick()
 
         settle()
 
@@ -332,7 +372,8 @@ class CalendarScreenTest : ScreenTest() {
     fun `keeping it at the confirmation deletes nothing`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithContentDescription("Delete \"Gym\"").performScrollTo().performClick()
+        openPlanMenu("Gym")
+        compose.onNodeWithText("Delete plan").performClick()
 
         settle()
         compose.onNodeWithText("Keep it").performClick()
@@ -348,7 +389,7 @@ class CalendarScreenTest : ScreenTest() {
     fun `starting a planned session from the calendar carries the day it was planned on`() {
         calendar(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
-        compose.onNodeWithText("Start").performScrollTo().performClick()
+        compose.onNodeWithText("Start").performClick()
 
         settle()
 

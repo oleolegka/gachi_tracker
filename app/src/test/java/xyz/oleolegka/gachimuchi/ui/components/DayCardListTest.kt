@@ -235,7 +235,7 @@ class DayCardListTest : ScreenTest() {
         day(date = tomorrow)
 
         compose.onNodeWithText(
-            "Nothing planned for this day. Plan a session below and it appears here."
+            "Nothing planned for this day. Add a planned session below and it appears here."
         ).assertIsDisplayed()
         // recording a set that has not been done yet is not an edge case, it is a wrong journal
         compose.onNodeWithText("Add").assertDoesNotExist()
@@ -464,27 +464,52 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("Single entry").assertIsDisplayed()
     }
 
-    // --- the pencil and the bin, which belong to the calendar only -------------------------
+    // --- the plan's own menu, which belongs to the calendar only ---------------------------
 
+    /**
+     * The pair used to be a pencil and a BIN drawn side by side, the bin eight points from
+     * "Start" — one mis-tap from a deleted plan (rule 3 of the redraw). They are one kebab
+     * now; which screen gets them is unchanged.
+     */
     @Test
     fun `a planned card carries edit and delete where the caller passes them`() {
         day(slots = listOf(slot(7, "Gym", "18:00", today.toString())), withSlotIcons = true)
 
-        compose.onNodeWithContentDescription("Edit \"Gym\"").assertHasClickAction().performClick()
+        compose.onNodeWithContentDescription("Actions for \"Gym\"").assertHasClickAction().performClick()
+        settle()
+        compose.onNodeWithText("Edit plan").performClick()
+        settle()
         assertEquals(7L, edited)
 
-        compose.onNodeWithContentDescription("Delete \"Gym\"").performClick()
+        compose.onNodeWithContentDescription("Actions for \"Gym\"").performClick()
+        settle()
+        compose.onNodeWithText("Delete plan").performClick()
+        settle()
         assertEquals(7L, deleted)
     }
 
     @Test
     fun `the same card carries neither where they were left out`() {
-        // Today is the screen you stand in the gym with: a bin one mis-tap from Start is a
-        // bad trade, and rewriting the schedule is the calendar's job
+        // Today is the screen you stand in the gym with: rewriting the schedule mid-set is
+        // not a thing anyone does, and it is the calendar's job
         day(slots = listOf(slot(7, "Gym", "18:00", today.toString())), withSlotIcons = false)
 
-        compose.onNodeWithContentDescription("Edit \"Gym\"").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Delete \"Gym\"").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Actions for \"Gym\"").assertDoesNotExist()
         compose.onNodeWithText("Start").assertIsDisplayed()
+    }
+
+    /**
+     * The plan is an item of the SAME menu since the redraw, not a second button under it —
+     * and it is there only when the caller offers it. Today never does; the calendar does
+     * not on a day already gone.
+     */
+    @Test
+    fun `planning is in the Add menu only where the caller offers it`() {
+        day()
+
+        compose.onNodeWithText("Add").performClick()
+        settle()
+
+        compose.onNodeWithText("Planned session").assertDoesNotExist()
     }
 }

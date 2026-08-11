@@ -1,19 +1,29 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,8 +36,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
@@ -51,7 +64,6 @@ import xyz.oleolegka.gachimuchi.domain.volumeSeries
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.BarChart
 import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
-import xyz.oleolegka.gachimuchi.ui.components.EmptyState
 import xyz.oleolegka.gachimuchi.ui.components.rememberExerciseEditor
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.IdentityChip
@@ -60,11 +72,13 @@ import xyz.oleolegka.gachimuchi.ui.components.NoteText
 import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
 import xyz.oleolegka.gachimuchi.ui.components.SectionHeader
 import xyz.oleolegka.gachimuchi.ui.components.SegmentControl
-import xyz.oleolegka.gachimuchi.ui.components.StatCard
+import xyz.oleolegka.gachimuchi.ui.components.RecordBadge
 import xyz.oleolegka.gachimuchi.ui.axisUnit
 import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtValueParts
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -172,9 +186,37 @@ fun FormDetailScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(entity.name, fontSize = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        Text(form.title.lowercase(), fontSize = 11.sp, color = colors.inkMuted)
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                        Text(
+                            entity.name,
+                            fontSize = TextSize.Title,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                        ) {
+                            /*
+                             * The form's own colour, the one every chart on this screen is
+                             * drawn in. The word beside it was the only statement of what
+                             * kind of exercise this is, in the quietest grey on the screen;
+                             * the dot ties the word to the line underneath it. Colour is
+                             * never the only channel here — the word is still there.
+                             */
+                            Box(
+                                Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.forForm(form))
+                            )
+                            Text(
+                                form.title.lowercase(),
+                                fontSize = TextSize.Meta,
+                                color = colors.inkSecondary,
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -211,8 +253,15 @@ fun FormDetailScreen(
                                 editor.toggleHidden(entity)
                             },
                         )
+                        // set off from the two harmless entries above it, and in the
+                        // critical colour: it used to be a third line of exactly the same
+                        // weight as "Edit exercise" (rule 3)
+                        HorizontalDivider(
+                            color = colors.grid,
+                            modifier = Modifier.padding(vertical = Spacing.Tight),
+                        )
                         DropdownMenuItem(
-                            text = { Text("Delete exercise") },
+                            text = { Text("Delete exercise", color = colors.critical) },
                             onClick = {
                                 menuOpen = false
                                 confirmDelete = true
@@ -226,29 +275,61 @@ fun FormDetailScreen(
             )
         },
     ) { padding ->
+        /*
+         * Whether the window is empty is a fact about the WINDOW, so it is said once, under
+         * the switch that sets it — not twice more inside two chart cards. A metric that does
+         * not exist at all for this form (a check-in has no trend) is a different statement
+         * and stays on its own card.
+         */
+        val windowEmpty = listOfNotNull(trend, volume).let { series ->
+            series.isNotEmpty() && series.all { it.isEmpty }
+        }
+
         LazyColumn(
             Modifier.padding(padding).fillMaxWidth(),
-            contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 4.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            contentPadding = PaddingValues(
+                start = Spacing.Block, end = Spacing.Block,
+                top = Spacing.Line, bottom = Spacing.Section,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Cards),
         ) {
             if (form == ExerciseForm.HOLD) {
+                /*
+                 * The two facts, and not the paragraph they used to be wrapped in.
+                 *
+                 * The first thing this screen showed was an explanation of the DATA MODEL —
+                 * that an exercise is name plus protocol, that "Hangs" at 7:3 and at 10:5 are
+                 * different rows, that what counts as a record is the weight. Both facts are
+                 * right here as chips; the argument for why the model is like that lives on
+                 * the exercise editor, the screen where it can be acted on (rule 5: an
+                 * explanation is not a paragraph).
+                 */
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        NoteText(
-                            "An exercise is name + protocol. \"Hangs\" at 7:3 and \"Hangs\" at " +
-                                "10:5 are different exercises. What is tracked and what counts " +
-                                "as a record is the WEIGHT."
-                        )
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val protocolBlock =
-                                entity.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
-                            if (protocolBlock != null) {
-                                IdentityChip("protocol", "${protocolBlock.workSec}:${protocolBlock.restSec}")
-                            }
-                            IdentityChip("metric", "weight")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+                        val protocolBlock =
+                            entity.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
+                        if (protocolBlock != null) {
+                            IdentityChip(
+                                "protocol",
+                                "${protocolBlock.workSec}:${protocolBlock.restSec}",
+                            )
                         }
+                        IdentityChip("tracked", "weight")
                     }
                 }
+            }
+
+            /*
+             * THE RECORD IS THE FIRST THING ON THE SCREEN.
+             *
+             * It used to be the last, below two charts — the best news this screen has, and
+             * the only part of it that had to be scrolled to (rule 7). A form with no record
+             * MODEL is the one exception: there the block is a sentence explaining why there
+             * is nothing, and a screen that opens with a paragraph is exactly what the chips
+             * above have just stopped doing. Those stay at the bottom.
+             */
+            if (form.hasRecords) {
+                item { RecordsBlock(form, records, today) }
             }
 
             item {
@@ -260,24 +341,26 @@ fun FormDetailScreen(
                         onSelect = { period = it },
                     )
                     Text(
-                        periodNote(period, granularity),
-                        fontSize = 12.sp,
-                        color = colors.inkMuted,
-                        lineHeight = 17.sp,
-                        modifier = Modifier.padding(top = 9.dp, start = 2.dp),
+                        periodNote(period, granularity, windowEmpty),
+                        fontSize = TextSize.Meta,
+                        color = colors.inkSecondary,
+                        lineHeight = TextSize.Meta * 1.4f,
+                        modifier = Modifier.padding(top = Spacing.Line, start = Spacing.Tight),
                     )
                 }
             }
 
             item {
+                val label = trendAll?.spec?.label ?: "Trend"
                 ChartCard(
-                    title = trendAll?.spec?.label ?: "Trend",
-                    subtitle = chartSubtitle(trend, granularity),
+                    title = label,
+                    subtitle = chartUnit(trend),
                     series = trend,
                     // "log a couple of sessions and the line appears" is a lie to somebody
                     // who has logged plenty and is looking at the wrong month
-                    emptyTitle = if (trendAll == null) trendEmptyTitle(form) else WINDOW_EMPTY_TITLE,
-                    emptyHint = if (trendAll == null) trendEmptyHint(form) else WINDOW_EMPTY_HINT,
+                    emptyTitle = if (trendAll == null) trendEmptyTitle(form) else nothingIn(label),
+                    // what to do about an empty WINDOW is said once, under the switch
+                    emptyHint = if (trendAll == null) trendEmptyHint(form) else null,
                 ) { series ->
                     LineChart(
                         slots = series.slots,
@@ -292,17 +375,19 @@ fun FormDetailScreen(
                 item {
                     ChartCard(
                         title = volumeAll.spec.label,
-                        subtitle = chartSubtitle(volume, granularity),
+                        subtitle = chartUnit(volume),
                         series = volume,
-                        emptyTitle = WINDOW_EMPTY_TITLE,
-                        emptyHint = WINDOW_EMPTY_HINT,
+                        emptyTitle = nothingIn(volumeAll.spec.label),
+                        emptyHint = null,
                     ) { series ->
                         BarChart(slots = series.slots, format = series.spec.format)
                     }
                 }
             }
 
-            item { RecordsBlock(form, records, today) }
+            if (!form.hasRecords) {
+                item { RecordsBlock(form, records, today) }
+            }
         }
     }
 
@@ -331,56 +416,108 @@ fun FormDetailScreen(
 }
 
 /**
- * What a metric that exists but has nothing in THIS window says. The window is the thing to
- * change, and saying so is different from saying the metric has never been recorded.
+ * "No impulse in this window" — the sentence a chart card puts under its own title when the
+ * metric exists and the window is empty.
+ *
+ * Built from the metric's own label because there are a dozen of them (`SeriesSpec` in
+ * domain/Analytics.kt) and a screen that named only the two a hangboard produces would go
+ * quietly generic on the rest — which is the fault being fixed here, not a new one to
+ * introduce.
  */
-private const val WINDOW_EMPTY_TITLE = "Nothing in this window"
-private const val WINDOW_EMPTY_HINT =
-    "Pick a longer period, or log a session and it lands here."
+private fun nothingIn(label: String): String = "No ${label.lowercase()} in this window"
 
-/** A chart in its card, or the reason there is no chart. */
+/**
+ * A chart in its card — INCLUDING when there is no chart.
+ *
+ * ── The empty state stays inside the card, under its title ──────────────────────
+ * This used to return before [GachiCard] was reached, so an empty window drew three
+ * centred plaques in a row, two of them word for word identical, and not one of them said
+ * WHICH chart was empty (rule 6). The title is the answer, and the title is drawn by this
+ * function — so the early return had to move inside the card rather than the sentences
+ * having to repeat what the heading already knew.
+ *
+ * [emptyHint] is usually null now: what to do about an empty window is advice about the
+ * WINDOW, and it is given once, under the switch that sets it. A hint here means something
+ * else — that this metric does not exist for this form at all, which no change of period
+ * will fix.
+ */
 @Composable
 private fun ChartCard(
     title: String,
     subtitle: String,
     series: SeriesOnAxis?,
     emptyTitle: String,
-    emptyHint: String,
+    emptyHint: String?,
     chart: @Composable (SeriesOnAxis) -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    if (series == null || series.isEmpty) {
-        EmptyState(title = emptyTitle, hint = emptyHint)
-        return
-    }
     GachiCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 10.dp)) {
+        Column(Modifier.padding(Spacing.Inset)) {
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 6.dp, start = 2.dp, end = 2.dp),
+                Modifier.fillMaxWidth().padding(bottom = Spacing.Line),
                 horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom,
             ) {
                 Text(
                     title,
-                    fontSize = 14.sp,
+                    fontSize = TextSize.Body,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                Text(subtitle, fontSize = 11.sp, color = colors.inkMuted)
+                if (subtitle.isNotBlank()) {
+                    Text(subtitle, fontSize = TextSize.Meta, color = colors.inkMuted)
+                }
+            }
+            if (series == null || series.isEmpty) {
+                HorizontalDivider(color = colors.grid)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 72.dp)
+                        .padding(top = Spacing.Inset),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterVertically),
+                ) {
+                    Text(
+                        emptyTitle,
+                        fontSize = TextSize.Body,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (emptyHint != null) {
+                        Text(
+                            emptyHint,
+                            fontSize = TextSize.Meta,
+                            lineHeight = TextSize.Meta * 1.4f,
+                            color = colors.inkSecondary,
+                        )
+                    }
+                }
+                return@Column
             }
             // one point is a dot, not a trend: say so rather than drawing a chart of it
             if (series.filled == 1) {
                 Text(
                     "Only one entry in this window - not a trend yet.",
-                    fontSize = 12.sp,
+                    fontSize = TextSize.Meta,
                     color = colors.inkMuted,
-                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                    modifier = Modifier.padding(bottom = Spacing.Line),
                 )
             }
             chart(series)
         }
     }
 }
+
+/**
+ * Whether this form HAS a record model at all.
+ *
+ * Four of the six do not, each for its own reason ([RecordsBlock] states them), and the
+ * difference decides where the block goes: a record is the first thing on the screen, an
+ * explanation of why there is no record is the last.
+ */
+private val ExerciseForm.hasRecords: Boolean
+    get() = this == ExerciseForm.STRENGTH || this == ExerciseForm.HOLD
 
 /**
  * The records block, or an honest statement that this form has none.
@@ -413,49 +550,165 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
             )
 
             records.isEmpty() -> {
-                SectionHeader("Records", "with the date")
-                EmptyState(
-                    title = "No records yet",
-                    hint = "The first weighted set is a baseline, not a record. The second one " +
-                        "can already beat it.",
+                SectionHeader("Records")
+                RecordCard(
+                    label = "No record yet",
+                    badge = false,
+                    columns = emptyList(),
+                    note = "The first weighted set is a baseline; the second one can already " +
+                        "beat it.",
                 )
             }
 
             else -> {
-                SectionHeader("Records", "with the date")
+                SectionHeader("Records")
                 /*
-                 * ONE ROW PER AXIS, not one per [ExerciseRecord]. `holdRecord` (domain/Records.kt)
+                 * ONE CARD PER AXIS, not one per [ExerciseRecord]. `holdRecord` (domain/Records.kt)
                  * is right to keep the left hand's best and the right hand's best as two separate
                  * comparisons — years of divergence between them makes merging the COMPARISON
                  * dishonest. But a screen that then drew each of those as its own full-width
                  * card, both captioned "Most weight hung", read as two different achievements
-                 * for two different exercises rather than one exercise reported per hand. Same
-                 * axis, same card, both hands on one line — see [mergedValue] and [mergedWhen].
+                 * for two different exercises rather than one exercise reported per hand.
+                 *
+                 * Same axis, same card, one COLUMN per hand — which is also what stopped the
+                 * numbers being a sentence: "Left 10 / Right 7.5" set at 26 sp, with a second
+                 * line repeating the construction for the dates, is prose. Two columns of
+                 * label, figure and date can be compared at a glance, and the figure comes
+                 * down to the one size the system has for the large number of a screen.
                  *
                  * `groupBy` keeps the order [holdRecord] already produced (left, right, then the
                  * sets that named no side), so a two-handed exercise or a strength exercise —
-                 * where every group is a singleton — draws exactly as it always did.
+                 * where every group is a singleton — draws as a single column.
                  */
                 val grouped = records.groupBy { it.axis }.values.toList()
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Inset)) {
                     grouped.forEachIndexed { index, group ->
-                        val leading = group.first()
                         val single = group.size == 1
-                        val (number, unit) = fmtValueParts(leading.value, recordFormat(leading))
-                        StatCard(
-                            label = recordLabel(leading),
-                            value = if (single) number else mergedValue(group),
-                            unit = unit,
-                            `when` = if (single) {
-                                fmtShortDay(LocalDate.parse(leading.opDate))
-                            } else {
-                                mergedWhen(group)
-                            },
-                            // only the leading row gets the badge: two green pills next to
+                        RecordCard(
+                            label = recordLabel(group.first()),
+                            // only the leading card gets the badge: two green pills next to
                             // each other stop meaning "this is the notable one"
                             badge = index == 0,
-                            modifier = Modifier.fillMaxWidth(),
+                            columns = group.map { record ->
+                                val (number, unit) = fmtValueParts(record.value, recordFormat(record))
+                                RecordColumn(
+                                    side = if (single) null else sideTag(record),
+                                    value = number,
+                                    unit = unit,
+                                    `when` = fmtShortDay(LocalDate.parse(record.opDate)),
+                                )
+                            },
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One side's best on a record card: what it is, what it was, and when. */
+private data class RecordColumn(
+    /** "Left" / "Right" / "No side", or null when the axis is not split by side at all. */
+    val side: String?,
+    val value: String,
+    val unit: String?,
+    val `when`: String,
+)
+
+/**
+ * The record, at the top of the screen and in the one large size the type scale has.
+ *
+ * The figure is [TextSize.Figure] — 22, the size the system reserves for the single big
+ * number of a screen. It was 26, which is not on the scale and which turned "Left 10 /
+ * Right 7.5" into a line of prose rather than two numbers to compare.
+ *
+ * With [columns] empty the card is the empty state of the records block: it keeps its own
+ * heading (the reason there is nothing) and adds the [note] under it, rather than being a
+ * centred plaque that could belong to any block on the screen.
+ */
+@Composable
+private fun RecordCard(
+    label: String,
+    badge: Boolean,
+    columns: List<RecordColumn>,
+    note: String? = null,
+) {
+    val colors = LocalGachiColors.current
+    GachiCard(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(Spacing.Inset),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Inset),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    label,
+                    fontSize = TextSize.Meta,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.inkSecondary,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (badge) RecordBadge(null, Modifier.padding(start = Spacing.Line))
+            }
+            if (note != null) {
+                Text(
+                    note,
+                    fontSize = TextSize.Meta,
+                    lineHeight = TextSize.Meta * 1.4f,
+                    color = colors.inkSecondary,
+                )
+            }
+            if (columns.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Inset),
+                ) {
+                    columns.forEachIndexed { index, column ->
+                        // the hairline between the two hands, so they read as one comparison
+                        // split in two rather than as two unrelated numbers
+                        if (index > 0) {
+                            Box(Modifier.width(1.dp).fillMaxHeight().background(colors.grid))
+                        }
+                        Column(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        ) {
+                            if (column.side != null) {
+                                Text(
+                                    column.side.uppercase(),
+                                    fontSize = TextSize.Caption,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.3.sp,
+                                    color = colors.inkMuted,
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    column.value,
+                                    fontSize = TextSize.Figure,
+                                    fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = (-0.2).sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                if (column.unit != null) {
+                                    Text(
+                                        " ${column.unit}",
+                                        fontSize = TextSize.Meta,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colors.inkMuted,
+                                        modifier = Modifier.padding(bottom = 2.dp),
+                                    )
+                                }
+                            }
+                            Text(
+                                column.`when`,
+                                fontSize = TextSize.Meta,
+                                color = colors.inkMuted,
+                            )
+                        }
                     }
                 }
             }
@@ -475,16 +728,6 @@ private fun sideTag(record: ExerciseRecord): String = when (record.side) {
     null -> "No side"
 }
 
-/** "Left 10 / Right 8" — the big-number line for a merged axis group; the unit is shared. */
-private fun mergedValue(group: List<ExerciseRecord>): String = group.joinToString(" / ") { record ->
-    "${sideTag(record)} ${fmtValueParts(record.value, recordFormat(record)).first}"
-}
-
-/** "Left Aug 5 / Right Jul 20" — every side's own date, §12-C still honoured per side. */
-private fun mergedWhen(group: List<ExerciseRecord>): String = group.joinToString(" / ") { record ->
-    "${sideTag(record)} ${fmtShortDay(LocalDate.parse(record.opDate))}"
-}
-
 private fun recordLabel(record: ExerciseRecord): String = when (record.axis) {
     RecordHit.Axis.EST_1RM -> "Best estimated 1RM"
     RecordHit.Axis.WEIGHT_AT_REPS -> "Heaviest single set"
@@ -498,30 +741,43 @@ private fun recordFormat(record: ExerciseRecord) = when (record.axis) {
 }
 
 private fun periodSubtitle(period: Period): String = when (period) {
-    Period.MONTH -> "last 30 days"
-    Period.QUARTER -> "last 3 months"
-    Period.YEAR -> "last 12 months"
-    Period.ALL -> "all history"
+    Period.MONTH -> "Last 30 days"
+    Period.QUARTER -> "Last 3 months"
+    Period.YEAR -> "Last 12 months"
+    Period.ALL -> "All history"
 }
 
-private fun periodNote(period: Period, granularity: Granularity): String =
-    "Showing: ${periodSubtitle(period)}, ${granularityWord(granularity)}"
+/**
+ * THE ONE STATEMENT OF THE WINDOW, under the control that sets it.
+ *
+ * The window used to be named three times in three wordings — "Showing: last 30 days, by
+ * day" here, "kg - by day" over one chart and "kg·s - by day" over the other (rule 4). It
+ * is one value, so it is said once, and the chart titles keep only their unit.
+ *
+ * When the window is empty, that is a fact about the window too, and the advice about
+ * lengthening it belongs here rather than repeated inside every chart card.
+ */
+private fun periodNote(period: Period, granularity: Granularity, empty: Boolean): String {
+    val window = "${periodSubtitle(period)}, ${granularityWord(granularity)}"
+    return if (empty) "$window - nothing in this window. $WINDOW_EMPTY_HINT" else window
+}
+
+/** What to do about a window with nothing in it. Said once, by [periodNote]. */
+private const val WINDOW_EMPTY_HINT =
+    "Pick a longer period, or log a session and it lands here."
 
 /**
- * The caption beside a chart title: THE UNIT of the Y axis, then the bucket width.
+ * The caption beside a chart title: THE UNIT of the Y axis, and nothing else.
  *
  * The unit lives here rather than on the axis itself because the axis repeats its labels
  * four or five times and "kg" beside every one of them is noise. But it has to be
  * somewhere: bare tick numbers are exactly the "chart without labelled axes" complaint
- * this screen was rewritten to fix.
+ * this screen was rewritten to fix. The bucket width used to be here too and is now said
+ * once, by [periodNote].
  */
-private fun chartSubtitle(series: SeriesOnAxis?, granularity: Granularity): String {
-    val unit = series?.let {
-        axisUnit(it.spec.format, it.values.maxOrNull() ?: 0.0)
-    }.orEmpty()
-    val width = granularityWord(granularity)
-    return if (unit.isBlank()) width else "$unit - $width"
-}
+private fun chartUnit(series: SeriesOnAxis?): String = series?.let {
+    axisUnit(it.spec.format, it.values.maxOrNull() ?: 0.0)
+}.orEmpty()
 
 private fun granularityWord(granularity: Granularity): String = when (granularity) {
     Granularity.DAY -> "by day"

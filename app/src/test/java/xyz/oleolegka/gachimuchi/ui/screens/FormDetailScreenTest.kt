@@ -163,9 +163,14 @@ class FormDetailScreenTest : ScreenTest() {
      * them would be dishonest — but the screen used to draw each as its own full-width card,
      * both captioned "Most weight hung". That read as two records for two different
      * exercises rather than one exercise reported per hand.
+     *
+     * Since the redraw (2026-08-11) the two hands are two COLUMNS of that one card rather
+     * than one run-on line: "Left 10 / Right 8" set as a figure was a sentence, not a pair
+     * of numbers to compare. What is asserted is unchanged in substance — one caption, both
+     * values, both dates, each side named.
      */
     @Test
-    fun `the two hands of a one-sided exercise share one record row, not two`() {
+    fun `the two hands of a one-sided exercise share one record card, not two`() {
         val oneArm = exerciseEntity(30, "One-arm hangs", ExerciseForm.HOLD).copy(oneSided = true)
         val ref = exerciseRef(30, "One-arm hangs", ExerciseForm.HOLD)
         val journal = Journal()
@@ -183,13 +188,18 @@ class FormDetailScreenTest : ScreenTest() {
 
         // one row for the axis, not two - "Most weight hung" drawn once
         compose.onAllNodesWithText("Most weight hung").assertCountEquals(1)
-        compose.onNodeWithText("Left 10 / Right 8", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("Left 1 Aug / Right 20 Jul", substring = true).assertIsDisplayed()
+        // one column per hand: the side, the figure and that side's own date (§12-C)
+        compose.onNodeWithText("LEFT").assertIsDisplayed()
+        compose.onNodeWithText("RIGHT").assertIsDisplayed()
+        compose.onNodeWithText("10").assertIsDisplayed()
+        compose.onNodeWithText("8").assertIsDisplayed()
+        compose.onNodeWithText("1 Aug").assertIsDisplayed()
+        compose.onNodeWithText("20 Jul").assertIsDisplayed()
     }
 
-    /** The ordinary two-handed exercise is untouched: one record, one row, as it always was. */
+    /** The ordinary two-handed exercise is untouched: one record, one column, as ever. */
     @Test
-    fun `a two-handed exercise still gets a plain single record row`() {
+    fun `a two-handed exercise still gets a plain single record card`() {
         val ref = exerciseRef(1, "Hangs", ExerciseForm.HOLD)
         val entity = exerciseEntity(1, "Hangs", ExerciseForm.HOLD)
         val journal = Journal()
@@ -205,8 +215,8 @@ class FormDetailScreenTest : ScreenTest() {
         }
 
         compose.onAllNodesWithText("Most weight hung").assertCountEquals(1)
-        compose.onNodeWithText("Left", substring = true).assertDoesNotExist()
-        compose.onNodeWithText("Right", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("LEFT", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("RIGHT", substring = true).assertDoesNotExist()
     }
 
     // --- deleting the exercise ---------------------------------------------------------------
