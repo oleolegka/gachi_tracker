@@ -208,6 +208,55 @@ class RunLogTest {
         assertTrue(completedSets(emptyList(), endedAtIndex = 0, finished = true).isEmpty())
     }
 
+    // --- runs that were skipped through (§18.20) -----------------------------------------
+
+    @Test
+    fun `a finished run that skipped two hangs of set two writes four, not six`() {
+        // steps 17 and 19 are the third and fourth hangs of set 2, jumped rather than held
+        val sets = completedSets(steps, steps.lastIndex, finished = true, skipped = setOf(17, 19))
+
+        assertEquals(listOf(6, 4, 6, 6), sets.map { it.reps })
+        // the plan is still the plan: the offer shows "4 of 6" and says which set was short
+        assertTrue(sets.all { it.plannedReps == 6 })
+    }
+
+    @Test
+    fun `skipping to the end does not write the whole session`() {
+        // the reading that used to make this the worst case: `finished` counts every step,
+        // and holding the Skip button to the end of a program is how a session is abandoned
+        val everyHang = steps.indices.filter { steps[it].kind == StepKind.WORK }
+        val sets = completedSets(steps, steps.lastIndex, finished = true, skipped = everyHang.toSet())
+
+        assertTrue("nothing was held, so there is nothing to offer", sets.isEmpty())
+    }
+
+    @Test
+    fun `a pause the skip button cut short is not reported as the pause the program planned`() {
+        // step 12 is the 183 s pause after set 1; skipped, it was not 183 s and is not known
+        val sets = completedSets(steps, steps.lastIndex, finished = true, skipped = setOf(12))
+
+        assertEquals(4, sets.size)
+        assertNull("the pause did not run, so its planned length is not a fact", sets[0].restAfterSec)
+        assertEquals("the pauses that did run are untouched", listOf(183, 183), sets.drop(1).dropLast(1).map { it.restAfterSec })
+        assertTrue("skipping a pause takes nothing away from the hangs", sets.all { it.reps == 6 })
+    }
+
+    @Test
+    fun `the whole path from a skipped run to an outcome keeps the skip`() {
+        val state = RunState(stepIndex = 47, running = false, finished = true, skipped = setOf(45, 47))
+        val outcome = runOutcome(snapshot(state, RunOrigin.EXERCISE), now = 0)
+
+        assertEquals(listOf(6, 6, 6, 4), outcome.sets.map { it.reps })
+    }
+
+    @Test
+    fun `a run salvaged across a reboot keeps the skip too`() {
+        val state = RunState(stepIndex = 25, running = true, stepEndAtMs = 1_000, skipped = setOf(15))
+        val outcome = salvagedOutcome(snapshot(state, RunOrigin.EXERCISE))
+
+        assertEquals(listOf(6, 5), outcome.sets.map { it.reps })
+    }
+
     // --- the outcome the controller hands to the screen ------------------------------------
 
     private fun snapshot(state: RunState, origin: RunOrigin, exerciseId: Long? = hangs.id) = RunSnapshot(

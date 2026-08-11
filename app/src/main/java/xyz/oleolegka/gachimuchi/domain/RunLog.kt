@@ -49,13 +49,24 @@ import java.time.ZoneId
  * rep — so [holdSetsFromRun] refuses anything but [ExerciseForm.HOLD] rather than
  * inventing numbers.
  *
- * ── Known limitation, stated rather than hidden ─────────────────────────────────
- * Completion is judged by POSITION, not by presence: a step the run moved past counts as
- * done. Skipping forward with the Skip button therefore counts the skipped efforts as
- * completed, because the runner keeps no per-step record of how each one ended (see
- * domain/Runner.kt — the state is one index and one end moment, which is what makes it
- * survive process death). The proposal being editable is what covers this: the numbers are
- * shown before anything is written.
+ * ── Completion is judged by FACT, not by position (§18.20) ──────────────────────
+ * It used to be judged by position: a step the run had moved past counted as done, so
+ * skipping forward wrote the skipped efforts into the journal as though they had been held.
+ * The offer being editable was called the cover for that, and it is not one — the numbers
+ * arrive filled in and are confirmed with one tap, so a default that overstates is what gets
+ * written on every session nobody audits line by line.
+ *
+ * What was missing was not a judgement but a FACT: after the event, a run standing on step 7
+ * looks the same whether it counted its way there or jumped. So the jump is recorded when it
+ * happens, in the persisted state ([RunState.skipped]), and an effort now counts only when the
+ * position says the run reached it AND no mark says it was jumped. Nothing about surviving
+ * process death changes: the mark travels in the same snapshot as the index it qualifies, so a
+ * run rebuilt by a fresh process — or salvaged across a reboot — judges it the same way.
+ *
+ * NOT closed by this, and deliberately: an effort cut short with the minus button still counts
+ * at its planned length (domain/Runner.kt, [adjustStep]), because a row here carries one length
+ * and the run keeps no measurement of what any single effort actually lasted. Recording that is
+ * the deferred half of §18.20 — the one that changes the shape of a journal row.
  */
 
 /**
@@ -160,7 +171,16 @@ data class CompletedSet(
  * not exist; until something makes that case matter, it is written down here rather than
  * quietly assumed away.
  */
-fun completedSets(steps: List<WorkoutStep>, endedAtIndex: Int, finished: Boolean): List<CompletedSet> {
+fun completedSets(
+    steps: List<WorkoutStep>,
+    endedAtIndex: Int,
+    finished: Boolean,
+    /**
+     * The steps the run jumped out of instead of holding to their end ([RunState.skipped]).
+     * Subtracted from what the position says was done — see the "judged by fact" note above.
+     */
+    skipped: Set<Int> = emptySet(),
+): List<CompletedSet> {
     if (steps.isEmpty()) return emptyList()
     val doneThrough = if (finished) steps.size else endedAtIndex.coerceIn(0, steps.size)
 
@@ -184,7 +204,10 @@ fun completedSets(steps: List<WorkoutStep>, endedAtIndex: Int, finished: Boolean
         }
         bucket.planned++
         bucket.lastIndex = index
-        if (index < doneThrough) bucket.done++
+        // POSITION SAYS THE RUN GOT HERE; the mark says whether it held this one or jumped it.
+        // `planned` counts either way — what the schedule asked for did not change because an
+        // effort was skipped, and "4 of 6" is the whole of what the offer has to say.
+        if (index < doneThrough && index !in skipped) bucket.done++
     }
 
     val out = ArrayList<CompletedSet>()
@@ -192,9 +215,13 @@ fun completedSets(steps: List<WorkoutStep>, endedAtIndex: Int, finished: Boolean
         if (bucket.done <= 0) return@forEachIndexed
         val next = ordered.getOrNull(position + 1)
         // the pause is only known when it fully elapsed, i.e. when the run reached the
-        // first effort of the next set; a run stopped inside the pause reports nothing
+        // first effort of the next set; a run stopped inside the pause reports nothing.
+        // A pause the Skip button cut short is the same case arrived at differently: what
+        // the program would have counted is no longer what the user rested, and stating the
+        // planned figure as a measured one is the overstatement §18.20 is about.
         val rest = next
             ?.takeIf { doneThrough >= it.firstIndex }
+            ?.takeIf { (bucket.lastIndex + 1 until it.firstIndex).none { step -> step in skipped } }
             ?.let { steps.subList(bucket.lastIndex + 1, it.firstIndex).sumOf { step -> step.durationSec } }
         out += CompletedSet(
             setNumber = position + 1,
@@ -324,7 +351,7 @@ fun runOutcome(
         exerciseId = snapshot.exerciseId,
         programId = snapshot.programId,
         interrupted = !settled.finished,
-        sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished),
+        sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished, settled.skipped),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
         side = snapshot.side,
@@ -361,7 +388,15 @@ fun salvagedOutcome(snapshot: RunSnapshot, zone: ZoneId = ZoneId.systemDefault()
         exerciseId = snapshot.exerciseId,
         programId = snapshot.programId,
         interrupted = true,
-        sets = completedSets(snapshot.steps, endedAtIndex = snapshot.state.stepIndex, finished = false),
+        sets = completedSets(
+            snapshot.steps,
+            endedAtIndex = snapshot.state.stepIndex,
+            finished = false,
+            // a skip is recorded in the snapshot, so it survives the restart exactly as the
+            // step count does; a reconstruction that forgot it would put back the efforts the
+            // user had already declined
+            skipped = snapshot.state.skipped,
+        ),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
         side = snapshot.side,

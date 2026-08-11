@@ -46,6 +46,39 @@ data class RunState(
     @SerialName("paused_left_ms") val pausedLeftMs: Long = 0,
     /** The program ran to its end. Terminal: only a reset or a new start leaves this. */
     @SerialName("finished") val finished: Boolean = false,
+    /**
+     * Steps the run LEFT WITHOUT LETTING THEM RUN OUT — the Skip button, and nothing else.
+     *
+     * ── Why the position alone could not answer this ────────────────────────────
+     * Everything else in this state is derived from the clock, which is what makes a run
+     * survive its own process: an index and an end moment are enough to say where a run is,
+     * however long ago it was written. They are NOT enough to say how it got there. A run
+     * standing on step 7 either counted its way through the first six or jumped over some of
+     * them, and after the fact those two are the same index. So completion was judged by
+     * position — a step the run had moved past counted as done — and skipping forward wrote
+     * efforts into the journal that nobody made (§18.20).
+     *
+     * There is no arithmetic that recovers this. Skipping restarts the step it lands on from
+     * `now` ([restartAt]), so the schedule's alignment — the one quantity that could have
+     * betrayed a jump — is broken by the jump itself, and it is equally broken by a pause and
+     * by the +/- 30 s buttons, which are ordinary use. The knowledge has to be RECORDED at the
+     * moment the skip happens, and it has to be recorded HERE, in the persisted state, because
+     * the run whose numbers are being judged may well be read back by a different process
+     * (see [RunSnapshot] and domain/RunLog.kt).
+     *
+     * ── Why the negative form ───────────────────────────────────────────────────
+     * A set of the steps that DID count would be the more direct statement, but it defaults to
+     * empty, and a snapshot written by the previous build has no field at all — every run in
+     * flight during the update would then read as "nothing was completed" and lose a session
+     * that really happened. Recording the exception instead makes an old snapshot read exactly
+     * as it did before: at worst the old overstatement, for one run, once.
+     *
+     * Emptied per step by [settleRun] as the clock genuinely carries the run through it, so a
+     * step that was skipped, reopened with the Back button and then held to its end counts
+     * again. What this does NOT record is a step cut short with the minus button — see
+     * [adjustStep].
+     */
+    @SerialName("skipped") val skipped: Set<Int> = emptySet(),
 )
 
 /** Where a run stands, for the screens and the notification to branch on. */
@@ -249,7 +282,16 @@ fun startRun(steps: List<WorkoutStep>, now: Long): RunState =
 fun settleRun(steps: List<WorkoutStep>, state: RunState, now: Long): RunState {
     if (!state.running || state.finished || steps.isEmpty()) return state
     var current = state
+    var skipped = state.skipped
     while (now >= current.stepEndAtMs) {
+        /*
+         * Passing this line means the clock ran out ON the step the run was standing on, which
+         * is the one thing [RunState.skipped] is the absence of. It is cleared rather than
+         * merely not set, because the Back button can reopen a step that was skipped a minute
+         * ago: held to its end the second time, it was held, and the mark from the first
+         * attempt would go on suppressing an effort that happened.
+         */
+        if (current.stepIndex in skipped) skipped = skipped - current.stepIndex
         val next = current.stepIndex + 1
         if (next > steps.lastIndex) {
             return current.copy(
@@ -257,11 +299,13 @@ fun settleRun(steps: List<WorkoutStep>, state: RunState, now: Long): RunState {
                 running = false,
                 finished = true,
                 pausedLeftMs = 0,
+                skipped = skipped,
             )
         }
         current = current.copy(
             stepIndex = next,
             stepEndAtMs = current.stepEndAtMs + steps[next].durationMs,
+            skipped = skipped,
         )
     }
     return current
@@ -320,16 +364,25 @@ fun resumeRun(steps: List<WorkoutStep>, state: RunState, now: Long): RunState {
  * Jumps to the beginning of the next step. Pausedness is preserved: skipping while paused
  * leaves the run paused at the top of the next step, which is what "look ahead without
  * losing my place" means.
+ *
+ * The step being jumped out of is MARKED ([RunState.skipped]) rather than left to be judged by
+ * the position the run ends up in. It did not run its course, so §18.20 says it did not happen,
+ * and the journal must not be offered an effort nobody made. The mark is made on the way out of
+ * the step, here, because this is the only moment at which the difference between "counted
+ * through" and "jumped over" exists at all.
  */
 fun skipStep(steps: List<WorkoutStep>, state: RunState, now: Long): RunState {
     if (steps.isEmpty() || state.finished) return state
     val settled = settleRun(steps, state, now)
     if (settled.finished) return settled
-    val next = settled.stepIndex + 1
+    val marked = settled.copy(skipped = settled.skipped + settled.stepIndex)
+    val next = marked.stepIndex + 1
     if (next > steps.lastIndex) {
-        return settled.copy(stepIndex = steps.lastIndex, running = false, finished = true, pausedLeftMs = 0)
+        // skipping the last step ends the run, and the run then reports `finished` — which is
+        // exactly the reading that would otherwise count this step. Marked before that happens.
+        return marked.copy(stepIndex = steps.lastIndex, running = false, finished = true, pausedLeftMs = 0)
     }
-    return restartAt(steps, settled, next, now)
+    return restartAt(steps, marked, next, now)
 }
 
 /**
@@ -366,6 +419,15 @@ private fun restartAt(steps: List<WorkoutStep>, state: RunState, index: Int, now
  * "I am done resting", and the step ends at once rather than refusing the press. The
  * step's own duration in the program is untouched — the change applies to this run only,
  * and a later repeat of the same block is the length it was written as.
+ *
+ * ── It does NOT mark the step, and that is a limit worth stating ────────────────
+ * Cutting a WORK step short this way ends it through the clock, so [settleRun] carries the run
+ * past it and the effort is counted — at its PLANNED length, since that is the only length a
+ * step has ([CompletedSet.workSec]). §18.20 closes the Skip button, which is the route that
+ * silently overstated whole sets; this one overstates a single effort by however much was taken
+ * off it, and closing it properly means recording what each effort actually lasted, which is
+ * the part §18.20 deliberately defers. Until then the honest reading is: minus on a rest is
+ * ordinary use, minus on a hang is the user shortening their own record.
  */
 fun adjustStep(steps: List<WorkoutStep>, state: RunState, now: Long, deltaMs: Long): RunState {
     if (steps.isEmpty() || state.finished) return state

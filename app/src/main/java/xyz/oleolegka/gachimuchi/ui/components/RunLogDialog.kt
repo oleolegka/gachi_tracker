@@ -177,6 +177,9 @@ fun RunLogDialog(
                                 placeholder = "0",
                                 stacked = true,
                                 fieldDescription = "Added weight, kg",
+                                // a band that takes fifteen kilos off a hang is minus fifteen,
+                                // and on this form the buttons are the only way to say so
+                                signed = true,
                             )
                         }
 
@@ -321,14 +324,29 @@ private fun SetsBlock(sets: List<CompletedSet>, onSetsChange: (List<CompletedSet
      * keeps the split from being discovered in the journal a week later.
      */
     val mixedLengths = sets.map { it.workSec }.distinct().size > 1
+    /*
+     * Whether any row is short of what the schedule asked for, which since §18.20 is a
+     * statement about what was HELD and not about where the run got to: a skipped effort is
+     * no longer counted, so a row can read "4 of 6" on a run that reached the end. Left
+     * unexplained, that number looks like the app losing count. It is the app no longer
+     * claiming hangs nobody did, and this is where it says so — before the numbers are
+     * written, not in the history a week later.
+     */
+    val short = sets.any { it.reps < it.plannedReps }
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
         BlockHeading("Efforts held in each set")
         Text(
-            if (mixedLengths) {
-                "The timer counted these. This schedule holds efforts of different lengths, " +
-                    "and each length is written as its own set — one row cannot say two."
-            } else {
-                "The timer counted these; turn a set down if you came off early."
+            buildString {
+                if (mixedLengths) {
+                    append(
+                        "The timer counted these. This schedule holds efforts of different " +
+                            "lengths, and each length is written as its own set — one row " +
+                            "cannot say two."
+                    )
+                } else {
+                    append("The timer counted these; turn a set down if you came off early.")
+                }
+                if (short) append(" What was skipped is not counted in them.")
             },
             style = MaterialTheme.typography.bodySmall,
             color = colors.inkSecondary,
