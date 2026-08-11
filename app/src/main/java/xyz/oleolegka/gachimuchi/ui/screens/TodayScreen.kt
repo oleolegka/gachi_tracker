@@ -77,7 +77,14 @@ fun TodayScreen(
             start = Spacing.Block, end = Spacing.Block,
             top = Spacing.Line, bottom = Spacing.Cards,
         ),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Block),
+        /*
+         * Cards, not Block — and this is the one gap on the screen that looked CORRECT while
+         * being wrong. Everything else here was a raw dp; this already named a constant from
+         * the scale, just the constant for "between blocks inside a card" rather than the one
+         * for "between cards". SYSTEM.md's clarification of 2026-08-11 settled the feeds of
+         * Overview, Today, Calendar and FormDetail together at 24, so all four look alike.
+         */
+        verticalArrangement = Arrangement.spacedBy(Spacing.Cards),
     ) {
         item {
             /*

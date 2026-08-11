@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -80,18 +81,22 @@ fun ActivityHeatmapView(
     var selected by remember(heatmap) { mutableStateOf<HeatmapDay?>(null) }
 
     /*
-     * BELOW THE FLOOR OF THE TYPE SCALE, and left there deliberately.
+     * AT THE FLOOR OF THE TYPE SCALE, and the geometry moved to let them be.
      *
-     * TextSize.Caption (11 sp) is the smallest size anything in this app is allowed to be, and
-     * these two are 9. They are not type on a screen, they are labels pinned to a GRID: a
-     * weekday label has to fit inside one cell of the ribbon (HeatmapMetrics.cell) and a month
-     * label inside the width of one week's column. At 11 sp they overlap their neighbours and
-     * the ribbon stops reading as a calendar. Raising them is a change to the geometry of the
-     * chart — bigger cells, a taller ribbon, fewer weeks on the screen — and not a change of
-     * type size, so it is not made here by renaming a constant.
+     * These two were 9 sp, with a comment arguing that a label pinned to a grid is not type
+     * on a screen. The argument was answered rather than repeated: raising them IS a change
+     * to the geometry of the chart, so the geometry changed with them. The gutter went from
+     * 20 dp to 28 (HeatmapMetrics.weekdayGutter) so that "Wed" still fits, and the year lost
+     * half a week of visible width for it.
+     *
+     * A month label still sits over a 14 dp column and is therefore still wider than its own
+     * column - it was at 9 sp too. It is drawn on the ribbon in reading order and each label
+     * simply starts at its week, so a long month name overhangs the next column rather than
+     * overlapping another label; only one label per month is drawn, so there is nothing
+     * underneath it to collide with.
      */
-    val monthStyle = remember(colors) { TextStyle(fontSize = 9.sp, color = colors.inkMuted) }
-    val dayStyle = remember(colors) { TextStyle(fontSize = 9.sp, color = colors.inkMuted) }
+    val monthStyle = remember(colors) { TextStyle(fontSize = TextSize.Caption, color = colors.inkMuted) }
+    val dayStyle = remember(colors) { TextStyle(fontSize = TextSize.Caption, color = colors.inkMuted) }
 
     // open on the most recent week rather than the oldest one, once the grid has been
     // measured (maxValue is 0 until then) and NOT again afterwards, so scrolling back
@@ -106,7 +111,8 @@ fun ActivityHeatmapView(
 
         Row(Modifier.fillMaxWidth().padding(top = Spacing.Line)) {
             WeekdayGutter(dayStyle)
-            Box(Modifier.weight(1f).horizontalScroll(scroll)) {
+            Box(Modifier.weight(1f)) {
+              Box(Modifier.horizontalScroll(scroll)) {
                 val gridWidth = HeatmapMetrics.widthFor(heatmap.weeks)
                 Canvas(
                     Modifier
@@ -172,14 +178,54 @@ fun ActivityHeatmapView(
                         }
                     }
                 }
+              }
+              /*
+               * THE YEAR IS ALWAYS WIDER THAN THE PHONE, and until now nothing said so.
+               *
+               * 53 weeks at a 14 dp step is 739 dp against the 327 a 411 dp phone has left
+               * after margins, card padding and the gutter — 23 columns, 43 % of the year;
+               * on a 360 dp phone, 19 columns and 36 %. The grid opens at TODAY, so the part
+               * that is missing is off to the LEFT, and a straight cut at the edge of a card
+               * looks like the edge of the data.
+               *
+               * A fade over the cut column says "this continues" the way a straight edge
+               * cannot. It is drawn only while there is something to the left: at the first
+               * week of the year the grid really does end there, and a shadow over an edge
+               * that is genuinely the end would be a lie in the other direction.
+               *
+               * Honest limit: there is no such mark on the RIGHT, because the right edge is
+               * today and nothing is hidden past it — but that also means a reader who has
+               * scrolled all the way back to week one sees a plain edge on both sides and
+               * has, again, no sign that the year continues. Fixing that properly wants a
+               * scrollbar or an "Aug 2025 - Aug 2026" range line; both cost a row on a card
+               * that already has three.
+               */
+              if (scroll.value > 0) {
+                  Box(
+                      Modifier
+                          .align(Alignment.CenterStart)
+                          .width(Spacing.Cards)
+                          .height(HeatmapMetrics.gridHeight + HeatmapMetrics.monthRibbon + 3.dp)
+                          .background(
+                              Brush.horizontalGradient(
+                                  listOf(
+                                      MaterialTheme.colorScheme.surface,
+                                      MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                  )
+                              )
+                          )
+                  )
+              }
             }
         }
 
         Text(
             selected?.let { "${fmtShortDay(LocalDate.parse(it.opDate))} - ${activityCount(it.count)}" }
                 ?: "Tap a day to see what was logged",
-            fontSize = TextSize.Caption,
-            color = colors.inkMuted,
+            // Meta, not Caption: this is not an axis label, it is the ONLY place the result
+            // of tapping a cell is ever spelled out.
+            fontSize = TextSize.Meta,
+            color = if (selected == null) colors.inkMuted else colors.inkSecondary,
             modifier = Modifier.padding(top = Spacing.Line),
         )
     }
@@ -202,8 +248,8 @@ private fun cellAt(heatmap: Heatmap, offset: Offset, step: Float, ribbon: Float)
 }
 
 /**
- * The fixed weekday ribbon. Only alternate days are labelled: seven 9 sp labels stacked in
- * 100 dp overlap, and Mon / Wed / Fri / Sun is enough to orient by.
+ * The fixed weekday ribbon. Only alternate days are labelled: seven labels stacked in 100 dp
+ * overlap at any size, and Mon / Wed / Fri / Sun is enough to orient by.
  */
 @Composable
 private fun WeekdayGutter(style: TextStyle) {
@@ -230,9 +276,9 @@ private fun WeekdayGutter(style: TextStyle) {
 /**
  * "Less [][][][][] More" — the scale, right-aligned above the grid.
  *
- * The two words are 10 sp, below the scale's floor of 11, for the same reason the ribbon labels
- * are 9: they are set against the 11 dp swatches between them, and a word taller than the swatch
- * it labels turns a scale into a sentence. Same trade as above — geometry, not type.
+ * The two words were 10 sp, on the argument that a word taller than the 11 dp swatch it labels
+ * turns a scale into a sentence. They are 11 now, like everything else: 11 sp caps are about
+ * 8 dp tall, which is SHORTER than the swatch, so the argument did not survive being measured.
  */
 @Composable
 private fun Legend(levels: Int) {
@@ -242,7 +288,7 @@ private fun Legend(levels: Int) {
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Less", fontSize = 10.sp, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
+        Text("Less", fontSize = TextSize.Caption, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
         for (level in 0..levels) {
             Box(
                 Modifier
@@ -252,7 +298,7 @@ private fun Legend(levels: Int) {
                     .background(colors.forHeatmapLevel(level))
             )
         }
-        Text("More", fontSize = 10.sp, color = colors.inkMuted, modifier = Modifier.padding(start = Spacing.Tight))
+        Text("More", fontSize = TextSize.Caption, color = colors.inkMuted, modifier = Modifier.padding(start = Spacing.Tight))
     }
 }
 
@@ -270,17 +316,18 @@ fun ActivityHeatmapCard(heatmap: Heatmap, today: LocalDate, modifier: Modifier =
             )
             Text(
                 "all forms - tap a day",
-                fontSize = TextSize.Caption,
+                fontSize = TextSize.Meta,
                 color = colors.inkMuted,
                 modifier = Modifier.padding(top = Spacing.Tight, bottom = Spacing.Inset),
             )
             ActivityHeatmapView(heatmap, today)
             if (heatmap.totalActivities == 0) {
                 // the grid is still drawn: an empty year is a row of empty cells, not a
-                // blank space, so it is obvious that the calendar exists and is waiting
+                // blank space, so it is obvious that the calendar exists and is waiting.
+                // One sentence and not two (SYSTEM.md rule 5) - the second one restated
+                // the first with different words.
                 Text(
-                    "Empty at the start is normal. A couple of squares will light up with " +
-                        "your first workouts.",
+                    "Empty at the start is normal - the first workouts light it up.",
                     fontSize = TextSize.Meta,
                     color = colors.inkMuted,
                     lineHeight = 17.sp,

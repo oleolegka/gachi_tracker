@@ -100,24 +100,38 @@ fun GachiCard(
     )
 }
 
-/** The caption row above a block: an eyebrow on the left, a quiet note on the right. */
+/**
+ * The caption row above a block: an eyebrow on the left, a quiet note on the right, and
+ * optionally the one control that belongs to the block itself.
+ *
+ * [action] exists because of what the overview did without it: the way into the exercise
+ * catalog was a full-width button placed UNDER this header, so the header captioned the
+ * button and the feed it was written for started below both. A control that belongs to a
+ * section belongs on the section's own line.
+ */
 @Composable
-fun SectionHeader(title: String, note: String? = null, modifier: Modifier = Modifier) {
+fun SectionHeader(
+    title: String,
+    note: String? = null,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
     val colors = LocalGachiColors.current
     Row(
         modifier.fillMaxWidth().padding(bottom = Spacing.Line),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+        verticalAlignment = if (action == null) Alignment.Bottom else Alignment.CenterVertically,
     ) {
         Text(
             title.uppercase(),
             style = EyebrowStyle,
             color = colors.inkMuted,
-            modifier = Modifier.weight(1f, fill = false),
+            modifier = Modifier.weight(1f),
         )
         if (note != null) {
             Text(note, fontSize = TextSize.Caption, color = colors.inkMuted, maxLines = 1)
         }
+        action?.invoke()
     }
 }
 
@@ -211,15 +225,20 @@ fun HeroCard(
  * favour of the written decision.
  *
  * Colour never carries the meaning alone: the tick and the word say "record" without it.
+ *
+ * The corner is [Radius.Small] and not a circle. In this system the radius states the SIZE
+ * of a thing rather than its character, and a fully rounded pill was the only shape on the
+ * overview that disagreed with the chips and badges of every other screen.
  */
 @Composable
 fun RecordBadge(date: String?, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
+    val shape = RoundedCornerShape(Radius.Small)
     Row(
         modifier
-            .clip(CircleShape)
+            .clip(shape)
             .background(colors.good.copy(alpha = 0.13f))
-            .border(1.dp, colors.good.copy(alpha = 0.34f), CircleShape)
+            .border(1.dp, colors.good.copy(alpha = 0.34f), shape)
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -299,9 +318,16 @@ fun DoorTile(
             ),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
+            /*
+             * The name is the TITLE of this tile, and it took until the redraw to be sized
+             * like one: the name was 15 and the value on the right was 18, so a tile
+             * announced how much louder than what. They are both 17 now and told apart by
+             * weight, position and the tabular digits on the right - two equal facts, "what"
+             * and "how much".
+             */
             Text(
                 name,
-                fontSize = TextSize.Body,
+                fontSize = TextSize.Title,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
@@ -319,7 +345,7 @@ fun DoorTile(
              * record) rather than about the form-and-recency line below.
              */
             if (recordDate != null) RecordBadge(recordDate)
-            Text(caption, fontSize = TextSize.Caption, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(caption, fontSize = TextSize.Meta, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(
             Modifier.padding(
