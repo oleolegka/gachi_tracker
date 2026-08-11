@@ -44,6 +44,8 @@ import xyz.oleolegka.gachimuchi.domain.DayCardAction
 import xyz.oleolegka.gachimuchi.domain.DayCardKind
 import xyz.oleolegka.gachimuchi.domain.DayCards
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.LocalDate
 
 /**
@@ -172,7 +174,7 @@ fun DayCardList(
     /** Whether the question "what shall this one be called" is on screen. */
     var naming by remember(day.date) { mutableStateOf(false) }
 
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
         if (day.isEmpty) {
             /*
              * The note names the button underneath it rather than reporting a count of zero.
@@ -208,7 +210,7 @@ fun DayCardList(
                  * that says why.
                  */
                 workoutEnabled = day.cards.none { it.kind == DayCardKind.DRAFT },
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = Spacing.Tight),
             )
         }
     }
@@ -311,9 +313,9 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(Radius.Card))
             .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+            .border(1.dp, colors.border, RoundedCornerShape(Radius.Card))
             .then(press),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -321,12 +323,15 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             Modifier
                 .width(4.dp)
                 .heightIn(min = 62.dp)
-                .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
+                .clip(RoundedCornerShape(topStart = Radius.Card, bottomStart = Radius.Card))
                 .background(spine)
         )
         Column(
-            Modifier.weight(1f).padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            Modifier.weight(1f).padding(
+                start = Spacing.Inset, end = Spacing.Line,
+                top = Spacing.Line, bottom = Spacing.Line,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -385,11 +390,11 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             val (label, onBegin) = begin
             Button(
                 onClick = onBegin,
-                contentPadding = PaddingValues(horizontal = 14.dp),
-                modifier = Modifier.padding(end = 8.dp).heightIn(min = 40.dp),
+                contentPadding = PaddingValues(horizontal = Spacing.Inset),
+                modifier = Modifier.padding(end = Spacing.Line).heightIn(min = 40.dp),
             ) { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         } else {
-            Box(Modifier.width(12.dp))
+            Box(Modifier.width(Spacing.Inset))
         }
     }
     }
@@ -494,7 +499,7 @@ private fun AddMenuButton(
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         ) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text("Add", modifier = Modifier.padding(start = 8.dp))
+            Text("Add", modifier = Modifier.padding(start = Spacing.Line))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(

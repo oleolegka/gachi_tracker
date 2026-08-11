@@ -38,6 +38,7 @@ import xyz.oleolegka.gachimuchi.domain.parseNumber
 import xyz.oleolegka.gachimuchi.domain.runSummaryLine
 import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -101,7 +102,7 @@ fun RunLogDialog(
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
                 Text(
                     // side-suffixed the same way a card names itself (WorkoutLogScreen), so an
@@ -151,7 +152,7 @@ fun RunLogDialog(
                      */
                     HorizontalDivider(
                         color = colors.grid,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),
+                        modifier = Modifier.padding(top = Spacing.Line, bottom = Spacing.Tight),
                     )
                     Text(
                         "Efforts held in each set",
@@ -163,7 +164,7 @@ fun RunLogDialog(
                             "has already run out.",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.inkMuted,
-                        modifier = Modifier.padding(bottom = 2.dp),
+                        modifier = Modifier.padding(bottom = Spacing.Tight),
                     )
 
                     sets.forEach { set ->
@@ -187,7 +188,7 @@ fun RunLogDialog(
                         value = weight,
                         onValueChange = { weight = it },
                         steps = listOf(1.0, 5.0),
-                        modifier = Modifier.padding(top = 4.dp),
+                        modifier = Modifier.padding(top = Spacing.Tight),
                         placeholder = "0",
                     )
 
@@ -234,7 +235,7 @@ fun RunLogDialog(
 @Composable
 private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) -> Unit) {
     val colors = LocalGachiColors.current
-    HorizontalDivider(color = colors.grid, modifier = Modifier.padding(vertical = 6.dp))
+    HorizontalDivider(color = colors.grid, modifier = Modifier.padding(vertical = Spacing.Line))
 
     if (candidates.isEmpty()) {
         Text(
@@ -258,7 +259,7 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
                 .fillMaxWidth()
                 .clickable { onPick(candidate) }
                 .heightIn(min = 48.dp)
-                .padding(vertical = 6.dp),
+                .padding(vertical = Spacing.Line),
         ) {
             Text(candidate.name, style = MaterialTheme.typography.bodyMedium)
             Text(
@@ -297,10 +298,10 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
 @Composable
 private fun SetRow(set: CompletedSet, onRepsChange: (Int) -> Unit, onIncompleteChange: (Boolean) -> Unit) {
     val colors = LocalGachiColors.current
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             Text(
                 "Set ${set.setNumber}",
@@ -354,7 +355,7 @@ private fun RepButton(label: String, enabled: Boolean = true, onClick: () -> Uni
         enabled = enabled,
         modifier = Modifier.size(44.dp),
         contentPadding = PaddingValues(0.dp),
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.small,
     ) { Text(label) }
 }
 

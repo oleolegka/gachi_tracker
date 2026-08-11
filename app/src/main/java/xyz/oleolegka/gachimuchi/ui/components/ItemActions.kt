@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * ONE GESTURE for "what can I do with this": a long press on the thing itself.
@@ -188,7 +189,9 @@ fun ItemActions(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.inkSecondary,
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                modifier = Modifier.padding(
+                    horizontal = Spacing.Inset, vertical = Spacing.Line,
+                ),
             )
             HorizontalDivider(color = colors.grid)
             actions.forEach { action ->
@@ -243,7 +246,7 @@ fun ConfirmRemoveDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                 Text(subject, style = MaterialTheme.typography.titleSmall)
                 Text(
                     explanation,

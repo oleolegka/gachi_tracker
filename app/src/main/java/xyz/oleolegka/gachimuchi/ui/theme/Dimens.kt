@@ -29,13 +29,13 @@ object Spacing {
     val Line = 8.dp
 
     /** The inner padding of a card — how far its content sits from its own edge. */
-    val CardInset = 12.dp
+    val Inset = 12.dp
 
     /** Between blocks inside one card, and the screen's own side margin. */
     val Block = 16.dp
 
-    /** Between cards. */
-    val BetweenCards = 24.dp
+    /** Between cards, and the inner padding of a dialog (which is a card in a hurry). */
+    val Cards = 24.dp
 
     /** A major division of a screen. */
     val Section = 32.dp

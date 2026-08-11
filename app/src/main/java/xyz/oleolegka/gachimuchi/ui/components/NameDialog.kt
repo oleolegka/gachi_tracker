@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * Asking what to call something, where the honest answer is often "nothing".
@@ -81,7 +82,7 @@ fun NameDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                 Box {
                     OutlinedTextField(
                         value = draft,

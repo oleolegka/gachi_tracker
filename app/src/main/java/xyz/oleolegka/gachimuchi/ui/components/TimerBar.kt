@@ -30,6 +30,7 @@ import xyz.oleolegka.gachimuchi.domain.phase
 import xyz.oleolegka.gachimuchi.domain.stepRemainingMs
 import xyz.oleolegka.gachimuchi.domain.workStepCount
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * The timer as it appears on the logging screen: ONE compact row above the entry card.
@@ -65,7 +66,7 @@ fun TimerBar(
 ) {
     val colors = LocalGachiColors.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.Inset, vertical = Spacing.Tight)) {
             when {
                 !state.enabled -> Row(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
@@ -154,7 +155,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
 
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -164,7 +165,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
             // work and rest never look alike, and the label below says which it is anyway
             color = if (step.kind.isEffort()) colors.accent else MaterialTheme.colorScheme.onSurface,
         )
-        Column(Modifier.weight(1f).padding(start = 6.dp)) {
+        Column(Modifier.weight(1f).padding(start = Spacing.Line)) {
             Text(
                 if (phase == RunPhase.PAUSED) "${step.name} - paused" else step.name,
                 style = MaterialTheme.typography.labelSmall,
@@ -202,7 +203,7 @@ private fun RunningRow(state: TimerUiState, actions: TimerActions) {
     }
     LinearProgressIndicator(
         progress = { fraction },
-        modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
         color = if (step.kind == StepKind.WORK) colors.accent else colors.inkMuted,
     )
 }

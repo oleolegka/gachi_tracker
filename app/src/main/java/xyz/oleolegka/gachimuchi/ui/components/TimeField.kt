@@ -26,6 +26,7 @@ import xyz.oleolegka.gachimuchi.domain.formatDurationDigits
 import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * A length of time, typed as mm:ss with free entry — the one way this app asks "how long"
@@ -121,8 +122,8 @@ fun TimeField(
             keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
         )
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = Spacing.Tight),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // labelled in plain seconds, not mm:ss — a bump is always well under a minute

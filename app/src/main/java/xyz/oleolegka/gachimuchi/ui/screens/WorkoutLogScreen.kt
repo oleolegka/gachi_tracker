@@ -82,7 +82,6 @@ import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.label
-import xyz.oleolegka.gachimuchi.ui.components.CardRadius
 import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
@@ -99,6 +98,7 @@ import xyz.oleolegka.gachimuchi.ui.fmtShortDay
 import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
 import java.time.LocalDate
 
 /**
@@ -1067,7 +1067,7 @@ private fun ExerciseCard(
             .graphicsLayer {
                 translationY = liftOffset()
                 shadowElevation = if (lifted) 8.dp.toPx() else 0f
-                shape = RoundedCornerShape(CardRadius)
+                shape = RoundedCornerShape(Radius.Card)
                 clip = false
             },
     ) { press ->

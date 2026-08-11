@@ -28,8 +28,18 @@ import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.ui.fmtDuration
 import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.time.Duration
 import java.time.LocalDateTime
+
+/**
+ * The width of the set-number gutter, and therefore the indent of every line that hangs
+ * under a set rather than beside it. One value because the two have to agree: they are the
+ * same column, and the second line looks broken the moment it stops lining up with the
+ * first. Not on the spacing scale for the same reason — it is a column width, not a gap.
+ */
+private val NumberColumn = 20.dp
 
 /**
  * The breakdown of what was done: a heading, and one row per entry with its numbers, its
@@ -82,7 +92,9 @@ fun EntryBlock(
     val colors = LocalGachiColors.current
     GachiCard(modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 11.dp),
+            Modifier.fillMaxWidth().padding(
+                horizontal = Spacing.Inset, vertical = Spacing.Line,
+            ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -105,7 +117,7 @@ fun EntryBlock(
                 emptyNote,
                 fontSize = 12.sp,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
+                modifier = Modifier.padding(horizontal = Spacing.Inset, vertical = Spacing.Line),
             )
             return@GachiCard
         }
@@ -165,14 +177,14 @@ private fun EntryLine(
             Modifier
                 .fillMaxWidth()
                 .then(press)
-                .padding(start = 13.dp, end = 13.dp, top = 9.dp, bottom = 9.dp)
+                .padding(horizontal = Spacing.Inset, vertical = Spacing.Line)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "$number",
                     fontSize = 10.sp,
                     color = colors.inkMuted,
-                    modifier = Modifier.width(20.dp),
+                    modifier = Modifier.width(NumberColumn),
                 )
                 Text(
                     summary,
@@ -180,8 +192,8 @@ private fun EntryLine(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
-                if (warmup) WarmupBadge(Modifier.padding(end = 6.dp))
-                if (incomplete) IncompleteBadge(Modifier.padding(end = 6.dp))
+                if (warmup) WarmupBadge(Modifier.padding(end = Spacing.Tight))
+                if (incomplete) IncompleteBadge(Modifier.padding(end = Spacing.Tight))
                 clockOf(entry)?.let { Text(it, fontSize = 10.sp, color = colors.inkMuted) }
             }
             /*
@@ -195,7 +207,7 @@ private fun EntryLine(
                     "after ${fmtDuration(it)}",
                     fontSize = 11.sp,
                     color = colors.inkMuted,
-                    modifier = Modifier.padding(start = 20.dp, top = 2.dp),
+                    modifier = Modifier.padding(start = NumberColumn, top = Spacing.Tight),
                 )
             }
             record?.let {
@@ -204,7 +216,7 @@ private fun EntryLine(
                     fontSize = 11.sp,
                     color = colors.good,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 20.dp, top = 2.dp),
+                    modifier = Modifier.padding(start = NumberColumn, top = Spacing.Tight),
                 )
             }
         }
@@ -240,10 +252,10 @@ private fun WarmupBadge(modifier: Modifier = Modifier) {
     Text(
         "Warm-up",
         modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(Radius.Small))
             .background(colors.recessed)
-            .border(1.dp, colors.border, RoundedCornerShape(4.dp))
-            .padding(horizontal = 5.dp, vertical = 1.dp),
+            .border(1.dp, colors.border, RoundedCornerShape(Radius.Small))
+            .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         fontSize = 9.5.sp,
         fontWeight = FontWeight.Medium,
         color = colors.inkMuted,
@@ -268,10 +280,10 @@ private fun IncompleteBadge(modifier: Modifier = Modifier) {
     Text(
         "Not completed",
         modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(Radius.Small))
             .background(colors.recessed)
-            .border(1.dp, colors.warning, RoundedCornerShape(4.dp))
-            .padding(horizontal = 5.dp, vertical = 1.dp),
+            .border(1.dp, colors.warning, RoundedCornerShape(Radius.Small))
+            .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         fontSize = 9.5.sp,
         fontWeight = FontWeight.Medium,
         color = colors.warning,

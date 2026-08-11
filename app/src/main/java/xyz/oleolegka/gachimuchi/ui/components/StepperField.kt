@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.applyStep
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * A number field with +/- buttons on both sides — the workhorse of the logging screen.
@@ -57,7 +58,7 @@ fun StepperField(
         Text(label, style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             steps.sortedDescending().forEach { step ->
@@ -100,7 +101,7 @@ internal fun StepButton(label: String, modifier: Modifier = Modifier, onClick: (
         onClick = onClick,
         modifier = modifier.then(Modifier.height(48.dp)),
         contentPadding = PaddingValues(0.dp),
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.small,
     ) {
         Text(label, fontSize = 13.sp, maxLines = 1)
     }

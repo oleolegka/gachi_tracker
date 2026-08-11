@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * The dashboard building blocks of `design/design-system/dashboard/`: the card shell, the
@@ -73,9 +75,6 @@ val EyebrowStyle = TextStyle(
     fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
 )
 
-/** Public because anything drawing its own shadow behind a card has to match its corner. */
-val CardRadius = 14.dp
-private val PanelRadius = 18.dp
 
 /**
  * The card shell: flat surface, hairline ring, no elevation.
@@ -87,7 +86,7 @@ private val PanelRadius = 18.dp
 @Composable
 fun GachiCard(
     modifier: Modifier = Modifier,
-    radius: Dp = CardRadius,
+    radius: Dp = Radius.Card,
     background: Color? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -106,7 +105,7 @@ fun GachiCard(
 fun SectionHeader(title: String, note: String? = null, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
     Row(
-        modifier.fillMaxWidth().padding(bottom = 11.dp),
+        modifier.fillMaxWidth().padding(bottom = Spacing.Line),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -143,14 +142,14 @@ fun HeroCard(
     highlight: String? = null,
 ) {
     val colors = LocalGachiColors.current
-    GachiCard(modifier.fillMaxWidth(), radius = PanelRadius) {
-        Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 17.dp, bottom = 17.dp)) {
+    GachiCard(modifier.fillMaxWidth()) {
+        Column(Modifier.padding(Spacing.Block)) {
             Text(
                 eyebrow.uppercase(),
                 style = EyebrowStyle,
                 color = colors.inkMuted,
             )
-            Row(Modifier.padding(top = 7.dp), verticalAlignment = Alignment.Bottom) {
+            Row(Modifier.padding(top = Spacing.Line), verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
                     fontSize = 52.sp,
@@ -164,7 +163,7 @@ fun HeroCard(
                     fontSize = 22.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.inkSecondary,
-                    modifier = Modifier.padding(bottom = 4.dp),
+                    modifier = Modifier.padding(bottom = Spacing.Tight),
                 )
             }
             Text(
@@ -172,7 +171,7 @@ fun HeroCard(
                 fontSize = 14.sp,
                 color = colors.inkSecondary,
                 lineHeight = 19.sp,
-                modifier = Modifier.padding(top = 9.dp),
+                modifier = Modifier.padding(top = Spacing.Line),
             )
             if (meta != null) {
                 Text(
@@ -180,14 +179,14 @@ fun HeroCard(
                     fontSize = 12.sp,
                     color = colors.inkMuted,
                     lineHeight = 17.sp,
-                    modifier = Modifier.padding(top = 5.dp),
+                    modifier = Modifier.padding(top = Spacing.Tight),
                 )
             }
             if (highlight != null) {
                 Row(
-                    Modifier.padding(top = 6.dp),
+                    Modifier.padding(top = Spacing.Line),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 ) {
                     CheckGlyph(colors.goodText, 13.dp)
                     Text(highlight, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.goodText)
@@ -217,9 +216,9 @@ fun RecordBadge(date: String?, modifier: Modifier = Modifier) {
             .clip(CircleShape)
             .background(colors.good.copy(alpha = 0.13f))
             .border(1.dp, colors.good.copy(alpha = 0.34f), CircleShape)
-            .padding(start = 5.dp, end = 7.dp, top = 1.dp, bottom = 1.dp),
+            .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         CheckGlyph(colors.goodText, 11.dp)
         Text(
@@ -276,11 +275,11 @@ fun DoorTile(
         modifier
             .fillMaxWidth()
             .heightIn(min = 80.dp)
-            .clip(RoundedCornerShape(CardRadius))
+            .clip(RoundedCornerShape(Radius.Card))
             .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, colors.border, RoundedCornerShape(CardRadius))
+            .border(1.dp, colors.border, RoundedCornerShape(Radius.Card))
             .clickable(onClick = onClick)
-            .padding(end = 12.dp),
+            .padding(end = Spacing.Inset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -291,10 +290,12 @@ fun DoorTile(
                 .background(spineColor),
         )
         Column(
-            Modifier.weight(1f).padding(start = 13.dp, top = 12.dp, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            Modifier.weight(1f).padding(
+                start = Spacing.Inset, top = Spacing.Inset, bottom = Spacing.Inset,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                 Text(
                     name,
                     fontSize = 15.sp,
@@ -306,9 +307,11 @@ fun DoorTile(
             Text(caption, fontSize = 11.sp, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(
-            Modifier.padding(start = 8.dp, top = 12.dp, bottom = 12.dp),
+            Modifier.padding(
+                start = Spacing.Line, top = Spacing.Inset, bottom = Spacing.Inset,
+            ),
             horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             Box(Modifier.width(76.dp).height(22.dp)) { figure() }
             Row(verticalAlignment = Alignment.Bottom) {
@@ -332,7 +335,7 @@ fun DoorTile(
                 Text(delta, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.goodText)
             }
         }
-        Chevron(Modifier.padding(start = 6.dp))
+        Chevron(Modifier.padding(start = Spacing.Line))
     }
 }
 
@@ -420,9 +423,9 @@ fun StatCard(
 ) {
     val colors = LocalGachiColors.current
     GachiCard(modifier.heightIn(min = 96.dp)) {
-        Column(Modifier.padding(start = 13.dp, end = 13.dp, top = 13.dp, bottom = 12.dp)) {
+        Column(Modifier.padding(Spacing.Inset)) {
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                Modifier.fillMaxWidth().padding(bottom = Spacing.Line),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top,
             ) {
@@ -434,7 +437,7 @@ fun StatCard(
                     lineHeight = 14.sp,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (badge) RecordBadge(null, Modifier.padding(start = 8.dp))
+                if (badge) RecordBadge(null, Modifier.padding(start = Spacing.Line))
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
@@ -461,7 +464,7 @@ fun StatCard(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.goodText,
-                    modifier = Modifier.padding(top = 3.dp),
+                    modifier = Modifier.padding(top = Spacing.Tight),
                 )
             }
             if (`when` != null) {
@@ -469,7 +472,7 @@ fun StatCard(
                     `when`,
                     fontSize = 10.5.sp,
                     color = colors.inkMuted,
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(top = Spacing.Tight),
                 )
             }
         }
@@ -498,11 +501,11 @@ fun <T> SegmentControl(
     Row(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(11.dp))
+            .clip(RoundedCornerShape(Radius.Small))
             .background(colors.recessed)
-            .border(1.dp, colors.border, RoundedCornerShape(11.dp))
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+            .border(1.dp, colors.border, RoundedCornerShape(Radius.Small))
+            .padding(Spacing.Tight),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         options.forEach { option ->
             val isOn = option == selected
@@ -510,11 +513,11 @@ fun <T> SegmentControl(
                 Modifier
                     .weight(1f)
                     .heightIn(min = 44.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(Radius.Small))
                     .then(
                         if (isOn) Modifier
                             .background(MaterialTheme.colorScheme.surface)
-                            .border(1.dp, colors.border, RoundedCornerShape(8.dp))
+                            .border(1.dp, colors.border, RoundedCornerShape(Radius.Small))
                         else Modifier
                     )
                     .clickable { onSelect(option) },
@@ -562,7 +565,7 @@ fun SiblingChip(
             )
             .border(1.dp, if (selected) accent else colors.border, CircleShape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = Spacing.Inset, vertical = Spacing.Line),
     ) {
         Text(
             text,
@@ -581,11 +584,11 @@ fun IdentityChip(label: String, value: String, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
     Row(
         modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.Small))
             .background(colors.recessed)
-            .border(1.dp, colors.border, RoundedCornerShape(8.dp))
-            .padding(horizontal = 9.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .border(1.dp, colors.border, RoundedCornerShape(Radius.Small))
+            .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.inkMuted)
         Text(
@@ -623,7 +626,9 @@ fun EmptyState(
     val colors = LocalGachiColors.current
     GachiCard(modifier.fillMaxWidth()) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 22.dp),
+            Modifier.fillMaxWidth().padding(
+                horizontal = Spacing.Block, vertical = Spacing.Cards,
+            ),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (icon != null) {
@@ -631,7 +636,7 @@ fun EmptyState(
                     icon,
                     contentDescription = null,
                     tint = colors.inkMuted.copy(alpha = 0.55f),
-                    modifier = Modifier.size(40.dp).padding(bottom = 12.dp),
+                    modifier = Modifier.size(40.dp).padding(bottom = Spacing.Inset),
                 )
             }
             Text(
@@ -646,7 +651,7 @@ fun EmptyState(
                 fontSize = 13.sp,
                 color = colors.inkSecondary,
                 lineHeight = 18.sp,
-                modifier = Modifier.padding(top = 6.dp),
+                modifier = Modifier.padding(top = Spacing.Line),
             )
         }
     }
@@ -659,9 +664,9 @@ fun DashedNote(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .dashedBorder(colors.axis, 12.dp)
-            .padding(12.dp),
+            .clip(RoundedCornerShape(Radius.Card))
+            .dashedBorder(colors.axis, Radius.Card)
+            .padding(Spacing.Inset),
         contentAlignment = Alignment.Center,
     ) {
         Text(text, fontSize = 12.sp, color = colors.inkMuted)

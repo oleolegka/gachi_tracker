@@ -37,6 +37,8 @@ import kotlinx.coroutines.flow.Flow
 import xyz.oleolegka.gachimuchi.data.GalleryStore
 import xyz.oleolegka.gachimuchi.domain.CelebrationCue
 import xyz.oleolegka.gachimuchi.domain.shouldCelebrate
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import java.io.File
 
 /**
@@ -101,7 +103,7 @@ fun CelebrationHost(cues: Flow<CelebrationCue>, content: @Composable () -> Unit)
                 scaleIn(tween(240), initialScale = 0.82f) +
                 slideInVertically(tween(240)) { -it / 5 },
             exit = fadeOut(tween(320)) + scaleOut(tween(320), targetScale = 0.92f),
-            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp),
+            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(Spacing.Inset),
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 bitmap?.let {
@@ -109,21 +111,21 @@ fun CelebrationHost(cues: Flow<CelebrationCue>, content: @Composable () -> Unit)
                         bitmap = it,
                         contentDescription = null, // decoration: a screen reader has the record line already
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(132.dp).clip(RoundedCornerShape(16.dp)),
+                        modifier = Modifier.size(132.dp).clip(RoundedCornerShape(Radius.Card)),
                     )
                 }
                 card?.cue?.text?.let { text ->
                     Surface(
                         color = MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(Radius.Small),
                         tonalElevation = 3.dp,
-                        modifier = Modifier.padding(top = 6.dp).widthIn(max = 168.dp),
+                        modifier = Modifier.padding(top = Spacing.Line).widthIn(max = 168.dp),
                     ) {
                         Text(
                             text,
                             style = MaterialTheme.typography.labelSmall,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
                         )
                     }
                 }

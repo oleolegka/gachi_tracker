@@ -40,6 +40,8 @@ import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * Correcting a catalog exercise, taking one out of the pickers, removing one for good, or
@@ -281,7 +283,7 @@ private fun EditExerciseDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit exercise") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -306,10 +308,10 @@ private fun EditExerciseDialog(
                         bitmap = it,
                         contentDescription = null, // decoration: the Name field above already names this exercise
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(96.dp).clip(RoundedCornerShape(12.dp)),
+                        modifier = Modifier.size(96.dp).clip(RoundedCornerShape(Radius.Card)),
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
                     OutlinedButton(onClick = takePhoto) { Text("Camera") }
                     OutlinedButton(onClick = pickFromGallery) { Text("Gallery") }
                     if (exercise.pictureId != null) {
