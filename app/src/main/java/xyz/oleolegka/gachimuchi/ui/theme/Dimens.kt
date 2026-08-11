@@ -76,6 +76,8 @@ object TextSize {
      *
      * SYSTEM.md names this an exception to its own rule that 22 is the one large size: a
      * running count is read from two metres away with wet hands, off a fingerboard, and 22 sp
+     * does not survive that.
+     *
      * ONE screen may use it: the conductor. The 56 that used to be there is this; the 52 that
      * used to be on the overview hero is NOT - that card was compared against Figure side by
      * side and the owner chose Figure (2026-08-11). A second exception here would license a
