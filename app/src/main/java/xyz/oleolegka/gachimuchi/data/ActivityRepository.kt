@@ -193,7 +193,14 @@ class ActivityRepository(private val db: AppDatabase) {
          * in whatever happened to be open instead, which is either another workout or nothing.
          */
         intoWorkoutId: Long? = null,
-    ): Long {
+    ): Long = db.withTransaction {
+        /*
+         * TRANSACTED because this can now be TWO inserts: closing an abandoned workout
+         * (§18.18) and then writing the entry that would otherwise have joined it. Half of that
+         * pair landing — the entry written, the close lost — is the exact defect being fixed,
+         * arrived at by a different road; the other half alone is a workout closed for a set
+         * that never got written.
+         */
         // one read, shared by both consumers, and skipped entirely when neither wants it —
         // a named workout is looked up by id and needs no fold
         val needsEvents = form.wantsBodyweightSnapshot || (attachToWorkout && intoWorkoutId == null)
@@ -226,7 +233,7 @@ class ActivityRepository(private val db: AppDatabase) {
         // one method sees every write, and a screen that forgot would log a set with no
         // volume at all. See [withBodyweightSnapshot].
         val stamped = form.withBodyweightSnapshot { day -> bodyweightAt(events, day) }
-        return db.events().insert(
+        db.events().insert(
             event(
                 type = stamped.type, payload = stamped.toPayload(),
                 // both links, and the uid is the one the reducers believe: see EventEntity

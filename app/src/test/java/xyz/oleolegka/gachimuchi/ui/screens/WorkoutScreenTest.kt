@@ -282,4 +282,32 @@ class WorkoutScreenTest : ScreenTest() {
 
         compose.onNodeWithText("Reopen").assertDoesNotExist()
     }
+
+    /**
+     * A workout the APP closed after a pause (§18.18) says so on the screen a past workout is
+     * actually opened on. Without the line, a workout the owner never finished simply reads as
+     * finished and there is nothing to explain why "Reopen" is the button being offered.
+     */
+    @Test
+    fun `a workout closed by inactivity says so in its heading`() {
+        val journal = Journal()
+        val workout = twoExerciseWorkout(journal)
+        journal.finishWorkout(workout, iso, at = "23:30", auto = true)
+        workoutScreen(journal, workout)
+
+        compose.onNodeWithText("Fri 7 Aug - 2 exercises, 3 sets - closed after a pause")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Reopen").assertIsDisplayed()
+    }
+
+    /** A workout the owner finished themselves says nothing extra. */
+    @Test
+    fun `a workout finished by hand is not described as closed after a pause`() {
+        val journal = Journal()
+        val workout = twoExerciseWorkout(journal)
+        journal.finishWorkout(workout, iso, at = "19:00")
+        workoutScreen(journal, workout)
+
+        compose.onNodeWithText("Fri 7 Aug - 2 exercises, 3 sets").assertIsDisplayed()
+    }
 }
