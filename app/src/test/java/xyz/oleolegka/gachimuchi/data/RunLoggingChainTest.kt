@@ -601,6 +601,54 @@ class RunLoggingChainTest {
         assertEquals("the undo never landed", 0, buildSessionSetCount(outcome.opDate))
     }
 
+    /**
+     * ANSWERING A RUN'S OFFER STARTS THE REST UNDER ITS CARD — §13.3 step 11 and §13.4, which
+     * says it in as many words: "the rest between sets of a protocol exercise is a FLOOR, not
+     * part of the protocol".
+     *
+     * It never did. [MainViewModel.logRunSets] avoided [MainViewModel.addSet] on purpose, and
+     * the rest went with everything else it was avoiding, so a set done under the conductor left
+     * its card with no countdown drawn on it at all. Reported from the phone: "there is no
+     * indicator over the left hand's card, and there is no way to tell how much rest is left or
+     * whether the timer is even running".
+     *
+     * The floor's SIDE is the half worth checking rather than assuming: it is what puts the bar
+     * under the hand that just worked and leaves the other hand's card alone.
+     */
+    @Test
+    fun `answering a run's offer starts the rest under the card that earned it`() = runTest {
+        val exercise = hangs()
+        repo.setOneSided(exercise.id, true)
+        val oneSided = repo.toRef(repo.exercise(exercise.id)!!)
+
+        val timer = newController()
+        timer.setEnabled(true)
+        val viewModel = MainViewModel(repo, programs, timer)
+
+        viewModel.startProgramForExercise(ProgramStart(oneSided, HoldSide.LEFT, null))
+        settle()
+        elapse(timer, timer.run.value!!.steps.sumOf { it.durationSec } + 1)
+
+        val outcome = viewModel.runOutcome.value!!
+        assertTrue("nothing to answer, so nothing this test can be about", outcome.offersLogging)
+        assertEquals(
+            "the rest cannot start before the sets are confirmed",
+            emptyList<Any>(),
+            timer.floors.floors.value,
+        )
+
+        viewModel.logRunSets(oneSided, outcome.sets)
+        settle()
+
+        val floor = timer.floors.floors.value.single()
+        assertEquals(oneSided.id, floor.exerciseId)
+        assertEquals("the rest belongs to the hand that worked", HoldSide.LEFT.code, floor.side)
+        // named by hand as well, because the summary line and the shade have only the name to
+        // tell one hand's rest from the other's
+        assertTrue(floor.exerciseName.contains("Left"))
+        assertTrue("and it is actually counting", floor.readyAtMs > SystemClock.elapsedRealtime())
+    }
+
     @Test
     fun `a run interrupted by the user is offered for the part that ran`() = runTest {
         val exercise = hangs()
