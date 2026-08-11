@@ -112,11 +112,15 @@ fun scheduleKindOf(program: WorkoutProgram?): ScheduleKind = when {
  * much for a row. So: the first effort's pair, how many efforts in total, and how long the
  * whole thing runs, all of which come off the same [flatten] the timer counts down, so the
  * line cannot drift away from what would actually be run.
+ *
+ * THREE fields, ONE separator (`design-system/app-next/SYSTEM.md`, rule 4). It used to read
+ * "7:3 - 24 efforts, 13:12" — a dash between the first two and a comma between the last two,
+ * so "24 efforts, 13:12" looked like one fact and "7:3" like a heading over it.
  */
 fun WorkoutProgram.scheduleSummary(): String {
     val block = firstBlock()
     val head = if (block != null) "${block.workSec}:${block.restSec}" else "empty"
-    return "$head - ${workStepCount()} efforts, ${formatClock(totalSec())}"
+    return "$head · ${workStepCount()} efforts · ${formatClock(totalSec())}"
 }
 
 /**
