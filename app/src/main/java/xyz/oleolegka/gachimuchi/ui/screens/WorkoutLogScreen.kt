@@ -686,6 +686,7 @@ fun WorkoutLogScreen(
                         }
                     },
                     onRemove = { removingKey = key },
+                    removeLabel = if (standalone) "Remove from this day" else "Remove from this workout",
                     /*
                      * Nothing to drag when there is one card, and a lift with nowhere to go
                      * would be a gesture that appears to work and cannot. The menu keeps
@@ -1203,6 +1204,12 @@ private fun ExerciseCard(
     onRest: (() -> Unit)?,
     /** Long press, released without moving: take this exercise out of the workout. */
     onRemove: (() -> Unit)?,
+    /**
+     * What the removal is a removal FROM, said in the menu. A card outside any workout is
+     * coming off the day, and a menu item naming a workout there would name a thing the person
+     * reading it is not looking at.
+     */
+    removeLabel: String = "Remove from this workout",
     /** Long press, moved: carry the card. Null when there is nowhere to carry it to. */
     drag: ItemDrag? = null,
     lifted: Boolean = false,
@@ -1238,7 +1245,7 @@ private fun ExerciseCard(
         onMoveUp?.let { add(ItemAction("Move up") { it() }) }
         onMoveDown?.let { add(ItemAction("Move down") { it() }) }
         // destructive last, and away from the top of the menu where the finger already is
-        onRemove?.let { add(ItemAction("Remove from this workout", destructive = true) { it() }) }
+        onRemove?.let { add(ItemAction(removeLabel, destructive = true) { it() }) }
     }
     ItemActions(
         title = name,
