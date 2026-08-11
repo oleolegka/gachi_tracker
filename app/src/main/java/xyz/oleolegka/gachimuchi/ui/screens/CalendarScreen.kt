@@ -233,10 +233,26 @@ fun CalendarScreen(
                     actions = cardActions,
                     pastWorkoutNames = state.pastWorkoutNames,
                 )
-                PlanButton(
-                    onClick = { editing = SlotEditorTarget(null, selectedDate) },
-                    modifier = Modifier.padding(top = 9.dp),
-                )
+                /*
+                 * Absent on a day already gone, not merely refused inside.
+                 *
+                 * The editor's Save has always been dead for a backdated day, and that was
+                 * taken for the whole fix — but the OWNER reads the screen, not the dialog:
+                 * "I am right now on 0.6 able to pick 6 August and there are two buttons"
+                 * (2026-08-11). A button that opens a form you can fill in and cannot save
+                 * says the app plans in the past and then loses the plan, which is a worse
+                 * answer than not offering it.
+                 *
+                 * "Add" stays on a past day on purpose: recording a session that really
+                 * happened is exactly what backdating is FOR. It is the PLAN that cannot be
+                 * made after the fact (§20.1), and the two buttons say so by being one.
+                 */
+                if (!selectedDate.isBefore(today)) {
+                    PlanButton(
+                        onClick = { editing = SlotEditorTarget(null, selectedDate) },
+                        modifier = Modifier.padding(top = 9.dp),
+                    )
+                }
             }
         }
     }

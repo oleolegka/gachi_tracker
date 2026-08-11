@@ -205,6 +205,64 @@ class CalendarScreenTest : ScreenTest() {
 
     // --- planning, editing, deleting ----------------------------------------------------------
 
+    /**
+     * Selects a day that is certainly gone, and returns it.
+     *
+     * The 15th and nothing else: a month grid shows the neighbouring months only as the few
+     * days that top and tail it, so the 15th of the month on screen is the one cell in the
+     * whole grid carrying that number — every other choice can collide with a day of the
+     * month next door and select a day the test did not mean. When today has not reached the
+     * 15th yet, the same cell one month back is used instead.
+     */
+    private fun selectAPastDay(): LocalDate {
+        val past = if (today.dayOfMonth > 15) {
+            today.withDayOfMonth(15)
+        } else {
+            compose.onNodeWithContentDescription("Previous month").performClick()
+            settle()
+            today.minusMonths(1).withDayOfMonth(15)
+        }
+        compose.onNodeWithText("15").performClick()
+        settle()
+        // the agenda heading is the proof the intended day is the selected one
+        compose.onNodeWithText(fmtWeekdayDay(past)).assertExists()
+        return past
+    }
+
+    /*
+     * Reported from the phone against 0.6.0, in the owner's words: "I am right now on 0.6
+     * able to pick 6 August and there are two buttons: add and plan a session. For the
+     * future only plan a session, which is right."
+     *
+     * The gate existed and was in the wrong place — inside the dialog, on Save — so the
+     * button opened a form that could be filled in and could not be written. What the owner
+     * reads is the SCREEN, and the screen said the past could be planned.
+     */
+    @Test
+    fun `a day already gone is not offered a plan`() {
+        calendar()
+
+        selectAPastDay()
+
+        compose.onNodeWithText("Plan a session").assertDoesNotExist()
+    }
+
+    @Test
+    fun `today and the days ahead are still offered one`() {
+        calendar()
+
+        // today, where the screen opens
+        compose.onNodeWithText("Plan a session").assertExists()
+
+        // and a day ahead: the 15th of next month is past no reading of the calendar
+        compose.onNodeWithContentDescription("Next month").performClick()
+        settle()
+        compose.onNodeWithText("15").performClick()
+        settle()
+        compose.onNodeWithText(fmtWeekdayDay(today.plusMonths(1).withDayOfMonth(15))).assertExists()
+        compose.onNodeWithText("Plan a session").assertExists()
+    }
+
     @Test
     fun `Plan a session opens the editor on the day that is selected`() {
         calendar()
