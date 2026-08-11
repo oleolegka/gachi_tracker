@@ -97,7 +97,7 @@ fun RunLogDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (chosen == null) "Log this run" else "Log this run?") },
+        title = { Text(if (chosen == null) "Write this run down" else "Write this run down?") },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -139,6 +139,33 @@ fun RunLogDialog(
                 if (chosen == null) {
                     ExerciseChoice(candidates = candidates) { chosen = it }
                 } else {
+                    /*
+                     * WHAT IS BEING ASKED, said in words before the first stepper.
+                     *
+                     * The owner's report on this form was "it is offering me to do something
+                     * with sets, some pluses, I have no idea what this is". Everything on the
+                     * row was true and none of it was named: "Set 1", a bare number, and "of
+                     * 6". So the number gets a heading that says what it counts, and the form
+                     * gets one line saying why it is being shown at all — read after a
+                     * hangboard session, with the fingers that just did it.
+                     */
+                    HorizontalDivider(
+                        color = colors.grid,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),
+                    )
+                    Text(
+                        "Efforts held in each set",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        "This is what the schedule counted. Turn a set down if you came off " +
+                            "early - it cannot go above what was planned, because the count " +
+                            "has already run out.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkMuted,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    )
+
                     sets.forEach { set ->
                         SetRow(
                             set = set,
@@ -248,7 +275,19 @@ private fun ExerciseChoice(candidates: List<ExerciseRef>, onPick: (ExerciseRef) 
 }
 
 /**
- * One set of the offer: the rep count, correctable the same way it always was, and — new —
+ * One set of the offer.
+ *
+ * The number in the middle is HOW MANY EFFORTS WERE HELD inside this set, and the heading
+ * above the rows is what says so — on its own the row read "Set 1", a bare figure and "of 6",
+ * which is what the owner could not decode.
+ *
+ * The "+" stops at [CompletedSet.plannedReps] and not at a global maximum. A schedule is
+ * strict about this: the run counted down a fixed number of efforts and ended, so a set can
+ * come out SHORT of what was planned and can never come out over it. The button is disabled
+ * at the ceiling rather than silently ignoring the tap, so the limit is visible before it is
+ * hit.
+ *
+ * Also here: the rep count, correctable the same way it always was, and — new —
  * whether THIS set was carried through. Per row and not once for the whole offer, because a
  * fingerboard session is six hangs and falling off on the fourth says nothing about the other
  * five: see [xyz.oleolegka.gachimuchi.domain.holdSetsFromRun], which is what turns
@@ -268,16 +307,20 @@ private fun SetRow(set: CompletedSet, onRepsChange: (Int) -> Unit, onIncompleteC
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            RepButton("-") { onRepsChange((set.reps - 1).coerceAtLeast(0)) }
+            RepButton("-", enabled = set.reps > 0) {
+                onRepsChange((set.reps - 1).coerceAtLeast(0))
+            }
             Text(
                 set.reps.toString(),
                 modifier = Modifier.width(32.dp),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.titleMedium,
             )
-            RepButton("+") { onRepsChange((set.reps + 1).coerceAtMost(MAX_REPS_PER_SET)) }
+            RepButton("+", enabled = set.reps < set.plannedReps) {
+                onRepsChange((set.reps + 1).coerceAtMost(set.plannedReps))
+            }
             Text(
-                "of ${set.plannedReps}",
+                "of ${set.plannedReps} planned",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkMuted,
             )
@@ -305,9 +348,10 @@ private fun RunSetIncompleteChip(selected: Boolean, onToggle: () -> Unit) {
 }
 
 @Composable
-private fun RepButton(label: String, onClick: () -> Unit) {
+private fun RepButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.size(44.dp),
         contentPadding = PaddingValues(0.dp),
         shape = MaterialTheme.shapes.medium,
@@ -324,5 +368,10 @@ private fun endedAtLabel(wallMs: Long): String =
             .format(DateTimeFormatter.ofPattern("HH:mm"))
     }
 
-/** A hangboard set is a handful of efforts; anything past this is a stuck finger. */
-private const val MAX_REPS_PER_SET = 99
+/*
+ * The ceiling on a set used to be a global constant (99) and is now [CompletedSet.plannedReps]
+ * — see [SetRow]. Fewer efforts than the schedule called for is the ordinary case; MORE is not
+ * a case at all, because the run that produced this offer is over and the count it was given
+ * has already run out. The constant is gone rather than lowered: any number that is not the
+ * planned one is a number this form cannot justify.
+ */
