@@ -27,10 +27,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * ONE GESTURE for "what can I do with this": a long press on the thing itself.
@@ -129,7 +129,6 @@ fun ItemActions(
     drag: ItemDrag? = null,
     content: @Composable (Modifier) -> Unit,
 ) {
-    val colors = LocalGachiColors.current
     var open by remember { mutableStateOf(false) }
 
     val slopPx = with(LocalDensity.current) { DRAG_INTENT_SLOP.toPx() }
@@ -183,35 +182,63 @@ fun ItemActions(
 
     Box(modifier) {
         content(press)
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            Text(
-                title,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.inkSecondary,
-                modifier = Modifier.padding(
-                    horizontal = Spacing.Inset, vertical = Spacing.Line,
-                ),
-            )
-            HorizontalDivider(color = colors.grid)
-            actions.forEach { action ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            action.label,
-                            color = if (action.destructive) {
-                                colors.critical
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    },
-                    onClick = {
-                        open = false
-                        action.onClick()
-                    },
+        ActionMenu(open, { open = false }, title, actions)
+    }
+}
+
+/**
+ * The menu itself, without the gesture that raises it.
+ *
+ * It is separate because a menu is now raised two ways: by the long press above, and by an
+ * explicit button on the card (rule 2 of `design-system/app-next/SYSTEM.md` — a hidden action
+ * needs a visible sign). Both have to look and behave the same, and the way to make sure of
+ * that is for there to be one of them.
+ *
+ * A DESTRUCTIVE entry is set off by a divider as well as by its colour: the redraw's rule 3
+ * is that a destructive action does not sit flush against a frequent one, and inside a menu
+ * a rule of separation is a line rather than distance.
+ */
+@Composable
+fun ActionMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    title: String,
+    actions: List<ItemAction>,
+) {
+    val colors = LocalGachiColors.current
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(
+            title,
+            fontSize = TextSize.Caption,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.inkSecondary,
+            modifier = Modifier.padding(horizontal = Spacing.Block, vertical = Spacing.Line),
+        )
+        HorizontalDivider(color = colors.grid)
+        actions.forEachIndexed { index, action ->
+            if (action.destructive && index > 0) {
+                HorizontalDivider(
+                    color = colors.grid,
+                    modifier = Modifier.padding(vertical = Spacing.Tight),
                 )
             }
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        action.label,
+                        fontSize = TextSize.Body,
+                        color = if (action.destructive) {
+                            colors.critical
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                },
+                onClick = {
+                    onDismiss()
+                    action.onClick()
+                },
+            )
         }
     }
 }

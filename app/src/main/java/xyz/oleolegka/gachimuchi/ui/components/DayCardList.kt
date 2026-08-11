@@ -15,11 +15,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,8 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,10 +63,13 @@ import java.time.LocalDate
  * read before anything can be done. So there is one button, and it asks which.
  *
  * ── Editing the plan is the calendar's job ──────────────────────────────────────
- * A planned card carries a pencil and a bin ONLY where those actions belong. Today is the
+ * A planned card carries its edit and delete ONLY where those actions belong. Today is the
  * screen you stand in the gym with; rewriting the schedule from it is not a thing anyone
- * does mid-set, and a bin one mis-tap from "Start" is a bad trade. [DayActions] leaves both
- * null there and no icons are drawn.
+ * does mid-set. [DayActions] leaves both null there and no menu is drawn.
+ *
+ * Where they ARE drawn they are one kebab, not a pencil and a bin: the bin sat eight points
+ * from "Start", and the price of the mis-tap was a deleted plan (rule 3 of
+ * `design-system/app-next/SYSTEM.md`).
  *
  * ── A long press acts on the card (§14.1) ───────────────────────────────────────
  * A WORKOUT card answers a long press with its own menu, which is where removing it lives —
@@ -81,8 +83,8 @@ import java.time.LocalDate
  * side effect, which is not the same thing as a delete and reads as the app losing track. A
  * card is an object, and every object of the log is removed the same way.
  *
- * A PLANNED card still answers nothing: it already carries its two actions as icons where they
- * belong, and a second way to reach the same pair would be duplication rather than a fix.
+ * A PLANNED card still answers nothing: its kebab is already the visible sign rule 2 asks
+ * for, and a second way to reach the same pair would be duplication rather than a fix.
  */
 @Immutable
 data class DayActions(
@@ -171,6 +173,17 @@ fun DayCardList(
      * state (nothing has ever been named yet) and simply draws the dialog with no dropdown.
      */
     pastWorkoutNames: List<String> = emptyList(),
+    /**
+     * Plan a session ON THIS DAY, or null where planning does not belong.
+     *
+     * Null in two different circumstances, and that is deliberate: Today never plans (the
+     * schedule is edited on the calendar, §12-B), and the calendar itself passes null for a
+     * day already gone, because a plan cannot be made after the fact (§20.1). Both come out
+     * as the same thing on screen — the item is simply not in the menu — which is the state
+     * the owner reads: a control that is offered and then refused says the app plans in the
+     * past and loses the plan.
+     */
+    onPlanSession: (() -> Unit)? = null,
 ) {
     /** Whether the question "what shall this one be called" is on screen. */
     var naming by remember(day.date) { mutableStateOf(false) }
@@ -191,18 +204,28 @@ fun DayCardList(
                     // a day that has not happened cannot have "nothing recorded" held
                     // against it, so it is not told that it does. It is also only ever drawn
                     // on the calendar (Today is never in the future), which is why the
-                    // sentence can name the "Plan a session" button sitting under this list
-                    "Nothing planned for this day. Plan a session below and it appears here."
+                    // sentence can name the way in that sits under this list — an item of
+                    // the Add menu since the redraw, no longer a button of its own
+                    "Nothing planned for this day. Add a planned session below and it " +
+                        "appears here."
                 }
             )
         }
 
         day.cards.forEach { card -> DayCardRow(card, date, actions) }
 
-        if (day.canRecord) {
+        /*
+         * A day ahead cannot be recorded on but can be planned for, so the button is drawn
+         * for either reason — and each of the two halves of the menu decides itself whether
+         * it is there. A future day where the button was gated on `canRecord` alone would
+         * have no way in at all, which is what the old separate "Plan a session" button was
+         * quietly covering for.
+         */
+        if (day.canRecord || onPlanSession != null) {
             AddMenuButton(
-                onWorkout = { naming = true },
-                onSingleEntry = { actions.logSingleEntry(date) },
+                onWorkout = { naming = true }.takeIf { day.canRecord },
+                onSingleEntry = { actions.logSingleEntry(date) }.takeIf { day.canRecord },
+                onPlanSession = onPlanSession,
                 /*
                  * There is at most ONE draft in the app, so starting a second workout would
                  * replace the one being composed — silently, which is the very thing §23.A3
@@ -358,12 +381,26 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
             }
         }
 
+        /*
+         * The plan's own two actions, behind one button with a menu.
+         *
+         * They used to be a pencil and a BIN, side by side, with the bin eight points from
+         * "Start" — rule 3 of `design-system/app-next/SYSTEM.md`, and the price of a mis-tap
+         * was a deleted plan. One kebab, one menu, deletion below a divider and in the
+         * critical colour, and the confirmation dialog still after that.
+         *
+         * Both lambdas are the calendar's; Today leaves them null and draws no kebab, which
+         * is also why a planned card has no long-press menu to duplicate this one.
+         */
         val edit = actions.editSlot
         val delete = actions.deleteSlot
         val slotId = card.slotId
         if (card.kind == DayCardKind.PLANNED && slotId != null && edit != null && delete != null) {
-            RowIcon(Icons.Filled.Edit, "Edit \"${card.title}\"", colors.inkSecondary) { edit(slotId) }
-            RowIcon(Icons.Filled.Delete, "Delete \"${card.title}\"", colors.critical) { delete(slotId) }
+            PlanMenuButton(
+                title = card.title,
+                onEdit = { edit(slotId) },
+                onDelete = { delete(slotId) },
+            )
         }
 
         /*
@@ -470,29 +507,74 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
     }
 }
 
+/**
+ * The one control a planned card carries besides "Start": a kebab, and the plan's two
+ * actions behind it.
+ *
+ * The button is 48 dp of touch target around an 18 dp glyph — the floor for anything tapped
+ * on this app, whatever the drawing says — and it is named after the session it belongs to,
+ * because on a day with two plans "More" is not an answer a screen reader can use.
+ */
 @Composable
-private fun RowIcon(icon: ImageVector, description: String, tint: Color, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(38.dp)) {
-        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(18.dp))
+private fun PlanMenuButton(title: String, onEdit: () -> Unit, onDelete: () -> Unit) {
+    val colors = LocalGachiColors.current
+    var open by remember(title) { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = { open = true },
+            modifier = Modifier.size(48.dp).padding(end = Spacing.Tight),
+        ) {
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = "More for \"$title\"",
+                tint = colors.inkSecondary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        ActionMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            title = title,
+            actions = listOf(
+                ItemAction("Edit plan") { onEdit() },
+                ItemAction("Delete plan", destructive = true) { onDelete() },
+            ),
+        )
     }
 }
 
 /**
  * "Add", and then the question of what.
  *
- * The two answers are not the same size of thing and the wording says so: a WORKOUT is the
+ * The answers are not the same size of thing and the wording says so: a WORKOUT is the
  * session you are about to do, a SINGLE ENTRY is one exercise recorded on its own — the
  * stretching done in front of the television, which the model has always allowed and the
- * screens used not to show as anything in particular.
+ * screens used not to show as anything in particular — and a PLANNED SESSION is not a record
+ * at all but an appointment, which is why it sits below a divider.
+ *
+ * ── Why the plan is in here and not on a button of its own ──────────────────────
+ * The calendar used to draw a second full-width button under this one, so a day offered
+ * three ways to begin something: "Add" opening a menu of two, and "Plan a session" beside
+ * it. Rule 1 of `design-system/app-next/SYSTEM.md` — one action, one button — and the
+ * redraw's answer is one button and one menu of three. The cost, stated plainly, is that
+ * this component is shared with Today and now has to be TOLD whether planning is on offer:
+ * see `onPlanSession` on [DayCardList].
+ *
+ * Every lambda here is nullable and a null one is simply not in the menu. The alternative,
+ * drawing a disabled item, is right for "a workout is already open" (a state that will pass,
+ * and the reason is worth reading) and wrong for "this day is in the past" (a state that
+ * never passes).
  */
 @Composable
 private fun AddMenuButton(
-    onWorkout: () -> Unit,
-    onSingleEntry: () -> Unit,
+    onWorkout: (() -> Unit)?,
+    onSingleEntry: (() -> Unit)?,
+    onPlanSession: (() -> Unit)?,
     modifier: Modifier = Modifier,
     /** False while a draft is already being composed — see the call site. */
     workoutEnabled: Boolean = true,
 ) {
+    val colors = LocalGachiColors.current
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         OutlinedButton(
@@ -501,23 +583,52 @@ private fun AddMenuButton(
         ) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Text("Add", modifier = Modifier.padding(start = Spacing.Line))
+            // the chevron says the button opens a menu rather than doing the thing
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.padding(start = Spacing.Tight).size(16.dp),
+            )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(if (workoutEnabled) "Workout" else "Workout - one is already open") },
-                enabled = workoutEnabled,
-                onClick = {
-                    open = false
-                    onWorkout()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Single entry") },
-                onClick = {
-                    open = false
-                    onSingleEntry()
-                },
-            )
+            if (onWorkout != null) {
+                DropdownMenuItem(
+                    text = {
+                        Text(if (workoutEnabled) "Workout" else "Workout - one is already open")
+                    },
+                    enabled = workoutEnabled,
+                    onClick = {
+                        open = false
+                        onWorkout()
+                    },
+                )
+            }
+            if (onSingleEntry != null) {
+                DropdownMenuItem(
+                    text = { Text("Single entry") },
+                    onClick = {
+                        open = false
+                        onSingleEntry()
+                    },
+                )
+            }
+            if (onPlanSession != null) {
+                // an appointment, not a record: the divider is the difference between the
+                // two kinds of answer, not decoration
+                if (onWorkout != null || onSingleEntry != null) {
+                    HorizontalDivider(
+                        color = colors.grid,
+                        modifier = Modifier.padding(vertical = Spacing.Tight),
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("Planned session") },
+                    onClick = {
+                        open = false
+                        onPlanSession()
+                    },
+                )
+            }
         }
     }
 }

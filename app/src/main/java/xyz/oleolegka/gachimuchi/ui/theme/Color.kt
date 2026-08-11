@@ -32,6 +32,24 @@ val InkSecondaryDark = Color(0xFFC3C2B7)
 val SurfaceRecessedLight = Color(0xFFF0EFEC)
 val SurfaceRecessedDark = Color(0xFF242422)
 
+
+/** Hairline ring around cards (`--border` of §6): ink at 10 %, so it works on any surface. */
+val BorderLight = Color(0x1A0B0B0B)
+val BorderDark = Color(0x1AFFFFFF)
+
+/**
+ * Text weight of "good" (`--good-text`). Darker than [StatusGood] in the light theme
+ * because the fill colour of a badge is not legible as 10 sp type on white; in the dark
+ * theme the two coincide.
+ */
+val GoodTextLight = Color(0xFF006300)
+val GoodTextDark = Color(0xFF0CA30C)
+
+/** Muted (axes, captions) — identical in both themes, as prescribed by the research. */
+val InkMuted = Color(0xFF898781)
+val GridLight = Color(0xFFE1E0D9)
+val GridDark = Color(0xFF2C2C2A)
+
 /**
  * The two tones of a calendar day cell (§18.14): today and everything ahead of it in
  * [CalendarAheadLight]/[CalendarAheadDark], everything already gone in
@@ -53,28 +71,24 @@ val SurfaceRecessedDark = Color(0xFF242422)
  *
  * Neither tone comes near `accent`, which is what a SELECTED cell is filled with, so the
  * selection still wins over both at a glance.
+ *
+ * ── The light pair is stated against the CARD, not against white ────────────────
+ * Stating them per theme was only half the fix. In the light theme "ahead" was pure white on
+ * a #FCFCFB card — three levels out of 255, so the whole future half of the grid had no
+ * visible cells at all, and the redraw found it before a phone did
+ * (`design-system/app-next/calendar.html`, change 1). The tones are now two existing tokens
+ * one step apart each: `surface-2` (#F0EFEC, the recessed fill everything else in the app
+ * uses for an empty slot) for what is still to come, and `grid` (#E1E0D9) for what is gone.
+ * Twelve levels from the card, fifteen more to the past — the whole trio is separated rather
+ * than only one pair of it, and no new colour was invented to do it.
+ *
+ * The DARK pair is deliberately left as it was: #262625 / #0F0F0E already straddle the
+ * #1A1A19 card by a comfortable margin, and the bug was never there.
  */
-val CalendarAheadLight = Color(0xFFFFFFFF)
-val CalendarGoneLight = Color(0xFFE3E2DD)
+val CalendarAheadLight = SurfaceRecessedLight
+val CalendarGoneLight = GridLight
 val CalendarAheadDark = Color(0xFF262625)
 val CalendarGoneDark = Color(0xFF0F0F0E)
-
-/** Hairline ring around cards (`--border` of §6): ink at 10 %, so it works on any surface. */
-val BorderLight = Color(0x1A0B0B0B)
-val BorderDark = Color(0x1AFFFFFF)
-
-/**
- * Text weight of "good" (`--good-text`). Darker than [StatusGood] in the light theme
- * because the fill colour of a badge is not legible as 10 sp type on white; in the dark
- * theme the two coincide.
- */
-val GoodTextLight = Color(0xFF006300)
-val GoodTextDark = Color(0xFF0CA30C)
-
-/** Muted (axes, captions) — identical in both themes, as prescribed by the research. */
-val InkMuted = Color(0xFF898781)
-val GridLight = Color(0xFFE1E0D9)
-val GridDark = Color(0xFF2C2C2A)
 val AxisLight = Color(0xFFC3C2B7)
 val AxisDark = Color(0xFF383835)
 
