@@ -169,6 +169,20 @@ class ProgramFreezeTest {
         assertEquals(7.0, ref.workSec!!, 1e-9)
     }
 
+    /**
+     * The name the app writes for itself. "Schedule", not "protocol" — the library files these
+     * under "Exercise schedules", and the two words for one thing met there. Names already in
+     * the database are NOT rewritten (identity is keyed on uid, so the caption is not worth a
+     * data migration), which is why this asserts on a row created now.
+     */
+    @Test
+    fun `a schedule the app generates is named a schedule`() = runTest {
+        val exerciseId = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+        val programId = activityRepo.exercise(exerciseId)!!.protocolProgramId!!
+
+        assertEquals("Hangs schedule", programRepo.programById(programId)!!.name)
+    }
+
     @Test
     fun `a program nobody's schedule it is goes as it always did`() = runTest {
         val id = programRepo.save(minimal(30, 30))
