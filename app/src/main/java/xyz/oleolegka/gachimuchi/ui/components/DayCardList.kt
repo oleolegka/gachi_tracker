@@ -46,6 +46,7 @@ import xyz.oleolegka.gachimuchi.domain.DayCards
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Radius
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 import java.time.LocalDate
 
 /**
@@ -344,9 +345,9 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
                 if (card.timeLabel.isNotEmpty()) {
                     Text(
                         card.timeLabel,
-                        fontSize = 11.sp,
+                        fontSize = TextSize.Caption,
                         color = colors.inkMuted,
-                        modifier = Modifier.padding(start = 8.dp),
+                        modifier = Modifier.padding(start = Spacing.Line),
                     )
                 }
             }
