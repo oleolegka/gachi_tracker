@@ -57,7 +57,27 @@ data class ExerciseRef(
      * recorded on the set ([HoldSet.side]) and not here.
      */
     val oneSided: Boolean = false,
+    /**
+     * The RESOLVED schedule of a hold — the whole [WorkoutProgram] the catalog row points at,
+     * not just the two numbers of its first block (§18.15).
+     *
+     * [workSec]/[restSec] above are that first block, and they stay: everything that speaks the
+     * plain "work : rest" pair — the entry card, the identity chip, the "Start 7:3" button —
+     * reads them and has no use for the rest. What could not be expressed with them is a
+     * schedule with a SECOND block, a changed order or a repeat, and that is exactly what used
+     * to be lost on the way to a run (see [scheduledRun]). So the schedule now travels whole,
+     * and [scheduleKind] is how a caller asks which of the three shapes it has.
+     *
+     * Null for a hold with no schedule at all, for any other form, and for the callers that
+     * build a ref by hand without one (fixtures, and the screens that only need a name and an
+     * id) — the same tolerance [uid] has, with the same consequence: such a ref reads as
+     * [ScheduleKind.NONE] and offers no conducted run.
+     */
+    val schedule: WorkoutProgram? = null,
 ) {
+    /** Which of the three shapes this exercise's schedule is — see [ScheduleKind]. */
+    val scheduleKind: ScheduleKind = scheduleKindOf(schedule)
+
     /**
      * A work:rest protocol is a pair or nothing at all (the [HoldSet] validator insists),
      * and both halves have to be POSITIVE.
@@ -75,6 +95,22 @@ data class ExerciseRef(
         } else {
             null
         }
+
+    /**
+     * Whether a tap can hand this exercise to the conductor at all.
+     *
+     * Two roads reach a run and they do not need the same things, which is why this is not
+     * simply "[protocol] is not null". A [ScheduleKind.PAIR] needs the pair itself, because the
+     * run is BUILT out of it. A [ScheduleKind.STRICT] schedule needs nothing but its own work
+     * steps — and it is allowed to open with a block that has NO REST, which reads as a null
+     * [protocol] and would have quietly demoted the richest schedules in the catalog back to
+     * the manual entry form.
+     */
+    val canBeConducted: Boolean = when (scheduleKind) {
+        ScheduleKind.NONE -> false
+        ScheduleKind.PAIR -> protocol != null
+        ScheduleKind.STRICT -> true
+    }
 
     /** How the journal names this exercise — see [ExerciseLink]. */
     val link: ExerciseLink = ExerciseLink(uid, id)

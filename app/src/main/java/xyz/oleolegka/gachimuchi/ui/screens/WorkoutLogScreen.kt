@@ -601,8 +601,14 @@ fun WorkoutLogScreen(
                          * conducting a set rather than taking a report of one, and there are
                          * no numbers to prefill a form with until the set has been done.
                          * `ledByProtocol` is the exercise's own answer (a maximum-weight hang
-                         * carries a protocol and is still led by weight — §13.2), and the
-                         * protocol has to actually be there for a run to be built out of it.
+                         * carries a protocol and is still led by weight — §13.2), and there has
+                         * to be something a run can actually be made of.
+                         *
+                         * That second test is `canBeConducted` and no longer "the protocol pair
+                         * is not null". A strict schedule (§18.15) may open with a block that
+                         * has no rest of its own, which reads as no pair at all — so the very
+                         * schedules that fix the most were the ones falling through to the
+                         * manual entry form.
                          *
                          * NOW side-aware: `exercise.side` is which of the two cards this tap
                          * landed on, and it is passed straight through to the run — the same
@@ -611,7 +617,7 @@ fun WorkoutLogScreen(
                          * each know which hand they counted, instead of one run that knows
                          * neither.
                          */
-                        ledByProtocol(ref) && ref.protocol != null -> {
+                        ledByProtocol(ref) && ref.canBeConducted -> {
                             {
                                 /*
                                  * ASK ONLY IF THERE WAS A PLATE LAST TIME (§13.5). Asking
