@@ -539,9 +539,22 @@ fun WorkoutLogScreen(
                 meta = listOfNotNull(
                     date?.let { fmtWeekdayDay(it) },
                     summaryOf(workout),
-                    // stated only once it means something: an unfinished workout has an end
-                    // time too, and it is simply "so far"
-                    "finished ${clockOf(workout.endTs)}".takeIf { workout.finished },
+                    /*
+                     * Stated only once it means something: an unfinished workout has an end
+                     * time too, and it is simply "so far".
+                     *
+                     * WHO closed it is said as well, because the app closing a workout by
+                     * itself (§18.18) is a thing the owner has to be able to see and undo: the
+                     * word is what explains why a workout they never finished is finished, and
+                     * "Reopen" in the same bar is the one tap back. The time is the LAST SET's
+                     * either way — an automatic close does not stretch the workout to the
+                     * moment the app noticed.
+                     */
+                    when {
+                        !workout.finished -> null
+                        workout.finishedAutomatically -> "closed after a pause, ${clockOf(workout.endTs)}"
+                        else -> "finished ${clockOf(workout.endTs)}"
+                    },
                 ).joinToString(" · "),
                 onClose = actions.close,
                 /*

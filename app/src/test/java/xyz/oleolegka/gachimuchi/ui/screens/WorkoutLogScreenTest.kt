@@ -934,6 +934,30 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("Reopen").assertIsDisplayed()
     }
 
+    /**
+     * A workout the APP closed says so, and says it at the time the training stopped (§18.18).
+     *
+     * The word is the only thing on screen that explains a workout the owner never finished
+     * reading as finished, and the "Reopen" beside it is the one tap back — which is the whole
+     * reason the owner accepted an automatic close over a question ("even if we close the wrong
+     * one it is not critical").
+     */
+    @Test
+    fun `a workout the app closed says so, and still ends at its last set`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, bench, restSec = 150)
+        journal.strengthSet(bench, iso, at = "18:10", workoutId = workout)
+        journal.strengthSet(bench, iso, at = "19:42", weightKg = 62.5, workoutId = workout)
+        // noticed hours later; the end must not follow the moment it was noticed
+        journal.finishWorkout(workout, iso, at = "23:55", auto = true)
+        show(journal, workout)
+
+        compose.onNodeWithText("Fri 7 Aug · 1 exercise, 2 sets · closed after a pause, 19:42")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Reopen").assertIsDisplayed()
+    }
+
     /** And an unfinished one says nothing about an end it has not reached. */
     @Test
     fun `an unfinished workout has no end time in its heading`() {

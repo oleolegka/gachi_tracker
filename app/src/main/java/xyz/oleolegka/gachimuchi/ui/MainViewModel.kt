@@ -159,6 +159,26 @@ class MainViewModel(
     private val timer: TimerController,
 ) : ViewModel() {
 
+    init {
+        /*
+         * THE FORGOTTEN WORKOUT IS CLOSED WHEN THE APP OPENS (§18.18).
+         *
+         * Without this the app comes up the morning after showing yesterday's workout as still
+         * running — a card on Today offering to continue it, and every set logged from that
+         * card landing inside it days later. The repository refuses to file a new set into an
+         * abandoned workout on its own (ActivityRepository.record), but that is the lock; this
+         * is the door, and a screen that shows a workout as open is a screen that invites the
+         * user through it deliberately, which no lock is entitled to override.
+         *
+         * Once, at start-up, rather than on a timer: this app has no background work and is
+         * not about to grow any for this. What that leaves uncovered is stated on
+         * [ActivityRepository.closeAbandonedWorkout] — an app held in the foreground across the
+         * threshold with nothing recorded goes on showing the workout until something is
+         * written.
+         */
+        viewModelScope.launch { repo.closeAbandonedWorkout() }
+    }
+
     val state: StateFlow<UiState> =
         combine(repo.events, repo.exercises, repo.slots, programRepo.programs) { events, exercises, slots, programs ->
             /*
