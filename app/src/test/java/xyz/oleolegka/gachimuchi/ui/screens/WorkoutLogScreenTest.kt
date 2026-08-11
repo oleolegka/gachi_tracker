@@ -1117,12 +1117,13 @@ class WorkoutLogScreenTest : ScreenTest() {
      * own. The run has carried its side since `RunSnapshot.side` existed; this screen never
      * asked for it.
      *
-     * ── What this does NOT prove, and it is the larger half ─────────────────────
-     * That the two hands can genuinely work at once. They cannot yet: there is ONE conductor for
-     * the whole app, and for a simple pair the rest between sets is a step of that conductor's
-     * program rather than a rest of its own card — so starting the right hand while the left is
-     * mid-run replaces that run. This test is about what the screen SAYS, which was wrong on its
-     * own terms; the architecture behind it is reported separately.
+     * ── What it is now, after §18.17 ────────────────────────────────────────────
+     * The refusal is down to the case it was always meant for: a set being conducted RIGHT NOW.
+     * There is still one conductor and `TimerController.start` still replaces a run without
+     * ceremony, so a second set cannot begin while the first is counting. What has gone is the
+     * long tail of it: the pause between sets used to be a step of that same run, so the
+     * conductor was held for the whole rest as well, which is when the other hand actually wants
+     * to start. A run is one set now — see the sibling test below for the RESTING case.
      */
     @Test
     fun `a run on the left hand does not make the right hand's card claim to be running`() {
@@ -1150,6 +1151,36 @@ class WorkoutLogScreenTest : ScreenTest() {
         compose.onNodeWithText("A set is already being conducted").assertExists()
         // and nothing was started on top of the run that is going
         assertEquals(emptyList<Triple<String, Double?, HoldSide?>>(), started)
+    }
+
+    /**
+     * The other half of the rule, and the whole point of §18.17: a card whose hand is RESTING is
+     * not busy. Nothing is being conducted — the left hand's countdown is a floor under its own
+     * card — so the right hand's tap starts its own set instead of meeting the refusal.
+     */
+    @Test
+    fun `the right hand starts its own set while the left hand is only resting`() {
+        val journal = Journal()
+        show(
+            journal,
+            twoCardWorkout(journal, oneArmHangs),
+            floors = listOf(
+                countingFloor(oneArmHangs.id, "One-arm hangs - Left", leftMs = 120_000, orderedMs = 240_000)
+                    .copy(side = HoldSide.LEFT.code)
+            ),
+            // nothing is under the conductor: the set is over, the rest is not
+            liveExerciseId = null,
+        )
+
+        compose.onNodeWithText("One-arm hangs - Right").performClick()
+        settle()
+
+        compose.onAllNodesWithText("A set is already being conducted").assertCountEquals(0)
+        compose.onNodeWithText("Start the set").performClick()
+        assertEquals(
+            listOf(Triple("One-arm hangs", 10.0, HoldSide.RIGHT)),
+            started,
+        )
     }
 
     // --- taking a set back ------------------------------------------------------------------
