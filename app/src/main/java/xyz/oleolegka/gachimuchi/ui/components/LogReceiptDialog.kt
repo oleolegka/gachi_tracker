@@ -63,8 +63,12 @@ fun LogReceiptDialog(
                      * tell the user their sets had been empty, which was both wrong and
                      * final-sounding. What is known is how much landed, and that is what is
                      * said, along with the one instruction that is always right.
+                     *
+                     * Drawn as a filled notice rather than as `warning`-coloured type, which on
+                     * the dialog surface measured 1.79:1 - the failure message was the least
+                     * legible text in the dialog. See WarningNotice for the arithmetic.
                      */
-                    Text(
+                    WarningNotice(
                         if (receipt.setCount == 0) {
                             "Something went wrong while writing to the journal, and nothing " +
                                 "was recorded. The run is still on offer - try again."
@@ -72,9 +76,7 @@ fun LogReceiptDialog(
                             "Something went wrong part way through: $sets reached the journal " +
                                 "on ${receipt.opDate}, and the rest did not. Check the day and " +
                                 "add what is missing by hand."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.warning,
+                        }
                     )
                 } else if (receipt.setCount == 0) {
                     /*

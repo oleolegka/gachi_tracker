@@ -499,8 +499,16 @@ object HeatmapMetrics {
     val gap: Dp = 3.dp
     val radius: Dp = 3.dp
 
-    /** Room on the left for the weekday ribbon (Mon / Wed / Fri / Sun). */
-    val weekdayGutter: Dp = 20.dp
+    /**
+     * Room on the left for the weekday ribbon (Mon / Wed / Fri / Sun).
+     *
+     * 28 and not the 20 it was: the labels were 9 sp, which is below the floor of the type
+     * scale, and at 11 sp "Wed" no longer fits in 20 dp. The eight dp come out of the grid,
+     * which is to say out of HALF A WEEK of the visible year (a week is 14 dp) - 23 columns
+     * on a 411 dp phone instead of 23.5. Paid knowingly: the gutter is the only thing tying
+     * a row of the grid to a day of the week, and 9 sp is not a size this app has.
+     */
+    val weekdayGutter: Dp = 28.dp
 
     /** Room on top for the month ribbon. */
     val monthRibbon: Dp = 13.dp

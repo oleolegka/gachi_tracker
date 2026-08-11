@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.OutlinedButton
@@ -41,12 +43,15 @@ import xyz.oleolegka.gachimuchi.ui.fmtRelativeDay
 import xyz.oleolegka.gachimuchi.ui.fmtValueParts
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * Overview: the score first, then the year, then the doors.
  *
- * The layout is the one from `design/prototype` §Overview: three blocks, 18 dp apart,
- * 15 dp side margins. Nothing on this screen is computed here — the hero counters, the
+ * The layout is `design-system/app-next/overview.html`: three blocks, 24 dp apart, 16 dp side
+ * margins — the numbers of the scale rather than the 18 and 15 the prototype was drawn with.
+ * Nothing on this screen is computed here — the hero counters, the
  * heatmap buckets and every tile come out of `domain/Analytics.kt`, which is what lets the
  * numbers be unit-tested and stops the screen from disagreeing with the detail screen it
  * leads to.
@@ -79,8 +84,15 @@ fun OverviewScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = PaddingValues(
+            start = Spacing.Block, end = Spacing.Block,
+            top = Spacing.Line, bottom = Spacing.Cards,
+        ),
+        // Cards and not Block. SYSTEM.md's translation table says "18 -> 16" and its table of
+        // MEANINGS says "between cards, 24"; the clarification of 2026-08-11 settled it for
+        // all four feeds at once in favour of the meaning, because 24 is what stands in the
+        // redraws the owner accepted.
+        verticalArrangement = Arrangement.spacedBy(Spacing.Cards),
     ) {
         item {
             HeroCard(
@@ -97,19 +109,40 @@ fun OverviewScreen(
 
         item {
             Column(Modifier.fillMaxWidth()) {
-                SectionHeader("Forms - tap for details", "sparkline - record")
-                // not "the empty state's way out": this is here whether or not there is a
-                // door tile below it, because the catalog is worked on independently of
-                // whether anything has been logged against it yet
-                OutlinedButton(onClick = { browsingCatalog = true }) {
-                    Text("Manage the exercise catalog")
+                /*
+                 * The legend says what the two marks on a tile MEAN, rather than naming the
+                 * component that draws one: "sparkline - record" answered a question nobody
+                 * asked, and half of it was the name of a widget.
+                 *
+                 * The catalog button is the header's action and no longer a full-width button
+                 * under it — see SectionHeader. It is here whether or not a tile follows,
+                 * because the catalog is worked on independently of whether anything has been
+                 * logged against it yet; it is not the empty state's way out.
+                 */
+                SectionHeader("Forms - tap for details") {
+                    OutlinedButton(
+                        onClick = { browsingCatalog = true },
+                        // 48 and not the mock-up's 40: a page in a browser is measured with
+                        // a mouse, and this is the same floor every chip in the app keeps.
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.Inset),
+                    ) {
+                        Text("Catalog")
+                    }
                 }
+                // a line of its own, under the header, because the header row now carries a
+                // control: a legend squeezed beside a button is a legend nobody reads
+                Text(
+                    "figure: last entries · pill: a record",
+                    fontSize = TextSize.Caption,
+                    color = LocalGachiColors.current.inkMuted,
+                    modifier = Modifier.padding(bottom = Spacing.Line),
+                )
                 if (tiles.isEmpty()) {
                     EmptyState(
                         title = "No workouts of any kind yet",
-                        hint = "Start on Today: a workout, or a single entry. The first one " +
-                            "shows up here as a tile and becomes the baseline every record " +
-                            "is measured against.",
+                        // one sentence (SYSTEM.md rule 5): what to do and where it turns up
+                        hint = "Start on Today - the first one shows up here as a tile.",
                     )
                 }
             }

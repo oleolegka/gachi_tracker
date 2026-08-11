@@ -42,7 +42,9 @@ class OverviewScreenTest : ScreenTest() {
     private val today = LocalDate.parse("2026-08-10")
 
     private fun openButton() {
-        compose.onNodeWithText("Manage the exercise catalog").performClick()
+        // "Catalog", not "Manage the exercise catalog": the way in is the section header's
+        // own action now rather than a full-width button underneath the header
+        compose.onNodeWithText("Catalog").performClick()
         settle()
         settle()
     }
