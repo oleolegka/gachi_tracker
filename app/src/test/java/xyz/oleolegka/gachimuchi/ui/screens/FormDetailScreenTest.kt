@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
@@ -71,7 +72,10 @@ class FormDetailScreenTest : ScreenTest() {
         runBlocking { ProgramRepository(realDb).programById(hangs.protocolProgramId!!)!! }
     }
 
+    private var editRequested: ExerciseEntity? = null
+
     private fun detail(exercise: ExerciseEntity = hangs) {
+        editRequested = null
         screen {
             FormDetailScreen(
                 state = UiState(
@@ -82,6 +86,7 @@ class FormDetailScreenTest : ScreenTest() {
                 exerciseId = exercise.id,
                 today = today,
                 onClose = {},
+                onEditExercise = { editRequested = it },
             )
         }
     }
@@ -112,47 +117,25 @@ class FormDetailScreenTest : ScreenTest() {
     }
 
     /**
-     * The dialog opens on what the exercise IS: the name in an editable field, the protocol
-     * as READ TEXT — it is a fact about the exercise now, not a field, because the protocol
-     * cannot be changed here any more (see `ui/components/ExerciseEditor.kt`'s
-     * `EditExerciseDialog`).
-     *
-     * The protocol is asserted as "7 : 3" — work and rest together, as the fixed fact is
-     * shown, not as two separate typeable numbers the way it used to be.
+     * Correcting is a SCREEN now, not a dialog raised inside this one, so what this screen
+     * owes is the request and nothing else: which exercise, handed up to
+     * [xyz.oleolegka.gachimuchi.ui.GachiApp], which draws
+     * [xyz.oleolegka.gachimuchi.ui.screens.EditExerciseScreen] over the top of this one. What
+     * that screen then SHOWS is pinned by `EditExerciseScreenTest` — the assertions that used
+     * to live here (the name in a field, "7 : 3" as read text, the sentence about the
+     * protocol being fixed) moved there with the thing they are about.
      */
     @Test
-    fun `the edit dialog opens on the values the exercise already has`() {
+    fun `the menu asks for this exercise to be corrected, and names which one`() {
         detail()
         openMenu()
 
         compose.onNodeWithText("Edit exercise").performClick()
         settle()
 
-        // twice: the heading the screen already had, and the field the dialog opened with
-        compose.onAllNodesWithText("Hangs").assertCountEquals(2)
-        compose.onNodeWithText("Name").assertIsDisplayed()
-        compose.onNodeWithText("7 : 3").assertIsDisplayed()
-        compose.onNodeWithText("Save").assertIsDisplayed()
-    }
-
-    /**
-     * The caveat is on the screen, not only in a KDoc: the protocol is fixed, and an exercise
-     * genuinely moved to another protocol is a different exercise, created as one.
-     */
-    @Test
-    fun `the edit dialog says the protocol is fixed and why`() {
-        detail()
-        openMenu()
-
-        compose.onNodeWithText("Edit exercise").performClick()
-        settle()
-
-        compose.onNodeWithText("Fixed.", substring = true).assertIsDisplayed()
-        // the screen opens the sentence, so the C is capital - and this matcher is case
-        // sensitive, which is what made the lower-cased version of this line fail
-        compose.onNodeWithText("Create it as a new", substring = true).assertIsDisplayed()
-        // and the form is stated as the thing that cannot move either
-        compose.onNodeWithText("The form stays holds", substring = true).assertIsDisplayed()
+        assertEquals(hangs.id, editRequested?.id)
+        // and nothing opened over this screen: the mode is the app's to draw, not this one's
+        compose.onNodeWithText("Save").assertDoesNotExist()
     }
 
     // --- the records block, merged across a one-sided exercise's two hands -----------------

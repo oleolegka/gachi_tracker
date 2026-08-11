@@ -46,6 +46,7 @@ import xyz.oleolegka.gachimuchi.ui.components.rememberTimerEnabler
 import xyz.oleolegka.gachimuchi.ui.screens.CalendarScreen
 import xyz.oleolegka.gachimuchi.ui.screens.ConductorScreen
 import xyz.oleolegka.gachimuchi.ui.screens.DayEntriesScreen
+import xyz.oleolegka.gachimuchi.ui.screens.EditExerciseScreen
 import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
 import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
@@ -151,6 +152,16 @@ fun GachiApp(viewModel: MainViewModel) {
      */
     var conductorOpen by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditorTarget?>(null) }
+    /*
+     * WHICH exercise is being corrected, or null for "none". An id and not the row itself:
+     * the row is looked up out of [state] on every frame, so a picture attached on that
+     * screen — written straight to the catalog, outside its Save — is on screen as soon as
+     * the catalog flow comes round, with nothing here to keep in step.
+     *
+     * Saved, unlike [editing]: this screen is where the camera is opened from, and opening
+     * the camera is the ordinary way for this process to be killed and rebuilt.
+     */
+    var editingExerciseId by rememberSaveable { mutableStateOf<Long?>(null) }
     // the form detail screen is a MODE over the overview, like the logging screen: it has
     // exactly one way out and nothing to navigate to from inside it
     var detailExerciseId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -340,9 +351,11 @@ fun GachiApp(viewModel: MainViewModel) {
         tab = tab,
         conducting = conductorOpen && timerRun != null,
         showingDayEntries = entriesExerciseId != null && entriesDate != null,
+        editingExercise = editingExerciseId != null,
     )
     BackHandler(enabled = step != BackStep.LeaveApp) {
         when (step) {
+            BackStep.CloseExerciseEdit -> editingExerciseId = null
             BackStep.CloseEditor -> editing = null
             BackStep.CloseFormDetail -> detailExerciseId = null
             // the set keeps running, keeps speaking, and the card leads back to it
@@ -426,6 +439,8 @@ fun GachiApp(viewModel: MainViewModel) {
     // held in locals so the branches below smart-cast, and so the order of the branches is
     // literally the order of [backStep]
     val editorTarget = editing
+    // the row the correction screen is drawn from; gone from under it means the mode is over
+    val correcting = editingExerciseId?.let { state.exerciseById(it) }
     val detailId = detailExerciseId
     val loggingOn = loggingDate
     val loggingWorkout = loggingWorkoutId
@@ -434,6 +449,18 @@ fun GachiApp(viewModel: MainViewModel) {
     val entriesOn = entriesDate
 
     when {
+        /*
+         * The exercise correction screen, first because it is drawn OVER the form detail
+         * screen that opens it — the same order [backStep] is written in. It falls away by
+         * itself if the row it is correcting leaves the catalog, which is what an id rather
+         * than a captured row buys.
+         */
+        correcting != null -> EditExerciseScreen(
+            exercise = correcting,
+            program = correcting.protocolProgramId?.let { id -> programs.firstOrNull { it.id == id } },
+            onClose = { editingExerciseId = null },
+        )
+
         editorTarget != null -> ProgramEditorScreen(
             initial = editorTarget.program,
             candidates = holdExercises,
@@ -451,6 +478,7 @@ fun GachiApp(viewModel: MainViewModel) {
             exerciseId = detailId,
             today = today,
             onClose = { detailExerciseId = null },
+            onEditExercise = { editingExerciseId = it.id },
         )
 
         /*

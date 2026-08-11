@@ -1,6 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
-import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
@@ -55,10 +55,10 @@ class RunLogDialogIncompleteTest : ScreenTest() {
             )
         }
 
-        // three rows, three "Not completed" chips — the middle row's own one
-        compose.onAllNodesWithText("Not completed")[1].performClick()
+        // three rows, three checkboxes under one heading — the middle row's own one
+        compose.onNodeWithContentDescription("Set 2 not completed").performClick()
         settle()
-        compose.onNodeWithText("Log 3 sets").performClick()
+        compose.onNodeWithText("Write down 3 sets").performClick()
         settle()
 
         val written = logged

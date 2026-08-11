@@ -433,12 +433,12 @@ class RunLogTest {
     // --- the line the offer is read from ---------------------------------------------------
 
     @Test
-    fun `the summary says how many sets and how many efforts in each`() {
+    fun `the summary says how many efforts each set held, and does not count the sets`() {
         val full = completedSets(steps, steps.lastIndex, finished = true)
-        assertEquals("4 sets - 6 + 6 + 6 + 6 efforts of 7 s", runSummaryLine(full))
+        assertEquals("6 + 6 + 6 + 6 efforts of 7 s", runSummaryLine(full))
 
         val short = completedSets(steps, 29, finished = false)
-        assertEquals("3 sets - 6 + 6 + 2 efforts of 7 s", runSummaryLine(short))
+        assertEquals("6 + 6 + 2 efforts of 7 s", runSummaryLine(short))
 
         assertEquals("Nothing was completed.", runSummaryLine(emptyList()))
         assertEquals("Nothing was completed.", runSummaryLine(full.map { it.copy(reps = 0) }))

@@ -49,6 +49,15 @@ val HomeTab = Tab.TODAY
 
 /** What a back gesture does, given what is currently on screen. See [backStep]. */
 sealed interface BackStep {
+    /**
+     * Leave the exercise correction screen without saving.
+     *
+     * It is the only mode reached from INSIDE another mode (the form detail screen opens it),
+     * which is why it sits first: back has to close the thing in front, and this is in front
+     * of whatever opened it.
+     */
+    data object CloseExerciseEdit : BackStep
+
     /** Leave the program editor, discarding whatever was not saved. */
     data object CloseEditor : BackStep
 
@@ -128,7 +137,15 @@ fun backStep(
      * nothing to say about it.
      */
     showingDayEntries: Boolean = false,
+    /**
+     * The exercise correction screen has the window. Defaulted like the two above it, and for
+     * the same reason: it is reached from one place (the menu on the form detail screen), so
+     * most callers have nothing to say about it.
+     */
+    editingExercise: Boolean = false,
 ): BackStep = when {
+    // above the program editor and everything else: it is opened from inside another mode
+    editingExercise -> BackStep.CloseExerciseEdit
     editingProgram -> BackStep.CloseEditor
     showingFormDetail -> BackStep.CloseFormDetail
     // above logging, because it is drawn over it: the conductor is entered from a card in
