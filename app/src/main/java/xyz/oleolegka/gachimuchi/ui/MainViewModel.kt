@@ -56,6 +56,7 @@ import xyz.oleolegka.gachimuchi.domain.evaluateHoldRecord
 import xyz.oleolegka.gachimuchi.domain.evaluateStrengthRecord
 import xyz.oleolegka.gachimuchi.domain.exerciseLink
 import xyz.oleolegka.gachimuchi.domain.holdSetsOfExercise
+import xyz.oleolegka.gachimuchi.domain.isSimplePair
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.programFromExercise
@@ -895,6 +896,30 @@ class MainViewModel(
     fun startProgramForExercise(start: ProgramStart) {
         _entryAddedKg.value = start.addedKg
         viewModelScope.launch {
+            /*
+             * A STRICT schedule is run exactly as it was written, and nothing about it is
+             * rebuilt (§18.15).
+             *
+             * The path below this is the "simple pair" one: it takes the exercise's two
+             * numbers and multiplies them out by a rep count guessed from the last set and a
+             * set count from the settings. That is right when the schedule really is a pair —
+             * it carries no rep or set count of its own, so they have to come from somewhere —
+             * and it is destructive for anything richer. It reads only the FIRST BLOCK, so a
+             * schedule of "hang 7 s, rest 3 s, six times, four sets, three minutes between"
+             * came out as a single 7:3 pair repeated by whatever the settings happened to say,
+             * with a second block or a second group dropped on the floor and no sign anywhere
+             * that anything had been lost.
+             *
+             * Its own `prepareSec` is kept rather than overridden from the settings for the
+             * same reason: the lead-in is one of the timings the strict branch promises to fix.
+             */
+            val schedule = repo.exercise(start.exercise.id)?.protocolProgramId
+                ?.let { programRepo.programById(it) }
+            if (schedule != null && !schedule.isSimplePair()) {
+                timer.start(schedule, start.exercise.id, RunOrigin.EXERCISE, start.side)
+                return@launch
+            }
+
             val events = repo.allEvents()
             val settings = timerSettings.value
             val reps = lastHoldSet(events, start.exercise.link)?.reps ?: DEFAULT_HOLD_REPS
