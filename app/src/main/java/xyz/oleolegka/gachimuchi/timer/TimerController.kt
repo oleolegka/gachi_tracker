@@ -356,6 +356,41 @@ class TimerController internal constructor(
         }
     }
 
+    /**
+     * Takes the conductor down, and the offer it would leave, when what it is counting for has
+     * just been removed from the journal.
+     *
+     * ── Why the floors alone were never enough ──────────────────────────────────
+     * Every delete path in the app already dismisses the RESTS of what it removes, and that was
+     * treated as the whole answer twice. It is not. A conducted set is not a floor: it is the
+     * single run this class owns, and it holds a foreground service, a wake lock, an exact
+     * alarm, the notification and the speaker. Nothing about a run ever asks whether the
+     * exercise it was started from still exists, so a workout deleted while a protocol was
+     * counting left the phone counting — and talking, and holding a notification — for a
+     * session no longer in the log. That is the report "I deleted the workout and the exercises
+     * ages ago and their timer is still going in the background", and dismissing floors does not
+     * touch it.
+     *
+     * ── The offer goes AFTER the stop, and the order is the whole of it ─────────
+     * [stop] is what builds an offer out of the part that did run. Clearing first would clear
+     * nothing and then be handed a fresh offer proposing sets against a deleted exercise —
+     * a dialog that cannot be answered, since the exercise it names is gone.
+     *
+     * [side] narrows this to ONE CARD when [exactSide] is set, which is what removing the left
+     * hand's card of a one-sided exercise means: the right hand's run is nobody's orphan and
+     * must keep counting. With [exactSide] false the exercise itself is going and the run of
+     * either hand is equally orphaned, so the side is not consulted at all.
+     */
+    fun stopFor(exerciseId: Long, side: HoldSide? = null, exactSide: Boolean = false) {
+        synchronized(lock) {
+            fun matches(runExerciseId: Long?, runSide: String?): Boolean =
+                runExerciseId == exerciseId && (!exactSide || runSide == side?.code)
+
+            _run.value?.let { if (matches(it.exerciseId, it.side)) stop() }
+            _outcome.value?.let { if (matches(it.exerciseId, it.side)) clearOutcome() }
+        }
+    }
+
     /** Re-reads the clock and redraws, without changing anything. */
     fun refresh() = mutate { snapshot, _ -> snapshot }
 

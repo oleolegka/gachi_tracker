@@ -323,6 +323,23 @@ fun WorkoutLogScreen(
      */
     liveExerciseId: Long? = null,
     /**
+     * Which CARD of [liveExerciseId] that run belongs to — [HoldSide.code], or null when the
+     * exercise has only one card (and for a run started from the timer tab, which is no card's).
+     *
+     * ── Without it, one run makes BOTH hands look busy ──────────────────────────
+     * A one-sided exercise draws two cards, and "is this card running?" used to be answered by
+     * the exercise id alone. So a set conducted on the left hand marked the RIGHT hand's card as
+     * running too: it said so in words, and its tap led to the left hand's conductor instead of
+     * starting anything. Reported from the phone as "it turns out the timer is going for the
+     * right hand as well — it is glued together for the two hands".
+     *
+     * The run has carried the answer since [RunSnapshot.side] existed; this screen simply never
+     * asked for it. Note what this does NOT fix, because it is not a drawing problem: the two
+     * hands still share ONE conductor, so starting the right hand while the left one is mid-run
+     * replaces that run rather than joining it. See the report accompanying this change.
+     */
+    liveSide: String? = null,
+    /**
      * What matured while a protocol-led set had the rests muted, as one sentence, or null.
      *
      * Computed and spoken already (domain/Floors.kt, `floorSummaryText`); this is the only
@@ -592,7 +609,8 @@ fun WorkoutLogScreen(
                 // an exercise this phone has no catalog row for cannot have a form built
                 // for it, so it is shown and not offered — see WorkoutExercise.exerciseId
                 val ref = state.refById(id)
-                val running = id != null && id == liveExerciseId
+                // the CARD is running, not the exercise — see [liveSide]
+                val running = id != null && id == liveExerciseId && exercise.side?.code == liveSide
                 ExerciseCard(
                     name = exerciseName(state, exercise),
                     restSec = exercise.restSec,

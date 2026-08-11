@@ -632,6 +632,7 @@ fun GachiApp(viewModel: MainViewModel) {
                 floors = restFloors,
                 actions = workoutActions,
                 liveExerciseId = timerRun?.exerciseId,
+                liveSide = timerRun?.side,
                 readySummary = floorSummary,
                 onDismissSummary = viewModel::dismissFloorSummary,
             )

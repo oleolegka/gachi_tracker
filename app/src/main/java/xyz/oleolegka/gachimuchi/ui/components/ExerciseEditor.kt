@@ -8,6 +8,7 @@ import kotlinx.coroutines.launch
 import xyz.oleolegka.gachimuchi.data.ActivityRepository
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.data.db.ExerciseEntity
+import xyz.oleolegka.gachimuchi.timer.TimerController
 import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 
 /**
@@ -69,13 +70,33 @@ fun rememberExerciseEditor(): ExerciseEditor {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repo = remember(context) { ActivityRepository(AppDatabase.get(context)) }
+    // the one the whole process shares — the same object the workout screen's deletes reach
+    val timer = remember(context) { TimerController.get(context) }
 
-    return remember(repo) {
+    return remember(repo, timer) {
         ExerciseEditor(
             toggleHidden = { exercise ->
                 scope.launch { repo.setHidden(exercise.id, !exercise.hidden) }
             },
             delete = { exercise ->
+                /*
+                 * THE COUNTDOWNS FIRST, and outside the coroutine.
+                 *
+                 * Deleting a catalog row takes the exercise off every screen, and that used to be
+                 * the whole of this. It is not: a rest under its card and a protocol run started
+                 * from it both outlive the screen they began on — they are a foreground service, a
+                 * notification and an exact alarm — and neither of them ever asks whether the row
+                 * still exists. The exercise then disappears from the app while the phone goes on
+                 * counting, and eventually speaking, for it. That is what "I deleted them ages ago
+                 * and their timer is still going in the background" describes, and no amount of
+                 * work inside `deleteExercise` could have fixed it: the timer is not in the
+                 * database.
+                 *
+                 * Both cards of it, and the conductor whichever hand it was counting — the whole
+                 * exercise is going, so there is no card left that a countdown could belong to.
+                 */
+                timer.floors.dismissAllOf(exercise.id)
+                timer.stopFor(exercise.id)
                 scope.launch { repo.deleteExercise(exercise) }
             },
             create = { new ->
