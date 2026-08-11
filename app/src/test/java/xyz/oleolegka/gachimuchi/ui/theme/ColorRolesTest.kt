@@ -69,6 +69,12 @@ class ColorRolesTest : ScreenTest() {
         "SecondaryContainer", "OnSecondaryContainer",
         "Background", "OnBackground", "Surface", "OnSurface",
         "SurfaceVariant", "OnSurfaceVariant", "Outline", "OutlineVariant", "Error",
+        // The container ladder. The tab bar, every dialog, every dropdown menu, every modal
+        // sheet and the track of a progress bar are painted from these, and they shipped as
+        // baseline lavender because nobody set them.
+        "SurfaceBright", "SurfaceDim", "SurfaceContainer", "SurfaceContainerLow",
+        "SurfaceContainerLowest", "SurfaceContainerHigh", "SurfaceContainerHighest",
+        "InverseSurface", "InverseOnSurface", "Scrim",
     )
 
     /**
@@ -160,9 +166,19 @@ class ColorRolesTest : ScreenTest() {
 
     private companion object {
         /**
-         * Thirty-three roles this app has never set. Every one of them is baseline Material
+         * Twenty-three roles this app has never set. Every one of them is baseline Material
          * lavender in both themes, and any control that reads one draws in it — which is
          * exactly what the floating button did.
+         *
+         * Ten names left this list on 2026-08-11, when the theme claimed the container
+         * ladder: the tab bar, the dialogs, the menus, the modal sheets and the progress
+         * track had all been drawing in lavender through it.
+         *
+         * What is left is reachable only through Material controls this app does not use:
+         * `Tertiary*` (nothing in Material reads it by default), `*Fixed*` (the roles for
+         * colour shared across surfaces), `InversePrimary` and `ErrorContainer` (a snackbar
+         * action and a filled error container). If one of these is ever wanted on screen,
+         * claiming it means setting it in `Theme.kt` and taking the name out of here.
          *
          * `OnPrimary` is on the list by coincidence rather than by omission: the light scheme
          * sets it to white deliberately, and Material's own default is white too, so no test
@@ -170,14 +186,12 @@ class ColorRolesTest : ScreenTest() {
          * because it is the one entry here that is NOT a gap.
          */
         val UNCLAIMED_ROLES = listOf(
-            "ErrorContainer", "InverseOnSurface", "InversePrimary", "InverseSurface",
+            "ErrorContainer", "InversePrimary",
             "OnError", "OnErrorContainer", "OnPrimary", "OnPrimaryFixed",
             "OnPrimaryFixedVariant", "OnSecondary", "OnSecondaryFixed",
             "OnSecondaryFixedVariant", "OnTertiary", "OnTertiaryContainer", "OnTertiaryFixed",
-            "OnTertiaryFixedVariant", "PrimaryFixed", "PrimaryFixedDim", "Scrim", "Secondary",
-            "SecondaryFixed", "SecondaryFixedDim", "SurfaceBright", "SurfaceContainer",
-            "SurfaceContainerHigh", "SurfaceContainerHighest", "SurfaceContainerLow",
-            "SurfaceContainerLowest", "SurfaceDim", "Tertiary", "TertiaryContainer",
+            "OnTertiaryFixedVariant", "PrimaryFixed", "PrimaryFixedDim", "Secondary",
+            "SecondaryFixed", "SecondaryFixedDim", "Tertiary", "TertiaryContainer",
             "TertiaryFixed", "TertiaryFixedDim",
         )
     }

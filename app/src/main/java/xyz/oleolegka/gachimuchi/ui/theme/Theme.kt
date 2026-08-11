@@ -91,6 +91,40 @@ private val DarkGachiColors = GachiColors(
 
 val LocalGachiColors = staticCompositionLocalOf { LightGachiColors }
 
+/*
+ * ── The container ladder ────────────────────────────────────────────────────────
+ * Material paints a whole family of chrome from the `surfaceContainer*` roles rather than
+ * from `surface`, and an unset role does NOT fall back to `surface`: it falls back to the
+ * baseline Material lavender. That is what the bottom tab bar, every AlertDialog, every
+ * dropdown menu, every modal sheet and the track of LinearProgressIndicator were painted
+ * with — a purple nobody chose, next to a palette that had been checked for contrast.
+ *
+ * Who reads what (Material 3, the components this app actually uses):
+ *   surfaceContainer         tab bar (NavigationBar), dropdown menu
+ *   surfaceContainerHigh     AlertDialog
+ *   surfaceContainerLow      modal bottom sheet
+ *   surfaceContainerHighest  the track of a progress indicator, a filled text field
+ *   surfaceContainerLowest / surfaceBright / surfaceDim   nothing today; set so that the
+ *                            next component to reach for one does not find lavender
+ *   inverseSurface / inverseOnSurface   a snackbar, a plain tooltip
+ *   scrim                    the dim behind a modal sheet
+ *
+ * Values come from `design-system/app-next/calendar.html` section F. Two deliberate
+ * departures, both recorded there or forced by it:
+ *
+ * 1. The dark theme has ONE tone above the card (#242422), so sheet, menu, dialog and tab
+ *    bar all get it. Section F says as much: the palette is closed, and the levels are told
+ *    apart by border and shadow instead of by fill.
+ * 2. `scrim` is our INK, not a translucent black. Section F states the composited result
+ *    (black at 32 %), but Material's `scrim` role is the base colour to which the component
+ *    applies its own 0.32 alpha — handing it a colour that is already 32 % would dim the
+ *    plane by ten per cent instead of thirty-two.
+ *
+ * Section F contradicts itself once, and the role names win over its prose: it calls the
+ * dialog `surface` (#FCFCFB) in one line and maps `surfaceContainerHigh` — the role an
+ * AlertDialog actually reads — to #F0EFEC in the next. Dialogs therefore come out on the
+ * recessed tone, a hair darker than a card, which is also what the lavender it replaces was.
+ */
 private val LightScheme = lightColorScheme(
     primary = AccentLight,
     onPrimary = Color.White,
@@ -111,6 +145,17 @@ private val LightScheme = lightColorScheme(
     outline = GridLight,
     outlineVariant = GridLight,
     error = StatusCritical,
+    // The container ladder — see the block comment above for who reads which role.
+    surfaceBright = SurfaceLight,
+    surfaceContainerLowest = PlaneLight,
+    surfaceContainerLow = SurfaceLight,
+    surfaceContainer = SurfaceRecessedLight,
+    surfaceContainerHigh = SurfaceRecessedLight,
+    surfaceContainerHighest = GridLight,
+    surfaceDim = GridLight,
+    inverseSurface = InkLight,
+    inverseOnSurface = SurfaceLight,
+    scrim = InkLight,
 )
 
 private val DarkScheme = darkColorScheme(
@@ -131,6 +176,19 @@ private val DarkScheme = darkColorScheme(
     outline = GridDark,
     outlineVariant = GridDark,
     error = StatusCritical,
+    // The container ladder, mirrored: our palette has ONE step above the card in the dark
+    // theme, so the sheet, the menu, the dialog and the tab bar all land on it.
+    surfaceBright = SurfaceRecessedDark,
+    surfaceContainerLowest = PlaneDark,
+    surfaceContainerLow = SurfaceRecessedDark,
+    surfaceContainer = SurfaceRecessedDark,
+    surfaceContainerHigh = SurfaceRecessedDark,
+    surfaceContainerHighest = SurfaceRecessedDark,
+    surfaceDim = PlaneDark,
+    inverseSurface = InkDark,
+    inverseOnSurface = SurfaceDark,
+    // Not InkDark: the scrim is the dim BEHIND a sheet, and it has to be dark in both themes.
+    scrim = InkLight,
 )
 
 /**
