@@ -617,7 +617,7 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
 
 /** One side's best on a record card: what it is, what it was, and when. */
 private data class RecordColumn(
-    /** "Left" / "Right" / "No side", or null when the axis is not split by side at all. */
+    /** "Left" / "Right", or null when the axis is not split by side at all. */
     val side: String?,
     val value: String,
     val unit: String?,
