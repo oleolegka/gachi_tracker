@@ -218,15 +218,26 @@ fun GachiApp(viewModel: MainViewModel) {
     val programCategories = remember(programs) { knownCategories(programs) }
 
     /*
-     * Every program id some exercise's protocol currently IS — the UI-side mirror of
-     * ProgramRepository.isReferenced, computed here from state already loaded rather than by
-     * a second query, because both this screen's lock and TimerScreen's freeze badge need the
-     * same answer on every recomposition of a live catalog. The enforcement itself lives in
-     * the repository (see save's own KDoc); this is only what decides which controls to show.
+     * Every program some exercise's protocol currently IS, and the exercises that point at it
+     * — the UI-side mirror of ProgramRepository.isReferenced, computed here from state already
+     * loaded rather than by a second query, because both this screen's lock and TimerScreen's
+     * schedule section need the same answer on every recomposition of a live catalog. The
+     * enforcement itself lives in the repository (see save's own KDoc); this is only what
+     * decides which controls to show.
+     *
+     * A LIST of names per program, not one name: twins (a hang on 20 mm and the same hang on
+     * 15 mm) deliberately share one schedule (decisions §18.15), and a row that named only the
+     * first of them would read as if the other one had none.
      */
-    val referencedProgramIds = remember(state.exercises) {
-        state.exercises.mapNotNull { it.protocolProgramId }.toSet()
+    val scheduleOwners = remember(state.exercises) {
+        val owners = LinkedHashMap<Long, MutableList<String>>()
+        for (exercise in state.exercises) {
+            val programId = exercise.protocolProgramId ?: continue
+            owners.getOrPut(programId) { mutableListOf() } += exercise.name
+        }
+        owners.mapValues { it.value.toList() }
     }
+    val referencedProgramIds = scheduleOwners.keys
 
     /*
      * Opening the entry card. Kept current by rememberUpdatedState so the lambdas handed to
@@ -704,6 +715,7 @@ fun GachiApp(viewModel: MainViewModel) {
                         exerciseNames = remember(state.exercises) {
                             state.exercises.associate { it.id to it.name }
                         },
+                        scheduleOwners = scheduleOwners,
                         onRunProgram = viewModel::runProgram,
                         onEditProgram = { editing = EditorTarget(it) },
                         onDeleteProgram = viewModel::deleteProgram,

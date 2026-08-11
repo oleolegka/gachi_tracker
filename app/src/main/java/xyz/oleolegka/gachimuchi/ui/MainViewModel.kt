@@ -926,6 +926,13 @@ class MainViewModel(
         viewModelScope.launch { programRepo.save(program) }
     }
 
+    /**
+     * Removes a program from the library. A program that is some exercise's schedule is
+     * refused by the repository and the answer is dropped here on purpose: the only screen
+     * that calls this draws no delete button for such a row (`ui/screens/TimerScreen.kt`), so
+     * a refusal reaching this point would be a bug elsewhere and not something to report to
+     * someone who never asked.
+     */
     fun deleteProgram(id: Long) {
         viewModelScope.launch { programRepo.delete(id) }
     }

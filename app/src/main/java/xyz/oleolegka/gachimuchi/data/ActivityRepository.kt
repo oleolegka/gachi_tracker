@@ -1006,7 +1006,15 @@ class ActivityRepository(private val db: AppDatabase) {
         programRepo.allPrograms().firstOrNull { it.isMinimalProtocol(workInt, restInt) }?.let { return it }
         val id = programRepo.save(
             WorkoutProgram(
-                name = "$exerciseName protocol",
+                /*
+                 * "schedule", the owner's own word for the timed scenario of a hold (decisions
+                 * §18.15), and the word the library now files these under. It used to say
+                 * "protocol", which under a heading reading "Exercise schedules" was two words
+                 * for one thing. Only NEW rows: the names already written stay as they are —
+                 * identity is keyed on uid, never on the name, so a mass rewrite of stored data
+                 * would buy a caption and risk a migration.
+                 */
+                name = "$exerciseName schedule",
                 prepareSec = PREPARE_DEFAULT_SEC,
                 category = "Protocols",
                 groups = listOf(
