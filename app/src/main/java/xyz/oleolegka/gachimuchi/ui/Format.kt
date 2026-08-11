@@ -94,6 +94,7 @@ fun fmtDistance(m: Double): String =
 private val dayFormat = DateTimeFormatter.ofPattern("d MMMM", Locale.ENGLISH)
 private val monthFormat = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH)
 private val shortDayFormat = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
+private val axisDayYearFormat = DateTimeFormatter.ofPattern("d MMM yy", Locale.ENGLISH)
 private val shortMonthFormat = DateTimeFormatter.ofPattern("MMM", Locale.ENGLISH)
 private val weekdayDayFormat = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
@@ -238,6 +239,17 @@ fun fmtWeekdayDay(d: LocalDate): String = d.format(weekdayDayFormat)
 
 /** A short day for a chart axis or a badge: "6 Aug". */
 fun fmtShortDay(d: LocalDate): String = d.format(shortDayFormat)
+
+/**
+ * A day on an axis that may cross a new year: "6 Aug", or "6 Aug 25" when [withYear].
+ *
+ * Reported from the phone: the year window ran "11 Aug ... 10 Aug" and read as a single day
+ * twice over. It was not wrong - 11 August 2025 to 10 August 2026 is exactly a year - but a
+ * label that omits the one field telling the two apart is not a label. The caller decides,
+ * because it is the only one that knows the whole span: see Charts.kt's drawXDates.
+ */
+fun fmtAxisDay(d: LocalDate, withYear: Boolean): String =
+    if (withYear) d.format(axisDayYearFormat) else d.format(shortDayFormat)
 
 /**
  * How long ago a day was, in words: the caption under a tile title.

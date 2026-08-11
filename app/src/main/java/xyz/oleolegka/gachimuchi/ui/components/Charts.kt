@@ -26,7 +26,7 @@ import xyz.oleolegka.gachimuchi.domain.AxisSlot
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
 import xyz.oleolegka.gachimuchi.ui.fmtAxis
 import xyz.oleolegka.gachimuchi.ui.fmtOnChart
-import xyz.oleolegka.gachimuchi.ui.fmtShortDay
+import xyz.oleolegka.gachimuchi.ui.fmtAxisDay
 import xyz.oleolegka.gachimuchi.ui.theme.GachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import java.time.LocalDate
@@ -233,9 +233,19 @@ private fun DrawScope.drawXDates(
 ) {
     val style = axisTextStyle(colors.inkMuted)
     val y = plot.bottom + 5.dp.toPx()
+    /*
+     * The year is printed when, and only when, the axis crosses one.
+     *
+     * Reported from the phone: the year window read "11 Aug ... 10 Aug". Nothing was wrong
+     * with the frame - 11 August 2025 to 10 August 2026 IS a year - but "d MMM" drops the one
+     * field that tells the two ends apart, so a year of training was captioned as a day
+     * repeated. A month window has no such ambiguity and pays no clutter for it.
+     */
+    val years = dates.map { LocalDate.parse(it).year }
+    val crossesYears = years.isNotEmpty() && years.first() != years.last()
     for (index in labelIndices(dates.size, maxLabels)) {
         val x = slotX(index, dates.size, plot)
-        val text = fmtShortDay(LocalDate.parse(dates[index]))
+        val text = fmtAxisDay(LocalDate.parse(dates[index]), withYear = crossesYears)
         val half = measurer.width(text, style) / 2f
         // the end labels are pulled inside the canvas instead of being clipped in half
         val clamped = x.coerceIn(plot.left - 2.dp.toPx() + half, size.width - half)
