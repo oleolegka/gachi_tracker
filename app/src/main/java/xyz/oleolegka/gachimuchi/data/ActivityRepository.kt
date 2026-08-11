@@ -581,7 +581,7 @@ class ActivityRepository(private val db: AppDatabase) {
      * it needs a `Context` this class is deliberately never handed (see
      * [xyz.oleolegka.gachimuchi.data.GalleryStore] for the same split). The caller is expected
      * to have already copied the new file in, and to
-     * remove the old one after this returns; see `ui/components/ExerciseEditor.kt`, the only
+     * remove the old one after this returns; see `ui/screens/EditExerciseScreen.kt`, the only
      * caller, for where that happens.
      */
     suspend fun setPicture(exerciseId: Long, pictureId: String?) =
@@ -890,7 +890,7 @@ class ActivityRepository(private val db: AppDatabase) {
          * row is an exercise that already exists with its own history, and what it says about
          * itself is its own: silently flipping it here would split or re-merge its records
          * from a screen that thought it was creating something. Correcting an existing one is
-         * the edit dialog's job — see `ui/components/ExerciseEditor.kt`.
+         * the edit screen's job — see `ui/screens/EditExerciseScreen.kt`.
          */
         oneSided: Boolean = false,
         /**
@@ -976,9 +976,9 @@ class ActivityRepository(private val db: AppDatabase) {
 
     // --- the protocol program a plain work:rest pair resolves to (requirement 3) ----------
     //
-    // The exercise create/edit dialogs still ask for two plain numbers, Work and Rest — see
-    // ui/screens/ExercisePicker.kt's CreateExerciseForm and ui/components/ExerciseEditor.kt's
-    // EditExerciseDialog, neither of which changed shape for this. All of the "an exercise's
+    // Creating an exercise still asks for two plain numbers, Work and Rest — see
+    // ui/screens/ExercisePicker.kt's CreateExerciseForm; correcting one shows the same pair as
+    // a fixed fact (ui/screens/EditExerciseScreen.kt). Neither changed shape for this. All of the "an exercise's
     // protocol is a library program now" logic lives here instead, so that a person filling in
     // two boxes gets a program in the library for free and never sees one being built.
 

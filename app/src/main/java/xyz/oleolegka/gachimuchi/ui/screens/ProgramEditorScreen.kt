@@ -67,7 +67,7 @@ import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
  * READ TEXT rather than fields: "such a thing cannot happen: it breaks the statistics. If
  * yesterday it was one protocol and today another, that is a NEW exercise" is the owner's own
  * words for why this screen must not be the second door onto the same mistake the exercise
- * editor already closed (`ui/components/ExerciseEditor.kt`'s `EditExerciseDialog`).
+ * editor already closed (`ui/screens/EditExerciseScreen.kt`).
  *
  * NOT locked: the name, the category and the exercise link. None of the three is part of an
  * identity keyed on the program's uid (`domain/Catalog.kt`'s `ExerciseIdentity`), and a name a
