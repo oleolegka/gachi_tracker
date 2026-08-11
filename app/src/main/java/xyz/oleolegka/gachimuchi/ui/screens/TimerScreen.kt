@@ -1,23 +1,29 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -36,6 +42,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.domain.NUDGE_SEC
@@ -62,6 +69,7 @@ import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.isEffort
 import xyz.oleolegka.gachimuchi.ui.components.rememberProgramTransfer
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
+import xyz.oleolegka.gachimuchi.ui.theme.InkLight
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 import xyz.oleolegka.gachimuchi.ui.theme.TextSize
@@ -362,102 +370,208 @@ internal fun RunPanel(state: TimerUiState, actions: TimerActions) {
     val upcoming = nextStep(snapshot.steps, snapshot.state, now)
     val singleStep = snapshot.steps.size == 1
 
+    val paused = phase == RunPhase.PAUSED
+    // work and rest are told apart twice — by the colour of the number and by the colour of
+    // the bar — and a pause greys both, which is what makes it a STATE rather than a word
+    val stepColor = when {
+        paused -> colors.inkMuted
+        step.kind.isEffort() -> colors.accent
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val barColor = when {
+        paused -> colors.inkMuted
+        step.kind == StepKind.WORK -> colors.accent
+        else -> colors.inkMuted
+    }
+
     Card(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Line),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                snapshot.programName,
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
-            )
-            Row(verticalAlignment = Alignment.Bottom) {
+        Column(
+            Modifier.padding(Spacing.Block),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Cards),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+                Text(
+                    snapshot.programName,
+                    fontSize = TextSize.Caption,
+                    color = colors.inkMuted,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                ) {
+                    Text(
+                        step.name,
+                        fontSize = TextSize.Title,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // "3 of 6 · set 2 of 4": the app's own separator, not two spaces
+                    val position = listOfNotNull(step.blockPosition, step.groupPosition)
+                    if (position.isNotEmpty()) {
+                        Text(
+                            position.joinToString(" · "),
+                            fontSize = TextSize.Meta,
+                            color = colors.inkSecondary,
+                        )
+                    }
+                }
                 Text(
                     formatClock(ceilSeconds(remainingMs)),
                     fontSize = TextSize.Display,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (step.kind.isEffort()) colors.accent else MaterialTheme.colorScheme.onSurface,
+                    color = stepColor,
                 )
-                Column(Modifier.padding(start = 12.dp, bottom = 8.dp)) {
+                if (paused) {
+                    // the state, said as a state. It used to be a suffix on the step's own
+                    // name ("Hang - paused"), which is the screen writing on the exercise
                     Text(
-                        if (phase == RunPhase.PAUSED) "${step.name} - paused" else step.name,
-                        style = MaterialTheme.typography.titleMedium,
+                        "PAUSED",
+                        fontSize = TextSize.Caption,
+                        fontWeight = FontWeight.Bold,
+                        color = InkLight,
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.small)
+                            .background(colors.warning)
+                            .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
                     )
-                    Text(
-                        buildString {
-                            step.blockPosition?.let { append(it) }
-                            step.groupPosition?.let { if (isNotEmpty()) append("  "); append(it) }
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkSecondary,
+                }
+                LinearProgressIndicator(
+                    progress = {
+                        if (step.durationMs > 0) {
+                            1f - (remainingMs.toFloat() / step.durationMs.toFloat()).coerceIn(0f, 1f)
+                        } else {
+                            0f
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = barColor,
+                    // the one large plate on the screen: left unset it is Material's own
+                    // lavender, which is in no palette this app has
+                    trackColor = colors.recessed,
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+                RunFact(
+                    label = "Next",
+                    // an empty line under the clock said nothing about why it was empty
+                    value = upcoming?.let { "${it.name} ${formatClock(it.durationSec)}" }
+                        ?: "nothing - this is the last step",
+                    muted = upcoming == null,
+                )
+                if (!singleStep) {
+                    RunFact(
+                        label = "Left",
+                        value = formatClock(
+                            ceilSeconds(totalRemainingMs(snapshot.steps, snapshot.state, now))
+                        ) + " in the program",
                     )
                 }
             }
 
-            LinearProgressIndicator(
-                progress = {
-                    if (step.durationMs > 0) {
-                        1f - (remainingMs.toFloat() / step.durationMs.toFloat()).coerceIn(0f, 1f)
-                    } else {
-                        0f
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                color = if (step.kind == StepKind.WORK) colors.accent else colors.inkMuted,
-            )
-
-            Text(
-                buildString {
-                    upcoming?.let { append("Next: ${it.name} ${formatClock(it.durationSec)}") }
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Inset)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                ) {
                     if (!singleStep) {
-                        if (isNotEmpty()) append("     ")
-                        append(
-                            formatClock(ceilSeconds(totalRemainingMs(snapshot.steps, snapshot.state, now)))
-                        )
-                        append(" left in the program")
+                        NudgeButton("Back", actions.previous)
                     }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                if (!singleStep) {
-                    OutlinedButton(onClick = actions.previous, modifier = Modifier.weight(1f)) {
-                        Text("Back")
+                    NudgeButton("-$NUDGE_SEC") { actions.nudge(-NUDGE_SEC) }
+                    NudgeButton("+$NUDGE_SEC") { actions.nudge(NUDGE_SEC) }
+                    if (!singleStep) {
+                        NudgeButton("Skip", actions.skip)
                     }
                 }
-                OutlinedButton(onClick = { actions.nudge(-NUDGE_SEC) }, modifier = Modifier.weight(1f)) {
-                    Text("-$NUDGE_SEC")
-                }
-                OutlinedButton(onClick = { actions.nudge(NUDGE_SEC) }, modifier = Modifier.weight(1f)) {
-                    Text("+$NUDGE_SEC")
-                }
-                if (!singleStep) {
-                    OutlinedButton(onClick = actions.skip, modifier = Modifier.weight(1f)) {
-                        Text("Skip")
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
+                /*
+                 * Pause takes the whole width and Stop stands on its own line, because they
+                 * used to be two halves of one row 4 dp apart: one is pressed several times
+                 * a set, the other ends it. Area now follows how often a button is pressed.
+                 */
                 Button(
-                    onClick = if (phase == RunPhase.RUNNING) actions.pause else actions.resume,
-                    modifier = Modifier.weight(1f).heightIn(min = 52.dp),
-                ) { Text(if (phase == RunPhase.RUNNING) "Pause" else "Resume") }
-                OutlinedButton(
-                    onClick = actions.stop,
-                    modifier = Modifier.weight(1f).heightIn(min = 52.dp),
-                ) { Text("Stop") }
+                    onClick = if (paused) actions.resume else actions.pause,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+                ) {
+                    if (paused) {
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.size(Spacing.Line))
+                    }
+                    Text(
+                        if (paused) "Resume" else "Pause",
+                        fontSize = TextSize.Title,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    OutlinedButton(
+                        onClick = actions.stop,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = colors.inkSecondary,
+                        ),
+                        border = BorderStroke(1.dp, colors.grid),
+                    ) { Text("Stop the set", fontSize = TextSize.Meta) }
+                }
             }
         }
     }
+}
+
+/**
+ * One fact under the clock: what it is on the left, what it says on the right.
+ *
+ * The two of them used to be a single string joined by five literal spaces, which is a
+ * layout typed into a sentence — and it put "what is next" and "how long is left" into one
+ * line as if they were one fact.
+ */
+@Composable
+private fun RunFact(label: String, value: String, muted: Boolean = false) {
+    val colors = LocalGachiColors.current
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+    ) {
+        Text(
+            label.uppercase(),
+            fontSize = TextSize.Caption,
+            fontWeight = FontWeight.Bold,
+            color = colors.inkMuted,
+            modifier = Modifier.width(92.dp),
+        )
+        Text(
+            value,
+            fontSize = TextSize.Body,
+            color = if (muted) colors.inkMuted else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * One of the small ones: back, thirty seconds either way, skip.
+ *
+ * The horizontal padding is cut to the bone on purpose — at 360 dp four of these share
+ * 328 dp, which leaves 76 each, and Material's own 24 dp either side would take more than
+ * half of that before a letter is drawn.
+ */
+@Composable
+private fun RowScope.NudgeButton(label: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+    ) { Text(label, fontSize = TextSize.Body, maxLines = 1) }
 }
 
 /**
