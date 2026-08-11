@@ -1,7 +1,9 @@
 package xyz.oleolegka.gachimuchi.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -11,7 +13,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.SlotState
 
@@ -195,16 +196,56 @@ private val DarkScheme = darkColorScheme(
  * Typography: the system sans only (FontFamily.Default = the device typeface).
  * Hierarchy comes from size — the headline number large, captions small and in the
  * secondary colour (§6).
+ *
+ * The five sizes of [TextSize] mapped onto the Material slots the app actually asks for.
+ * Material's own defaults are a 15-step scale for a different product; left alone they gave
+ * this app four sizes nobody chose (16, 14, 14, 24) and no way to tell "title" from
+ * "everything else" at a glance. The slots not listed here are unused — a screen that
+ * reaches for one gets the Material default, which is why new type goes through the five
+ * below rather than through a new slot.
  */
 private val GachiTypography = Typography().let { base ->
     base.copy(
-        displaySmall = base.displaySmall.copy(fontFamily = FontFamily.Default, fontWeight = FontWeight.SemiBold),
-        headlineSmall = base.headlineSmall.copy(fontFamily = FontFamily.Default, fontWeight = FontWeight.SemiBold),
-        titleMedium = base.titleMedium.copy(fontFamily = FontFamily.Default, fontWeight = FontWeight.Medium),
-        bodyMedium = base.bodyMedium.copy(fontFamily = FontFamily.Default),
-        labelSmall = base.labelSmall.copy(fontFamily = FontFamily.Default, fontSize = 11.sp),
+        // the crown: the one large number of a screen
+        headlineSmall = base.headlineSmall.copy(
+            fontFamily = FontFamily.Default, fontWeight = FontWeight.SemiBold,
+            fontSize = TextSize.Figure, lineHeight = TextSize.Figure * 1.25f,
+        ),
+        // the title of a card
+        titleMedium = base.titleMedium.copy(
+            fontFamily = FontFamily.Default, fontWeight = FontWeight.Medium,
+            fontSize = TextSize.Title, lineHeight = TextSize.Title * 1.35f,
+        ),
+        // secondary: a sub-heading inside a card, the name of a row
+        titleSmall = base.titleSmall.copy(
+            fontFamily = FontFamily.Default, fontWeight = FontWeight.Medium,
+            fontSize = TextSize.Meta, lineHeight = TextSize.Meta * 1.4f,
+        ),
+        // body
+        bodyLarge = base.bodyLarge.copy(fontFamily = FontFamily.Default, fontSize = TextSize.Body),
+        bodyMedium = base.bodyMedium.copy(fontFamily = FontFamily.Default, fontSize = TextSize.Body),
+        bodySmall = base.bodySmall.copy(fontFamily = FontFamily.Default, fontSize = TextSize.Meta),
+        // labels, down to the floor
+        labelLarge = base.labelLarge.copy(fontFamily = FontFamily.Default, fontSize = TextSize.Meta),
+        labelMedium = base.labelMedium.copy(fontFamily = FontFamily.Default, fontSize = TextSize.Caption),
+        labelSmall = base.labelSmall.copy(fontFamily = FontFamily.Default, fontSize = TextSize.Caption),
     )
 }
+
+/**
+ * Corner radius, handed to Material so that a Card, a dialog and a menu take theirs from
+ * the same three numbers a hand-built shape does — see [Radius].
+ *
+ * `extraSmall` is a dropdown menu and `extraLarge` is a modal sheet; neither is a fourth
+ * size, they are the small one and the dialog one under Material's names.
+ */
+private val GachiShapes = Shapes(
+    extraSmall = RoundedCornerShape(Radius.Small),
+    small = RoundedCornerShape(Radius.Small),
+    medium = RoundedCornerShape(Radius.Card),
+    large = RoundedCornerShape(Radius.Dialog),
+    extraLarge = RoundedCornerShape(Radius.Dialog),
+)
 
 @Composable
 fun GachimuchiTheme(
@@ -216,6 +257,7 @@ fun GachimuchiTheme(
         MaterialTheme(
             colorScheme = if (darkTheme) DarkScheme else LightScheme,
             typography = GachiTypography,
+            shapes = GachiShapes,
             content = content,
         )
     }
