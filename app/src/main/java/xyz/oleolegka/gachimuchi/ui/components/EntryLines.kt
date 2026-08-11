@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -211,11 +212,19 @@ private fun EntryLine(
                     modifier = Modifier.padding(start = NumberColumn, top = Spacing.Tight),
                 )
             }
+            /*
+             * `goodText` and not `good`: the fill colour of a badge is not a colour to set type
+             * in. On the light surface `good` is 3.27:1 - PALER than the muted captions above it
+             * (3.50:1), which made the one line the journal is opened for the faintest thing on
+             * the card. SYSTEM.md rule 7: good news is never fainter than ordinary news.
+             * `goodText` is 7.35:1 here and identical to `good` in the dark theme, where the
+             * problem never existed. Same role DayCardList already uses for the same line.
+             */
             record?.let {
                 Text(
                     "Record: ${it.text}",
                     fontSize = TextSize.Caption,
-                    color = colors.good,
+                    color = colors.goodText,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(start = NumberColumn, top = Spacing.Tight),
                 )
@@ -267,13 +276,21 @@ private fun WarmupBadge(modifier: Modifier = Modifier) {
  * "Not completed" - the one thing on a row that says the lifter did not carry the set through,
  * at a weight and rep count that otherwise read exactly like a set that landed clean.
  *
- * Modelled on [WarmupBadge], with one deliberate difference: this one uses [GachiColors.warning]
- * rather than the muted role. A warm-up not counting is the expected shape of a warm-up; a set
- * that fell short of what it was attempted at is closer to worth a second look, which is what
- * the milder-than-critical warning tone is for. Set by hand on the entry card and on the
- * correction dialog - see ui/screens/LogScreen.kt's IncompleteChip and
+ * Modelled on [WarmupBadge], with one deliberate difference: this one carries
+ * [GachiColors.warning] rather than the muted role. A warm-up not counting is the expected
+ * shape of a warm-up; a set that fell short of what it was attempted at is closer to worth a
+ * second look, which is what the milder-than-critical warning tone is for. Set by hand on the
+ * entry card and on the correction dialog - see ui/screens/LogScreen.kt's IncompleteChip and
  * ui/components/EntryEditor.kt's IncompleteToggle - never inferred, because the app has no way
  * to know whether a hold actually went the distance.
+ *
+ * ── The colour is the FILL, not the type ────────────────────────────────────────
+ * It used to be `warning` type on the recessed surface, which is **1.60:1** - three times under
+ * the floor, on the one word of the row that exists to be noticed. Filled and set in black it
+ * is **10.7:1**, and in BOTH themes, because `warning` is the one status colour the palette does
+ * not redefine per theme. This badge is a second, older copy of the one SetTable draws (that one
+ * was fixed first); the two now look the same because they say the same thing, and this copy is
+ * the one that reaches the workout screen and the day breakdown.
  */
 @Composable
 private fun IncompleteBadge(modifier: Modifier = Modifier) {
@@ -282,12 +299,11 @@ private fun IncompleteBadge(modifier: Modifier = Modifier) {
         "Not completed",
         modifier = modifier
             .clip(RoundedCornerShape(Radius.Small))
-            .background(colors.recessed)
-            .border(1.dp, colors.warning, RoundedCornerShape(Radius.Small))
+            .background(colors.warning)
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         fontSize = TextSize.Caption,
-        fontWeight = FontWeight.Medium,
-        color = colors.warning,
+        fontWeight = FontWeight.SemiBold,
+        color = Color(0xFF0B0B0B),
     )
 }
 

@@ -44,6 +44,7 @@ import xyz.oleolegka.gachimuchi.domain.CelebrationMode
 import xyz.oleolegka.gachimuchi.domain.CelebrationPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicturePicker
+import xyz.oleolegka.gachimuchi.ui.components.WarningNotice
 import xyz.oleolegka.gachimuchi.ui.components.rememberJournalTransfer
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 
@@ -146,9 +147,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         }
 
         note?.let { text ->
-            item {
-                Text(text, style = MaterialTheme.typography.bodyMedium, color = colors.warning)
-            }
+            // A filled notice and not `warning`-coloured type: on this plane that colour
+            // measures 1.74:1, and this is the line that says the pictures did not arrive.
+            item { WarningNotice(text) }
         }
 
         item {

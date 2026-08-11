@@ -40,6 +40,7 @@ import xyz.oleolegka.gachimuchi.domain.parsePace
 import xyz.oleolegka.gachimuchi.domain.strengthSetOf
 import xyz.oleolegka.gachimuchi.domain.tickOf
 import xyz.oleolegka.gachimuchi.ui.UiState
+import xyz.oleolegka.gachimuchi.ui.components.RailNote
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
 import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.label
@@ -173,16 +174,20 @@ private fun IncompleteChip(selected: Boolean, onToggle: () -> Unit) {
  * Silent when the answer is no (most of the time) or when there is no last set at all, on the
  * same grounds every quiet default in this file follows: a card that speaks up about ordinary
  * training is a card nobody reads carefully any more.
+ *
+ * ── The worst pairing in the app, until now ─────────────────────────────────────
+ * It was `warning` type at the 11 sp floor: **1.79:1** at the smallest size the app allows, on
+ * the sentence that is supposed to change the weight about to be entered. The redraw
+ * (`app-next/log-entry.html`, class `.hint.warn`) settles it as a rail rather than as a fill -
+ * the warning colour moves to a 4 dp edge, the words go to ink on the recessed surface
+ * (**17.1:1**) and up to 13 sp. A fill was rejected here because this is advice and not a
+ * failure, and because the yellow patch is already spent on the "Not completed" badge and chip
+ * that sit centimetres away on this same screen.
  */
 @Composable
 private fun LastTimeIncompleteNote(show: Boolean) {
     if (!show) return
-    val colors = LocalGachiColors.current
-    Text(
-        "Last time this was not completed - consider the same weight again, or less.",
-        style = MaterialTheme.typography.labelSmall,
-        color = colors.warning,
-    )
+    RailNote("Last time this was not completed - consider the same weight again, or less.")
 }
 
 /**
