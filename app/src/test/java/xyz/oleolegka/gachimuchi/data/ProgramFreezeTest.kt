@@ -15,6 +15,7 @@ import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.SCHEDULE_CATEGORY
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 
@@ -181,6 +182,78 @@ class ProgramFreezeTest {
         val programId = activityRepo.exercise(exerciseId)!!.protocolProgramId!!
 
         assertEquals("Hangs schedule", programRepo.programById(programId)!!.name)
+    }
+
+    /**
+     * The category the app writes for itself, on the same "new rows only" footing as the name
+     * above. Invisible in the library (the schedules section covers categories whole) and
+     * visible in the editor's chip and in an exported program file, which is where "Protocols"
+     * — a word §18.15 retired — kept surfacing.
+     */
+    @Test
+    fun `a schedule the app generates is filed under Schedules`() = runTest {
+        val exerciseId = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+        val programId = activityRepo.exercise(exerciseId)!!.protocolProgramId!!
+
+        assertEquals(SCHEDULE_CATEGORY, programRepo.programById(programId)!!.category)
+    }
+
+    // --- whose program may become a schedule ---------------------------------------------
+
+    /**
+     * The trap: a program the owner wrote by hand, of the same shape and the same two numbers
+     * a generated schedule has, used to be ADOPTED by the next exercise created on those
+     * numbers. It became that exercise's protocol, left its own category for the schedules
+     * section, and froze for good — §18.9 makes a referenced program uneditable by content and
+     * undeletable, and the catalog row that references it is never deleted either.
+     *
+     * Nothing about the two programs' CONTENT tells them apart, so the test is origin: only a
+     * program that is already somebody's schedule is reused.
+     */
+    @Test
+    fun `a hand-written program is not captured as somebody's schedule by matching numbers`() = runTest {
+        val mine = programRepo.save(minimal(7, 3))
+
+        val exerciseId = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+
+        val schedule = activityRepo.exercise(exerciseId)!!.protocolProgramId!!
+        assertTrue("the exercise must get a schedule of its own", schedule != mine)
+        assertFalse("the hand-written program stays nobody's", programRepo.isReferenced(mine))
+        // and therefore stays fully editable and deletable, which is what was lost before
+        assertTrue(programRepo.delete(mine))
+    }
+
+    /**
+     * The other half of the same rule, and the reason it is "already a schedule" rather than
+     * "never reuse anything": twins deliberately share one schedule (§18.15) — 20 mm and 15 mm
+     * hangs are the same protocol on a different edge.
+     */
+    @Test
+    fun `two exercises on the same numbers still share one schedule`() = runTest {
+        val first = activityRepo.ensureExercise("Hangs 20 mm", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+        val second = activityRepo.ensureExercise("Hangs 15 mm", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+
+        assertEquals(
+            activityRepo.exercise(first)!!.protocolProgramId,
+            activityRepo.exercise(second)!!.protocolProgramId,
+        )
+    }
+
+    /**
+     * And the case that would break identity if reuse stopped working: asking for the SAME
+     * exercise twice has to resolve to the same program, or the identity key changes and a
+     * second row appears beside the first with the same name.
+     */
+    @Test
+    fun `asking for the same exercise twice finds the same row and the same schedule`() = runTest {
+        val first = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+        val again = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+
+        assertEquals(first, again)
+        assertEquals(
+            activityRepo.exercise(first)!!.protocolProgramId,
+            activityRepo.exercise(again)!!.protocolProgramId,
+        )
     }
 
     @Test

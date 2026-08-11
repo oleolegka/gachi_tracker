@@ -22,7 +22,7 @@ import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.activityHeatmap
 import xyz.oleolegka.gachimuchi.domain.doorTiles
-import xyz.oleolegka.gachimuchi.domain.firstBlock
+import xyz.oleolegka.gachimuchi.domain.scheduleCaption
 import xyz.oleolegka.gachimuchi.domain.heroStats
 import xyz.oleolegka.gachimuchi.domain.presenceWindow
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -215,7 +215,8 @@ private fun FormDoorTile(
 private fun tileCaption(tile: DoorTile, entity: ExerciseEntity?, program: WorkoutProgram?, today: LocalDate): String {
     val parts = mutableListOf<String>()
     if (tile.form == ExerciseForm.HOLD && entity != null) {
-        program?.firstBlock()?.let { parts += "${it.workSec}:${it.restSec}" }
+        // one function for all three captions — see [scheduleCaption]
+        scheduleCaption(program)?.let { parts += it }
     }
     if (parts.isEmpty()) parts += tile.form.title.lowercase()
     parts += fmtRelativeDay(LocalDate.parse(tile.lastDate), today)

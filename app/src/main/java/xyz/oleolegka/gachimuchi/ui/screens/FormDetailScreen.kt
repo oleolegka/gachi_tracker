@@ -53,7 +53,7 @@ import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
-import xyz.oleolegka.gachimuchi.domain.firstBlock
+import xyz.oleolegka.gachimuchi.domain.scheduleCaption
 import xyz.oleolegka.gachimuchi.domain.granularity
 import xyz.oleolegka.gachimuchi.domain.onAxis
 import xyz.oleolegka.gachimuchi.domain.readActivities
@@ -314,13 +314,13 @@ fun FormDetailScreen(
                  */
                 item {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
-                        val protocolBlock =
-                            entity.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
-                        if (protocolBlock != null) {
-                            IdentityChip(
-                                "protocol",
-                                "${protocolBlock.workSec}:${protocolBlock.restSec}",
-                            )
+                        // the same words the picker and the overview use, from the one
+                        // function that answers "what is this exercise's schedule" — see
+                        // [scheduleCaption] for what the three of them used to say instead
+                        val scheduleLine =
+                            scheduleCaption(entity.protocolProgramId?.let { state.programsById[it] })
+                        if (scheduleLine != null) {
+                            IdentityChip("schedule", scheduleLine)
                         }
                         IdentityChip("tracked", "weight")
                     }
