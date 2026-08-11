@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
@@ -70,10 +71,23 @@ class TimerScreenTest : ScreenTest() {
         compose.onNode(hasScrollAction()).performScrollToNode(hasText(text))
     }
 
+    /**
+     * Opens a program card's overflow menu — where everything that is not "Run" now lives.
+     *
+     * The card carries ONE action across its whole width, because the five that used to share
+     * a row left the main one 26-51 dp on a 360 dp phone. Edit, Export, Hide and Delete are
+     * behind the three dots, and this is how a test presses them.
+     */
+    private fun openMenuOf(program: WorkoutProgram) {
+        compose.onNodeWithContentDescription("Actions for ${program.name}").performClick()
+        settle()
+    }
+
     private fun timer(
         on: Boolean,
         programs: List<WorkoutProgram> = emptyList(),
         scheduleOwners: Map<Long, List<String>> = emptyMap(),
+        frozenSchedules: Set<Long> = scheduleOwners.keys,
     ) {
         val state = TimerUiState(
             enabled = on,
@@ -90,6 +104,7 @@ class TimerScreenTest : ScreenTest() {
                 programs = programs,
                 exerciseNames = mapOf(1L to "Hangs 20 mm"),
                 scheduleOwners = scheduleOwners,
+                frozenSchedules = frozenSchedules,
                 onRunProgram = { ran = it },
                 onEditProgram = {
                     editRequested++
@@ -150,8 +165,10 @@ class TimerScreenTest : ScreenTest() {
         // catalog exercise beside them - the link is what decides whether finishing the
         // program offers to write the sets down
         assertEquals(24, repeaters.workStepCount())
-        val line = "${repeaters.workStepCount()} efforts   " +
-            "${formatClock(repeaters.totalSec())} total   logs as Hangs 20 mm"
+        // one separator, and one only: the line used to glue its three facts with runs of
+        // three spaces, which is not a separator, it is a hope about the font
+        val line = "${repeaters.workStepCount()} efforts · " +
+            "${formatClock(repeaters.totalSec())} · logs as Hangs 20 mm"
         compose.onNodeWithText(line).assertIsDisplayed()
         compose.onNodeWithText("Run").assertIsEnabled()
         scrollTo("Export all")
@@ -159,17 +176,39 @@ class TimerScreenTest : ScreenTest() {
     }
 
     @Test
-    fun `the buttons on a program card each call their own action`() {
+    fun `the one button on a program card runs it, and the menu holds the rest`() {
         timer(on = true, programs = listOf(repeaters))
 
         compose.onNodeWithText("Run").performClick()
         assertEquals(repeaters, ran)
 
-        compose.onNodeWithText("Delete").performClick()
+        openMenuOf(repeaters)
+        compose.onNodeWithText("Delete the program").performClick()
         assertEquals(1L, deleted)
 
-        compose.onNodeWithText("Edit").performClick()
+        openMenuOf(repeaters)
+        compose.onNodeWithText("Open").performClick()
         assertEquals(repeaters, edited)
+
+        openMenuOf(repeaters)
+        compose.onNodeWithText("Hide from this list").performClick()
+        assertEquals(repeaters, hiddenToggled)
+    }
+
+    /**
+     * The point of the whole redraw of this card: "Run" is the width of the card, not what four
+     * text buttons left over. Nothing in a Robolectric tree measures pixels, so what is asserted
+     * here is the layout decision that produced them — one action on the card, the other four
+     * out of the row.
+     */
+    @Test
+    fun `nothing shares the row with Run`() {
+        timer(on = true, programs = listOf(repeaters))
+
+        compose.onNodeWithText("Export to a file").assertDoesNotExist()
+        compose.onNodeWithText("Hide from this list").assertDoesNotExist()
+        compose.onNodeWithText("Delete the program").assertDoesNotExist()
+        compose.onNodeWithText("Open").assertDoesNotExist()
     }
 
     @Test
@@ -222,13 +261,11 @@ class TimerScreenTest : ScreenTest() {
             scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
         )
 
-        compose.onNodeWithText("Schedule for Hangs 20 mm - the times are fixed")
-            .assertIsDisplayed()
+        // the row says WHOSE it is; the freeze itself is said once, under the heading, rather
+        // than three times over (the row, the note and a line at the foot of every card)
+        compose.onNodeWithText("Schedule for Hangs 20 mm").assertIsDisplayed()
         // and the freeze is readable before anything is opened, which is the whole point
-        compose.onNodeWithText(
-            "Made for one exercise and fixed once it was used: the times in these cannot be " +
-                "changed, only the name. Your own programs are above.",
-        ).assertIsDisplayed()
+        compose.onNodeWithText(SCHEDULES_NOTE).assertIsDisplayed()
     }
 
     @Test
@@ -239,8 +276,7 @@ class TimerScreenTest : ScreenTest() {
             scheduleOwners = mapOf(7L to listOf("Hangs 20 mm", "Hangs 15 mm")),
         )
 
-        compose.onNodeWithText("Schedule for Hangs 20 mm, Hangs 15 mm - the times are fixed")
-            .assertIsDisplayed()
+        compose.onNodeWithText("Schedule for Hangs 20 mm, Hangs 15 mm").assertIsDisplayed()
     }
 
     /**
@@ -250,18 +286,44 @@ class TimerScreenTest : ScreenTest() {
      * prohibition — the working agreement's own rule.
      */
     @Test
-    fun `a schedule row offers no delete button, and says why`() {
+    fun `a frozen schedule row offers no delete button, and says why`() {
         timer(
             on = true,
             programs = listOf(scheduleOfHangs),
             scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+            frozenSchedules = setOf(7L),
         )
 
-        compose.onNodeWithText("Delete").assertDoesNotExist()
-        compose.onNodeWithText("No delete: the exercise is built on this schedule. Hide it instead.")
-            .assertIsDisplayed()
+        openMenuOf(scheduleOfHangs)
+        compose.onNodeWithText("Delete the program").assertDoesNotExist()
         // and the way out of the list is still offered
-        compose.onNodeWithText("Hide").assertIsDisplayed()
+        compose.onNodeWithText("Hide from this list").assertIsDisplayed()
+        // the reason is under the section heading, said once for the whole section
+        compose.onNodeWithText(SCHEDULES_NOTE).assertIsDisplayed()
+    }
+
+    /**
+     * The mild freeze on the screen (§18.19): a schedule nobody has recorded a set against is
+     * still filed under the schedules heading — it IS somebody's schedule — but the delete
+     * entry is there, because the repository would allow it. The two doors have to agree, and
+     * a menu entry the repository refuses is the failure this pair of tests exists to catch.
+     */
+    @Test
+    fun `a schedule with no sets against it yet keeps its delete button`() {
+        timer(
+            on = true,
+            programs = listOf(scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+            frozenSchedules = emptySet(),
+        )
+
+        // still a schedule: the heading and the ownership line are unchanged
+        compose.onNodeWithText("Exercise schedules").assertIsDisplayed()
+        compose.onNodeWithText("Schedule for Hangs 20 mm").assertIsDisplayed()
+
+        openMenuOf(scheduleOfHangs)
+        compose.onNodeWithText("Delete the program").performClick()
+        assertEquals(scheduleOfHangs.id, deleted)
     }
 
     @Test
@@ -272,8 +334,9 @@ class TimerScreenTest : ScreenTest() {
             scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
         )
 
-        // exactly one Delete on the screen: the one on the program nobody is keyed to
-        compose.onNodeWithText("Delete").performClick()
+        // the program nobody is keyed to has its deletion; the schedule above has none
+        openMenuOf(repeaters)
+        compose.onNodeWithText("Delete the program").performClick()
         assertEquals(repeaters.id, deleted)
     }
 
@@ -285,10 +348,23 @@ class TimerScreenTest : ScreenTest() {
         compose.onNodeWithText("Hangboard repeaters 7:3").assertIsDisplayed()
     }
 
+    /**
+     * A dead button that says nothing is the worst control on a screen. The card explaining
+     * that the timer is off is the first row of a list that may be long, so by the time a
+     * "Run" is pressed twenty rows down it is not on screen — the button carries the reason.
+     */
     @Test
-    fun `a program cannot be run while the timer is switched off`() {
+    fun `a program cannot be run while the timer is switched off, and the button says why`() {
         timer(on = false, programs = listOf(repeaters))
 
-        compose.onNodeWithText("Run").assertIsNotEnabled()
+        compose.onNodeWithText("Run - the timer is off").assertIsNotEnabled()
     }
 }
+
+/**
+ * The freeze, said once. It used to be on the row, under the heading AND at the foot of every
+ * schedule card — three copies of one sentence on a phone that owns four hangboard holds.
+ */
+private const val SCHEDULES_NOTE =
+    "Made for one exercise. Editable until the first set is recorded against it; after that " +
+        "only the name can be changed, and it cannot be deleted."

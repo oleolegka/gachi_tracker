@@ -109,7 +109,7 @@ class PlanInThePastTest : ScreenTest() {
         settle()
 
         compose.onNodeWithText("Save").assertIsNotEnabled()
-        compose.onNodeWithText("Plans can only be made for today or later", substring = true)
+        compose.onNodeWithText("Plans start today", substring = true)
             .assertExists()
     }
 }

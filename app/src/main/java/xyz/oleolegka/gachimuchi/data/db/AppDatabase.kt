@@ -743,10 +743,11 @@ abstract class AppDatabase : RoomDatabase() {
          * rather than a correction.
          *
          * What that marking then exposes is the sets already in the journal, which named no
-         * hand because nothing asked them to. They do not become "both hands" and they are not
-         * rewritten: the reducers report them as a record whose side is unknown
-         * ([xyz.oleolegka.gachimuchi.domain.ExerciseRecord.sideMissing]). Guessing here would
-         * mean writing a hand into history that nobody recorded.
+         * hand because nothing asked them to. They are NOT rewritten — the column stays as it
+         * was written and the journal is not touched. What changed is the READING of them: the
+         * owner ruled (2026-08-11) that work logged before the tick was symmetric, both hands
+         * doing the same thing, so the reducers count such a set for each hand instead of
+         * reporting a third record of unknown side (`domain/Records.kt`, `sideGroups`).
          *
          * ── The two hazards of a rebuild, and why neither bites ─────────────────────
          * `exercises` is nobody's foreign-key parent — the plan and the programs deliberately

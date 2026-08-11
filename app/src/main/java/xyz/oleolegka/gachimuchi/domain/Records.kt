@@ -84,6 +84,22 @@ internal fun addedWeightRecordText(now: Double, previous: Double): String = when
  */
 fun est1rm(weight: Double, reps: Int): Double = weight * (1 + reps / 30.0)
 
+/**
+ * Whether an earlier set is part of [judged]'s history — the live counterpart of [sideGroups],
+ * kept next to it so the toast that announces a record and the card that displays one cannot
+ * answer differently.
+ *
+ * Same side, obviously. Plus: a set that named NO side is work both sides did equally, so it
+ * belongs to each hand's history — which is what stops "you broke your left-hand record" from
+ * firing over a number the records card already credits to the left hand.
+ *
+ * NOT the other way round. A set that names no side is judged only against sets that name none
+ * either: the whole point of one-sided work is that a hand is not the pair, and letting a
+ * single strong hand set the bar for two-handed work would silence every two-handed record.
+ */
+private fun sharesSide(prior: HoldSide?, judged: HoldSide?): Boolean =
+    prior == judged || (judged != null && prior == null)
+
 /** A broken record: a short phrase for the UI plus the machine-readable axis and numbers. */
 data class RecordHit(
     val axis: Axis,
@@ -108,9 +124,9 @@ data class RecordHit(
  * [side] narrows the comparison to the SAME side, on the same grounds [evaluateHoldRecord]
  * already stands on: a pistol squat's two legs diverge in strength exactly the way a
  * fingerboard's two hands do, and comparing a new right-side set against the left side's
- * history would report a record the right side never actually broke. Null (the default)
- * matches every set that named no side, which is every set of an exercise that is not
- * one-sided.
+ * history would report a record the right side never actually broke. Null (the default) is a
+ * set that named no side, which is every set of an exercise that is not one-sided. Which
+ * earlier sets count as this side's history is [sharesSide] and nothing here.
  */
 fun evaluateStrengthRecord(
     priorSets: List<StrengthSet>,
@@ -122,7 +138,9 @@ fun evaluateStrengthRecord(
 ): RecordHit? {
     if (weight == null || reps == null) return null
     if (warmup || incomplete) return null
-    val weighted = priorSets.filter { !it.warmup && !it.incomplete && it.weightKg != null && it.sideOf == side }
+    val weighted = priorSets.filter {
+        !it.warmup && !it.incomplete && it.weightKg != null && sharesSide(it.sideOf, side)
+    }
     if (weighted.isEmpty()) return null // the first weighted set is a baseline, stay quiet
 
     val new1rm = est1rm(weight, reps)
@@ -153,10 +171,11 @@ fun evaluateStrengthRecord(
  */
 fun evaluateHoldRecord(priorHolds: List<HoldSet>, hold: HoldSet): RecordHit? {
     if (hold.warmup || hold.incomplete) return null
-    // ONE HAND'S HISTORY IS THE ONLY THING THIS HAND COMPETES WITH. On a fingerboard the two
-    // sides are years apart in strength, and comparing across them would mean the weaker hand
-    // never breaks a record while the stronger one breaks every one it is told about.
-    val working = priorHolds.filter { !it.warmup && !it.incomplete && it.sideOf == hold.sideOf }
+    // THE OTHER HAND'S HISTORY IS NOT THIS HAND'S. On a fingerboard the two sides are years
+    // apart in strength, and comparing across them would mean the weaker hand never breaks a
+    // record while the stronger one breaks every one it is told about. Sets that named no hand
+    // at all do count for this one — see [sharesSide].
+    val working = priorHolds.filter { !it.warmup && !it.incomplete && sharesSide(it.sideOf, hold.sideOf) }
     val priorSeconds = working.mapNotNull { it.holdSec }
 
     // A hold with nothing added is a real point on the added-weight axis, at zero, and it has
@@ -199,60 +218,65 @@ data class ExerciseRecord(
     /**
      * Which side this record belongs to, for work trained one limb at a time ([HoldSide]).
      *
-     * Null means the record covers the exercise as a whole — either because it is two-handed
-     * work, or because the sets it was computed from named no side. Those two are told apart
-     * by [sideMissing], not by this field.
+     * Null means the record covers the exercise AS A WHOLE, which happens for two-limbed work
+     * and for nothing else now: a set that named no side is read as both sides having done the
+     * same thing and joins each hand's own record (see [sideGroups]). There used to be a third
+     * value here — a record built out of sets that should have named a hand and did not,
+     * flagged as a defect — and the screens drew it as a third column beside the two hands.
      */
     val side: HoldSide? = null,
-    /**
-     * THE SETS BEHIND THIS RECORD SHOULD HAVE NAMED A SIDE AND DID NOT.
-     *
-     * A defect in the data, reported rather than papered over. It means one of two things,
-     * and both are the same mistake: the exercise is marked one-sided and some of its sets
-     * predate that (or were logged without picking a hand), or the exercise is not marked
-     * one-sided yet some of its sets do name a hand.
-     *
-     * The honest reading of such a record is "this is the best of some sets, and nobody knows
-     * which hand did them" — which is emphatically NOT "the best of both hands together". A
-     * screen showing this flag should say so; silently folding these sets in with the
-     * two-handed ones would let a left-hand best be reported as the exercise's best.
-     */
-    val sideMissing: Boolean = false,
 )
+
+/** One side's slice of a history: the entries that count for it, and which side it is. */
+private data class SideGroup<T>(val items: List<Pair<T, String>>, val side: HoldSide?)
 
 /**
  * Splits a form's whole history into per-side groups, in the fixed order [holdRecord] and
- * [strengthRecord] both promise their readers: left, then right, then the sets that named no
- * side — shared so the two forms cannot drift into ordering that promise differently.
+ * [strengthRecord] both promise their readers: left, then right — shared so the two forms
+ * cannot drift into ordering that promise differently.
  *
  * The history is judged per side as soon as EITHER source says sides exist here: the catalog
  * flag ([oneSided]), or a set that named one. A flag set today must split a history logged
  * before it, and a side logged on an exercise nobody has flagged is still a side. Short of
- * that, everything comes back as ONE group with side null and no defect — the ordinary
- * two-limbed case.
+ * that, everything comes back as ONE group with side null — the ordinary two-limbed case.
+ *
+ * ── A SET THAT NAMED NO SIDE COUNTS FOR BOTH ────────────────────────────────────
+ * It used to get a group of its own, reported as a defect ("side not recorded"), which is how
+ * an exercise ticked "one limb at a time" TODAY ended up with three columns on its statistics:
+ * left, right, and everything logged before the tick. The owner's ruling, 2026-08-11: "take the
+ * third one away. Everything in the past without that tick was symmetric — the right and the
+ * left were doing the same thing."
+ *
+ * So a sideless entry is not a hole in the data any more, it is a statement that both sides did
+ * this, and it enters BOTH groups. There is no third group and no defect flag left to report.
+ *
+ * ── What this costs, said plainly ───────────────────────────────────────────────
+ * Everything here is a MAXIMUM ([holdRecord], [strengthRecord], [heaviestSet] all reduce with
+ * `maxBy`), and counting one entry twice cannot change a maximum. Were these groups ever summed
+ * — volume, tonnage, impulse — the same entry would be added to both sides and the exercise's
+ * total would double. Nothing sums them today: domain/Analytics.kt computes volume over the
+ * whole exercise and never splits it by side at all. Anything that starts summing per side has
+ * to deal with the overlap here first.
  */
 private fun <T> sideGroups(
     mine: List<Pair<T, String>>,
     oneSided: Boolean,
     sideOfIt: (T) -> HoldSide?,
-): List<Triple<List<Pair<T, String>>, HoldSide?, Boolean>> {
+): List<SideGroup<T>> {
     val bySide = mine.any { sideOfIt(it.first) != null } || oneSided
-    if (!bySide) return listOf(Triple(mine, null, false))
+    if (!bySide) return listOf(SideGroup(mine, null))
 
-    val buckets = mine.groupBy { sideOfIt(it.first) }
-    val order: List<HoldSide?> = listOf(HoldSide.LEFT, HoldSide.RIGHT, null)
-    return order.mapNotNull { side ->
-        val ofSide = buckets[side] ?: return@mapNotNull null
-        Triple(ofSide, side, side == null)
+    // filtered rather than bucketed so that each group keeps the journal's own order, which is
+    // what decides a tie between two equal bests (`maxBy` keeps the first, i.e. the earlier day)
+    return listOf(HoldSide.LEFT, HoldSide.RIGHT).mapNotNull { side ->
+        val ofSide = mine.filter { val its = sideOfIt(it.first); its == side || its == null }
+        if (ofSide.isEmpty()) null else SideGroup(ofSide, side)
     }
 }
 
-/** "1RM 70 kg (65×3)", or the same with "(left)" / "(side not recorded)" appended. */
-private fun sideLabel(text: String, side: HoldSide?, sideMissing: Boolean): String = when {
-    sideMissing -> "$text (side not recorded)"
-    side != null -> "$text (${side.code})"
-    else -> text
-}
+/** "1RM 70 kg (65×3)", or the same with "(left)" appended. */
+private fun sideLabel(text: String, side: HoldSide?): String =
+    if (side != null) "$text (${side.code})" else text
 
 /**
  * The records of a strength exercise over the whole history: the maximum estimated 1RM and
@@ -277,13 +301,13 @@ fun strengthRecord(
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return emptyList()
-    return sideGroups(mine, oneSided) { it.sideOf }.map { (group, side, sideMissing) ->
+    return sideGroups(mine, oneSided) { it.sideOf }.map { (group, side) ->
         val (best, day) = group.maxBy { est1rm(it.first.weightKg!!, it.first.reps) }
         val value = est1rm(best.weightKg!!, best.reps)
         ExerciseRecord(
             exercise, RecordHit.Axis.EST_1RM, value, day,
-            sideLabel("1RM ${fmtNum(value)} kg (${fmtNum(best.weightKg)}×${best.reps})", side, sideMissing),
-            side, sideMissing,
+            sideLabel("1RM ${fmtNum(value)} kg (${fmtNum(best.weightKg)}×${best.reps})", side),
+            side,
         )
     }
 }
@@ -307,12 +331,12 @@ fun heaviestSet(
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return emptyList()
-    return sideGroups(mine, oneSided) { it.sideOf }.map { (group, side, sideMissing) ->
+    return sideGroups(mine, oneSided) { it.sideOf }.map { (group, side) ->
         val (best, day) = group.maxBy { it.first.weightKg!! }
         ExerciseRecord(
             exercise, RecordHit.Axis.WEIGHT_AT_REPS, best.weightKg!!, day,
-            sideLabel("heaviest set ${fmtNum(best.weightKg)} kg x ${best.reps}", side, sideMissing),
-            side, sideMissing,
+            sideLabel("heaviest set ${fmtNum(best.weightKg)} kg x ${best.reps}", side),
+            side,
         )
     }
 }
@@ -330,13 +354,11 @@ fun heaviestSet(
  * An exercise with no sides anywhere in its history and [oneSided] false gets exactly one
  * record, as it always did — that is the two-handed case and it is the common one.
  *
- * ── The defect case is reported, not resolved ───────────────────────────────────
+ * ── A set that named no hand belongs to both ────────────────────────────────────
  * [oneSided] is what the CATALOG says about the exercise; the sides are what the SETS say.
- * When the two disagree — a one-sided exercise with sets that named no hand, or a two-handed
- * exercise with sets that did — the sets that named nothing get their own record, flagged
- * with [ExerciseRecord.sideMissing]. They are not folded into either hand and they are not
- * called "both": nobody knows which hand did them, and inventing an answer here would put a
- * left-hand best on the exercise as a whole.
+ * Where the two disagree — a one-sided exercise whose older sets predate the tick — those sets
+ * are read as symmetric and counted for each hand, rather than kept apart as a third record of
+ * unknown side. [sideGroups] holds the reasoning and the caveat.
  */
 fun holdRecord(
     sets: List<ActivityEvent>,
@@ -349,8 +371,8 @@ fun holdRecord(
             ?.let { it to ev.opDate }
     }
     if (mine.isEmpty()) return emptyList()
-    return sideGroups(mine, oneSided) { it.sideOf }.mapNotNull { (group, side, sideMissing) ->
-        holdRecordOf(group, exercise, side, sideMissing)
+    return sideGroups(mine, oneSided) { it.sideOf }.mapNotNull { (group, side) ->
+        holdRecordOf(group, exercise, side)
     }
 }
 
@@ -359,7 +381,6 @@ private fun holdRecordOf(
     mine: List<Pair<HoldSet, String>>,
     exercise: ExerciseLink,
     side: HoldSide?,
-    sideMissing: Boolean,
 ): ExerciseRecord? {
     if (mine.any { it.first.addedKg != null }) {
         // every hold of the exercise competes, the clean ones at zero — see [evaluateHoldRecord]
@@ -368,7 +389,7 @@ private fun holdRecordOf(
         val value = best.addedKg ?: 0.0
         return ExerciseRecord(
             exercise, RecordHit.Axis.HOLD_WEIGHT, value, day,
-            sideLabel(addedWeightPhrase(value), side, sideMissing), side, sideMissing,
+            sideLabel(addedWeightPhrase(value), side), side,
         )
     }
     val withSeconds = mine.filter { it.first.holdSec != null }
@@ -376,6 +397,6 @@ private fun holdRecordOf(
     val (best, day) = withSeconds.maxBy { it.first.holdSec!! }
     return ExerciseRecord(
         exercise, RecordHit.Axis.HOLD_SECONDS, best.holdSec!!, day,
-        sideLabel("hold ${fmtNum(best.holdSec)} s", side, sideMissing), side, sideMissing,
+        sideLabel("hold ${fmtNum(best.holdSec)} s", side), side,
     )
 }

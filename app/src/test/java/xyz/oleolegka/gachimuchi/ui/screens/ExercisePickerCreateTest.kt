@@ -3,7 +3,7 @@ package xyz.oleolegka.gachimuchi.ui.screens
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
-import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -14,7 +14,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ProgramBlock
+import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.ScheduleKind
+import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.totalSec
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 import xyz.oleolegka.gachimuchi.ui.UiState
@@ -75,7 +78,8 @@ class ExercisePickerCreateTest : ScreenTest() {
         name("One-arm row")
 
         tap("One side at a time")
-        compose.onNodeWithText("One side at a time").assertIsSelected()
+        // a switch, as it already is in the edit dialog — not the filter chip it used to be
+        compose.onNodeWithText("One side at a time").assertIsOn()
         tap("Create and use")
 
         assertEquals("One-arm row", created?.name)
@@ -133,10 +137,33 @@ class ExercisePickerCreateTest : ScreenTest() {
 
     // --- the three branches of a hold (§18.15) ------------------------------------------
 
+    /**
+     * A schedule that is genuinely STRICT: six hangs of 7:3, four sets, three minutes between
+     * them. It has to be this rather than a bare pair, because the strict branch only offers
+     * what the classifier calls strict — see `protocolCandidates`.
+     */
+    private val repeaters = WorkoutProgram(
+        id = protocolProgramIdFor(7),
+        name = "Fingerboard repeaters",
+        groups = listOf(
+            ProgramGroup(
+                name = "Repeaters",
+                blocks = listOf(ProgramBlock(name = "Hang", workSec = 7, restSec = 3, repeats = 6)),
+                repeats = 4,
+                restBetweenRepeatsSec = 180,
+            )
+        ),
+    )
+
+    /**
+     * The library as the strict branch sees it: one real schedule, and beside it a program of
+     * the plain-pair shape that must never be offered as a strict one.
+     */
     private fun library() = UiState(
         loading = false,
         programsById = mapOf(
-            protocolProgramIdFor(7) to protocolProgram(7, "Fingerboard", 7.0, 3.0),
+            repeaters.id to repeaters,
+            protocolProgramIdFor(9) to protocolProgram(9, "Hand-written pair", 7.0, 3.0),
         ),
     )
 
@@ -239,13 +266,31 @@ class ExercisePickerCreateTest : ScreenTest() {
         tap(ScheduleKind.STRICT.title)
 
         // the row names the schedule and says what is in it
-        tap("Fingerboard protocol")
+        tap("Fingerboard repeaters")
         tap("Create and use")
 
         assertEquals(protocolProgramIdFor(7), created?.protocolProgramId)
         assertNull("a chosen schedule IS the schedule - nothing is invented beside it", created?.workSec)
         assertNull(created?.restSec)
         assertNull(created?.newProgram)
+    }
+
+    /**
+     * The strict card promises that nothing is asked before a run but the weight. A library
+     * program shaped like a plain pair — one group, one block, no repeats — does not keep that
+     * promise: an exercise pointed at one classifies as [ScheduleKind.SIMPLE_PAIR] and is asked
+     * how many holds and how many sets before every run. Offering it here would create an
+     * exercise in a branch it was not created in, permanently (§18.9), so it is not offered.
+     */
+    @Test
+    fun `a plain pair in the library is not offered as a strict schedule`() {
+        sheet(library())
+        name("Hangs")
+        tap(ExerciseForm.HOLD.title)
+        tap(ScheduleKind.STRICT.title)
+
+        compose.onNodeWithText("Fingerboard repeaters").assertExists()
+        compose.onNodeWithText("Hand-written pair protocol").assertDoesNotExist()
     }
 
     /** Nothing chosen in the strict branch is nothing to create with. */
@@ -295,7 +340,7 @@ class ExercisePickerCreateTest : ScreenTest() {
         tap(ScheduleKind.STRICT.title)
 
         compose.onNodeWithText("Build a schedule").assertExists()
-        compose.onNodeWithText("Fingerboard protocol").assertDoesNotExist()
+        compose.onNodeWithText("Fingerboard repeaters").assertDoesNotExist()
     }
 
     /**

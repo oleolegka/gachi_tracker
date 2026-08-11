@@ -136,7 +136,17 @@ val LocalGachiColors = staticCompositionLocalOf { LightGachiColors }
  * hairline border and the shadow rather than by fill.
  */
 private val LightScheme = lightColorScheme(
-    primary = AccentLight,
+    /*
+     * Sequential[4] (#256ABF), a step darker than `accent`, and the mockups say so for a
+     * measurable reason: white on `accent` is 4.42:1, and on this it is 5.39:1. Every filled
+     * button in the app is painted from this role, so the difference is not a detail of one
+     * screen - it is the floor for the most-tapped text in the product.
+     *
+     * `accent` itself is untouched: it is a CHART colour, drawn as a line or a dot with no
+     * text on it, and darkening it there would only make a trend harder to see. The two roles
+     * look alike and answer different questions - one carries a label, the other does not.
+     */
+    primary = Sequential[4],
     onPrimary = Color.White,
     // Material fills the FAB from primaryContainer and a selected chip from
     // secondaryContainer. Leaving them unset does not fall back to `primary` — it falls

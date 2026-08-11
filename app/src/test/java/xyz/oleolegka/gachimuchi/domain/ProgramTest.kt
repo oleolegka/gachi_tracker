@@ -201,26 +201,47 @@ class ProgramTest {
             id = 1, name = "Hangs", form = ExerciseForm.HOLD,
             workSec = 7.0, restSec = 3.0,
         )
-        val program = programFromExercise(exercise, reps = 6, sets = 4, restBetweenSetsSec = 180, prepareSec = 15)
+        val program = programFromExercise(exercise, reps = 6, prepareSec = 15)
         assertNotNull(program)
         val steps = program!!.flatten()
 
         assertEquals("Hangs", program.name)
-        assertEquals(24, steps.count { it.kind == StepKind.WORK })
+        assertEquals(6, steps.count { it.kind == StepKind.WORK })
         assertTrue(steps.filter { it.kind == StepKind.WORK }.all { it.durationSec == 7 })
         assertEquals(StepKind.PREPARE, steps.first().kind)
-        // 15 prepare + 24 hangs of 7 + 20 in-set rests of 3 + 3 between-set pauses of 183
-        assertEquals(15 + 168 + 60 + 549, program.totalSec())
+        // 15 prepare + 6 hangs of 7 + 5 in-set rests of 3; the trailing rest is dropped
+        assertEquals(15 + 42 + 15, program.totalSec())
+    }
+
+    /**
+     * §18.17, and the reason the whole change exists: a conducted run is ONE SET. The pause
+     * between sets used to be steps of this program, and while those ran they WERE the single
+     * conductor — the other hand could not start without wiping this run out.
+     */
+    @Test
+    fun `a run built from an exercise is one set and holds no pause between sets`() {
+        val exercise = ExerciseRef(
+            id = 1, name = "Hangs", form = ExerciseForm.HOLD,
+            workSec = 7.0, restSec = 3.0,
+        )
+        val steps = programFromExercise(exercise, reps = 6, prepareSec = 0)!!.flatten()
+
+        assertTrue(steps.none { it.name == "Rest between sets" })
+        assertTrue("nothing repeats the group", steps.all { it.groupRepeats == 1 })
+        // and the offer that comes out of it is a single set, not a run of several
+        val sets = completedSets(steps, endedAtIndex = steps.lastIndex, finished = true)
+        assertEquals(1, sets.size)
+        assertEquals(6, sets.single().reps)
     }
 
     @Test
     fun `an exercise without a protocol yields no program instead of an invented one`() {
         val bench = ExerciseRef(id = 2, name = "Bench press", form = ExerciseForm.STRENGTH)
-        assertNull(programFromExercise(bench, reps = 5, sets = 3, restBetweenSetsSec = 120))
+        assertNull(programFromExercise(bench, reps = 5))
 
         // a half-filled protocol is not a protocol either
         val halfway = ExerciseRef(id = 3, name = "Hangs", form = ExerciseForm.HOLD, workSec = 7.0)
-        assertNull(programFromExercise(halfway, reps = 5, sets = 3, restBetweenSetsSec = 120))
+        assertNull(programFromExercise(halfway, reps = 5))
     }
 
     @Test
@@ -243,7 +264,7 @@ class ProgramTest {
             workSec = 7.0, restSec = 3.0,
         )
 
-        val built = programFromExercise(hangs, reps = 6, sets = 4, restBetweenSetsSec = 180)!!
+        val built = programFromExercise(hangs, reps = 6)!!
 
         // the link is what decides whether finishing it offers to write the sets down
         assertEquals(42L, built.exerciseId)

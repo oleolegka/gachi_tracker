@@ -61,6 +61,11 @@ file into the exercise's name before the column left; see `MIGRATION_17_18` in
 The tracked variable — and therefore the personal record — is the added weight. Duration
 is fixed by the protocol, so improvement shows up as load.
 
+Added weight is one signed number and not two fields. Below zero is a band or a machine
+taking load off, which on a fingerboard is where most of the training happens, and it
+progresses towards zero and past it. Every number field that holds it says so, so that its
+minus buttons walk into the negative half instead of stopping at nothing.
+
 ## The timer counts time, not ticks
 
 The state of a running timer is the moment the current step ends, read from
@@ -199,9 +204,17 @@ screen is looked at the process may have been killed; an offer that lived in mem
 with it. A stored offer states when the run ended and files its sets under the day it
 happened on, and is dropped after a day.
 
-Stopping half way offers only the part that ran. Skipping forward, however, counts the
-skipped efforts as done — the runner keeps a position, not a history — which is exactly
-why the numbers are shown before they are written.
+Stopping half way offers only the part that ran, and so does skipping forward. A step the
+Skip button jumped out of is marked in the run state at the moment it is jumped, because
+afterwards there is nothing to tell it apart: the state is a position, and a run standing on
+step seven looks the same whether it counted its way there or leapt. The mark travels with
+the snapshot, so a rebuilt process and a run salvaged across a reboot subtract the same
+efforts. What the schedule asked for is kept alongside, so the offer reads "4 of 6" rather
+than quietly showing a smaller number.
+
+Still counted: an effort cut short with the minus button, at its planned length. A row here
+carries one length and the run measures no single effort, so closing that means recording
+what each effort actually lasted.
 
 The pause between sets comes from the program, where it is known exactly rather than
 derived.

@@ -19,6 +19,21 @@ package xyz.oleolegka.gachimuchi.domain
  * the two really do behave identically everywhere downstream, so the only thing lost is the
  * label the user would have picked, not any behaviour they were promised.
  */
+/**
+ * The category a schedule the app GENERATES is filed under.
+ *
+ * It is not what the library shows — the schedules section covers whole categories
+ * ([programSections]) — so this is read in two narrower places: the category chip in the
+ * program editor, and the `category` field of an exported program file. It said "Protocols"
+ * there, which is a word §18.15 retired precisely because it blurred with "program" and
+ * "schedule"; the owner's word wins.
+ *
+ * It lives here and not next to [EXERCISE_SCHEDULES_SECTION] because that constant is the
+ * SECTION HEADING the library draws and this one is a stored value written on a row — two
+ * different things that would read as one if they sat together under one name.
+ */
+const val SCHEDULE_CATEGORY = "Schedules"
+
 enum class ScheduleKind(val title: String) {
     /**
      * No schedule at all. Nothing counts time for this exercise; how long each hold lasted is
@@ -97,9 +112,50 @@ fun scheduleKindOf(program: WorkoutProgram?): ScheduleKind = when {
  * much for a row. So: the first effort's pair, how many efforts in total, and how long the
  * whole thing runs, all of which come off the same [flatten] the timer counts down, so the
  * line cannot drift away from what would actually be run.
+ *
+ * THREE fields, ONE separator (`design-system/app-next/SYSTEM.md`, rule 4). It used to read
+ * "7:3 - 24 efforts, 13:12" — a dash between the first two and a comma between the last two,
+ * so "24 efforts, 13:12" looked like one fact and "7:3" like a heading over it.
  */
 fun WorkoutProgram.scheduleSummary(): String {
     val block = firstBlock()
     val head = if (block != null) "${block.workSec}:${block.restSec}" else "empty"
-    return "$head - ${workStepCount()} efforts, ${formatClock(totalSec())}"
+    return "$head · ${workStepCount()} efforts · ${formatClock(totalSec())}"
+}
+
+/**
+ * How a hold exercise is timed, in the few characters a LIST ROW has for it — the exercise
+ * picker, the form-detail chip and the overview tile, which are the three places an exercise
+ * is named somewhere other than its own screen.
+ *
+ * ── What was wrong with what those three said ───────────────────────────────────
+ * All three read [WorkoutProgram.firstBlock] and printed "7:3", which is the whole truth for a
+ * [ScheduleKind.SIMPLE_PAIR] and the smallest part of it for a [ScheduleKind.STRICT] schedule:
+ * "10 s on 20 mm then 7 s on 15 mm, six of each, four times" came out as "10:7" — a caption
+ * that names one effort of forty-eight and says nothing about the other forty-seven. Worse, it
+ * was indistinguishable from the caption of a genuine pair, so the one thing the caption is
+ * for — telling two exercises of the same name apart (§12-A) — is exactly what it failed at.
+ *
+ * ── Why one function and not three fixes ────────────────────────────────────────
+ * The three places had three copies of the same expression, which is how they drifted into
+ * saying the same wrong thing three times over. There is one answer to "what is this
+ * exercise's schedule, in a few characters", so there is one function; a fourth caller gets
+ * the same words for free rather than writing a fourth copy.
+ *
+ * Null for [ScheduleKind.FREE] — including a schedule that counts nothing, which is free by
+ * [scheduleKindOf] — because the honest caption for "nothing counts time here" is no caption
+ * at all, which is what the callers already draw for an exercise with no schedule.
+ *
+ * The strict line says the COUNT of efforts rather than their lengths: a strict schedule can
+ * hold any number of different ones, and a row that listed them would be the full expansion
+ * this is deliberately not. [scheduleSummary] is the longer line, for the list a schedule is
+ * PICKED from, where the choice is between schedules rather than between exercises.
+ */
+fun scheduleCaption(program: WorkoutProgram?): String? = when (scheduleKindOf(program)) {
+    ScheduleKind.FREE -> null
+    ScheduleKind.SIMPLE_PAIR -> program?.firstBlock()?.let { "${it.workSec}:${it.restSec}" }
+    ScheduleKind.STRICT -> program?.let {
+        val efforts = it.workStepCount()
+        "strict - $efforts ${if (efforts == 1) "effort" else "efforts"}"
+    }
 }

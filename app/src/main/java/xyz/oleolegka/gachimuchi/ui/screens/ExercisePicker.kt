@@ -1,11 +1,15 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,19 +19,20 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +44,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -53,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -65,16 +72,22 @@ import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.ScheduleKind
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
-import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
 import xyz.oleolegka.gachimuchi.domain.parseProtocolSeconds
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
+import xyz.oleolegka.gachimuchi.domain.scheduleCaption
+import xyz.oleolegka.gachimuchi.domain.scheduleKindOf
 import xyz.oleolegka.gachimuchi.domain.scheduleSummary
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
+import xyz.oleolegka.gachimuchi.ui.components.EyebrowStyle
+import xyz.oleolegka.gachimuchi.ui.components.MissingNote
 import xyz.oleolegka.gachimuchi.ui.fmtDay
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 import java.time.LocalDate
 
 /**
@@ -140,9 +153,9 @@ data class NewExercise(
  * synonyms are gone (domain/Session.kt), and with them that reason.
  *
  * So the list now says what it means. The two exits it used to hide are named out loud
- * instead — clear the search, or create the exercise — because they are not the same move
- * and the difference matters: one finds an exercise that already has a history, the other
- * starts a second one beside it.
+ * instead — clear the search, or create the exercise — and as BUTTONS rather than as clauses
+ * in a sentence, because they are not the same move and the difference matters: one finds an
+ * exercise that already has a history, the other starts a second one beside it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -184,7 +197,7 @@ fun ExercisePickerSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         val frame = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = Spacing.Block)
             .navigationBarsPadding()
             .imePadding()
 
@@ -203,7 +216,7 @@ fun ExercisePickerSheet(
              */
             Column(
                 modifier = frame.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Block),
             ) {
                 CreateExerciseForm(
                     initialName = query,
@@ -226,7 +239,7 @@ fun ExercisePickerSheet(
         } else {
             Column(
                 modifier = frame,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Inset),
             ) {
                 PickExisting(
                     state = state,
@@ -244,6 +257,25 @@ fun ExercisePickerSheet(
         }
     }
 }
+
+/**
+ * How tall the catalog list is allowed to be inside the sheet.
+ *
+ * ── The number is a signal, not a guess ─────────────────────────────────────────
+ * Four rows of 56 with a hairline under each is 228, and this is eight more: the fifth row
+ * starts and is CUT by the edge of the sheet, which is the whole reason the constant exists.
+ * The list used to stop at 380 — a height that on most catalogs happens to land between two
+ * rows, so the list ended flush and looked complete when it was not (rule 2: a hidden thing
+ * has a sign). The count in the heading is the other half of that signal; a clipped row with
+ * no count beside it reads as a layout defect rather than as "there is more, scroll".
+ *
+ * The alternative was not to clip at all, but a sheet that grows with the catalog is a sheet
+ * that covers the session it was opened over, which is the one thing a sheet is for.
+ */
+private val LIST_MAX_HEIGHT = 236.dp
+
+/** The row of the catalog list: 44 for a thumbnail plus air, and never under the 48 floor. */
+private val ROW_MIN_HEIGHT = 56.dp
 
 @Composable
 private fun PickExisting(
@@ -277,95 +309,159 @@ private fun PickExisting(
     val catalogEmpty = visible.isEmpty()
     val searching = query.isNotBlank()
 
-    Text(heading, style = MaterialTheme.typography.titleMedium)
-    // nothing to search through on a first run, and a search box would only invite typing
-    // that can never match
-    if (!catalogEmpty) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQuery,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            // the way back to the whole catalog, which used to happen by itself when a
-            // search matched nothing; now that the list stays narrowed it has to be reachable
-            // without deleting the word character by character
-            trailingIcon = {
+    /*
+     * The heading says HOW MANY, which is not in the model and is the one thing added here.
+     * It earns its place off the clipped list above: "12 exercises" beside a row cut in half
+     * turns the cut into a promise of more, and while a search is narrowing, "2 of 12" is the
+     * only place the size of the narrowing is visible at all.
+     */
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Text(heading, style = MaterialTheme.typography.titleMedium)
+        if (!catalogEmpty) {
+            Text(
                 if (searching) {
-                    IconButton(onClick = { onQuery("") }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Clear the search")
-                    }
-                }
-            },
-            placeholder = { Text("Search by name") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-        )
-    }
-
-    if (onNew != null) {
-        Button(
-            onClick = onNew,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) {
-            Icon(Icons.Filled.Add, contentDescription = null)
-            Text(if (catalogEmpty) "  Create your first exercise" else "  New exercise")
+                    "${items.size} of ${visible.size}"
+                } else {
+                    "${visible.size} ${if (visible.size == 1) "exercise" else "exercises"}"
+                },
+                fontSize = TextSize.Caption,
+                color = colors.inkMuted,
+            )
         }
     }
 
-    HorizontalDivider()
+    /*
+     * Picking is what the sheet is FOR and creating is the rare case, so the two stopped being
+     * the same size (rule 1): the search takes the row and "New" is an outlined button beside
+     * it. On 360 that is 328 - 70 - 8 = 250 for the field, which holds the placeholder whole.
+     *
+     * The one state where creating is filled and full width is an empty catalog: there is
+     * nothing to pick, nothing to search through, and a search box above an empty list would
+     * only invite typing that can never match.
+     */
+    if (catalogEmpty) {
+        if (onNew != null) {
+            Button(
+                onClick = onNew,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null)
+                Text("  Create your first exercise")
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQuery,
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                // the way back to the whole catalog, which used to happen by itself when a
+                // search matched nothing; now that the list stays narrowed it has to be
+                // reachable without deleting the word character by character
+                trailingIcon = {
+                    if (searching) {
+                        IconButton(onClick = { onQuery("") }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear the search")
+                        }
+                    }
+                },
+                placeholder = { Text("Search by name") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+            )
+            if (onNew != null) {
+                OutlinedButton(
+                    onClick = onNew,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = Spacing.Inset),
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = null, // the word beside it says it
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(" New")
+                }
+            }
+        }
+    }
 
     /*
-     * An empty list has to say WHY it is empty, and the two reasons want opposite sentences:
-     * a catalog with nothing in it is a first run, while a search that found nothing is a
-     * list that has been narrowed and can be un-narrowed. Saying "nothing here" to both
-     * would leave the second one looking like a dead end when the way out is one tap away.
+     * An empty list has to say WHY it is empty, and there are three reasons, not one. A
+     * catalog with nothing in it is a first run; a catalog with nothing in it and no way to
+     * create is the slot editor, which must not name an exit that is not on the screen; and a
+     * search that found nothing is a list that has been narrowed and can be un-narrowed.
+     *
+     * The third is the one that used to read as a dead end, because both ways out of it were
+     * mentioned inside a two-line sentence. They are buttons now.
      */
     if (items.isEmpty()) {
-        Text(
-            when {
-                /*
-                 * Without a way to create, every one of these has to stop offering one. The
-                 * sentences are otherwise identical, because the situation is: the difference
-                 * is only in which exits exist from it, and naming an exit that is not on the
-                 * screen is how a dead end gets dressed up as a choice.
-                 */
-                catalogEmpty && onNew == null ->
-                    "Nothing in the catalog yet. Exercises are created while logging a workout; " +
-                        "once one exists it can be planned here."
+        when {
+            catalogEmpty && onNew == null -> Text(
+                "Nothing in the catalog yet. Exercises are created while logging a workout; " +
+                    "once one exists it can be planned here.",
+                fontSize = TextSize.Body,
+                color = colors.inkSecondary,
+            )
 
-                catalogEmpty ->
-                    "Nothing in the catalog yet. An exercise is created once and then reused " +
-                        "for every set of it."
+            catalogEmpty -> Text(
+                "Nothing in the catalog yet. An exercise is created once and then reused.",
+                fontSize = TextSize.Body,
+                color = colors.inkSecondary,
+            )
 
-                onNew == null ->
-                    "No exercise is called \"$query\". Clear the search to see the whole catalog."
-
-                else ->
-                    "No exercise is called \"$query\". Clear the search to see the whole " +
-                        "catalog, or create it as a new exercise with a history of its own."
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.inkMuted,
-            modifier = Modifier.padding(vertical = 8.dp),
-        )
+            else -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.Inset)) {
+                Text(
+                    "No exercise is called \"$query\".",
+                    fontSize = TextSize.Body,
+                    color = colors.inkSecondary,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Line),
+                ) {
+                    OutlinedButton(
+                        onClick = { onQuery("") },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("Clear the search") }
+                    if (onNew != null) {
+                        Button(
+                            onClick = onNew,
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text("Create \"$query\"") }
+                    }
+                }
+            }
+        }
     }
 
     val context = LocalContext.current
     val pictureStore = remember(context) { ExercisePictureStore.get(context) }
 
-    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
-        items(items, key = { it.id }) { exercise ->
+    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = LIST_MAX_HEIGHT)) {
+        itemsIndexed(items, key = { _, it -> it.id }) { index, exercise ->
+            if (index > 0) HorizontalDivider(color = colors.grid)
             val form = runCatching { ExerciseForm.fromCode(exercise.form) }.getOrNull()
-            val protocolBlock = exercise.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
+            val scheduleLine =
+                scheduleCaption(exercise.protocolProgramId?.let { state.programsById[it] })
             val used = usage[exercise.id]
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onPick(exercise.id) }
-                    .heightIn(min = 56.dp)
-                    .padding(vertical = 8.dp),
+                    .heightIn(min = ROW_MIN_HEIGHT)
+                    .padding(vertical = Spacing.Line),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Inset),
             ) {
                 /*
                  * The whole point of a picture here (owner's own words): "on different machines
@@ -381,37 +477,71 @@ private fun PickExisting(
                             bitmap = it,
                             contentDescription = null, // decoration: the name beside it already says which exercise
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
+                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(Radius.Small)),
                         )
                     }
                 }
-                Column {
-                    Text(exercise.name, style = MaterialTheme.typography.titleMedium)
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
                     Text(
-                        buildString {
-                            append(form?.title ?: "unknown form")
-                            /*
-                             * The protocol is on the row because it is what makes two rows of the
-                             * same NAME two exercises (§12-A). It used to be unnecessary here for a
-                             * bad reason: creating an exercise deduplicated by name, so a second
-                             * "Hangs" on another protocol could not exist — it was silently handed
-                             * the first one's history. Now that it can exist, a list showing two
-                             * identical lines would put the same failure back one step later, with
-                             * the user picking whichever of the two came first.
-                             */
-                            if (protocolBlock != null) {
-                                append(" - ${protocolBlock.workSec}:${protocolBlock.restSec}")
-                            }
-                            if (used == null) {
-                                append(" - not logged yet")
-                            } else {
-                                append(" - ${used.count} entries, last on ")
-                                append(fmtDay(runCatching { LocalDate.parse(used.lastDate) }.getOrDefault(today)))
-                            }
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkSecondary,
+                        exercise.name,
+                        fontSize = TextSize.Body,
+                        fontWeight = FontWeight.SemiBold,
                     )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        /*
+                         * The form's own colour, from the categorical scale the day cards and
+                         * the charts already use — so "Holds" is the same orange wherever the
+                         * eye meets it. Never colour alone: the word is right beside it.
+                         */
+                        if (form != null) {
+                            Box(
+                                Modifier
+                                    .size(Spacing.Line)
+                                    .clip(CircleShape)
+                                    .background(colors.forForm(form))
+                            )
+                        }
+                        Text(
+                            /*
+                             * ONE separator (rule 4). This line used to read
+                             * "Holds - 7:3 - 12 entries, last on 9 Aug": three fields, three
+                             * different punctuation marks, and the last one a comma that made
+                             * "12 entries, last on 9 Aug" look like a single fact.
+                             *
+                             * The order is what the exercise IS, then how much of it there is:
+                             * form, protocol, how many times, when last.
+                             */
+                            buildList {
+                                add(form?.title ?: "unknown form")
+                                /*
+                                 * The protocol is on the row because it is what makes two rows
+                                 * of the same NAME two exercises (§12-A). It used to be
+                                 * unnecessary here for a bad reason: creating an exercise
+                                 * deduplicated by name, so a second "Hangs" on another protocol
+                                 * could not exist — it was silently handed the first one's
+                                 * history. Now that it can exist, a list showing two identical
+                                 * lines would put the same failure back one step later.
+                                 */
+                                scheduleLine?.let { add(it) }
+                                if (used == null) {
+                                    add("not logged yet")
+                                } else {
+                                    add("${used.count} entries")
+                                    add(
+                                        "last " + fmtDay(
+                                            runCatching { LocalDate.parse(used.lastDate) }
+                                                .getOrDefault(today)
+                                        )
+                                    )
+                                }
+                            }.joinToString(" · "),
+                            fontSize = TextSize.Caption,
+                            color = colors.inkSecondary,
+                        )
+                    }
                 }
             }
         }
@@ -439,6 +569,11 @@ private const val PICKER_THUMB_MAX_PX = 96
  * one of four. Gated on the same forms the edit dialog gates it on: a hang and a pistol
  * squat are the same asymmetry, a run and a weigh-in have no sides.
  *
+ * It is a SWITCH here, as it already is in `EditExerciseScreen`. It was a `FilterChip`, which
+ * is the control this app uses for "narrow the list to these" — and one property of one
+ * exercise wearing two different controls on two screens is the same defect the redraw is
+ * removing everywhere else (`app-next/exercise-picker.html`).
+ *
  * ── A hold says WHICH OF THREE it is, out loud (§18.15) ────────────────────────
  * This form used to ask a hold for two numbers, or let it point at a library program through
  * a row of chips, and never said what either meant. The owner, from the phone: "right now it
@@ -451,10 +586,11 @@ private const val PICKER_THUMB_MAX_PX = 96
  *   STRICT        the whole timing fixed in advance — efforts, order, gaps, repeats, sets —
  *                 with nothing left to ask before a run but the weight.
  *
- * So the choice is now a card each, with one sentence saying what it is and when to take it,
- * and NOTHING is preselected: this is the one moment it can be answered (§18.9 freezes an
- * exercise's schedule from then on), so it is worth a deliberate tap rather than a default
- * nobody read.
+ * So the choice is a card each, with ONE sentence saying what it is and one saying what it
+ * costs before a run — the second line worded identically on all three, so the three answers
+ * stack into a table instead of three paragraphs to be compared by reading. NOTHING is
+ * preselected: this is the one moment it can be answered (§18.9 freezes an exercise's
+ * schedule from then on), so it is worth a deliberate tap rather than a default nobody read.
  *
  * The strict branch reuses the library editor rather than growing a second one — see
  * [ScheduleBranch]'s note on the dialog, and [xyz.oleolegka.gachimuchi.ui.screens.
@@ -513,65 +649,101 @@ private fun CreateExerciseForm(
         label = { Text("Name") },
     )
 
-    Text("Form", style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ExerciseForm.entries.forEach { candidate ->
-            FilterChip(
-                selected = form == candidate,
-                onClick = { form = candidate },
-                label = { Text(candidate.title) },
-            )
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+        Text("Form".uppercase(), style = EyebrowStyle, color = colors.inkMuted)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Line),
+        ) {
+            ExerciseForm.entries.forEach { candidate ->
+                FilterChip(
+                    selected = form == candidate,
+                    onClick = { form = candidate },
+                    label = { Text(candidate.title) },
+                )
+            }
         }
     }
 
     if (lifted) {
-        FilterChip(
-            selected = oneSided,
-            onClick = { oneSided = !oneSided },
-            label = { Text("One side at a time") },
-        )
-        Text(
-            "Each side keeps its own record, and every set of this exercise is asked which " +
-                "side it was. It joins a workout as two cards, one per side.",
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkSecondary,
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(
+                    value = oneSided,
+                    role = Role.Switch,
+                    onValueChange = { oneSided = it },
+                )
+                .heightIn(min = 48.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Inset),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Text("One side at a time", fontSize = TextSize.Body)
+                Text(
+                    "Own record per side; joins a workout as two cards.",
+                    fontSize = TextSize.Caption,
+                    color = colors.inkSecondary,
+                )
+            }
+            // null handler: the whole row is the target, and a second one inside it would
+            // give the same answer two hit areas of different sizes
+            Switch(checked = oneSided, onCheckedChange = null)
+        }
     }
 
     if (hold) {
-        Text("Schedule", style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
-        Text(
-            "How this exercise is timed is part of what it IS: the same holds on another " +
-                "schedule are a separate exercise with a separate record, and this is the " +
-                "only moment it can be chosen.",
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkSecondary,
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+            Text("Schedule".uppercase(), style = EyebrowStyle, color = colors.inkMuted)
+            Text(
+                // one line where there were three above the cards and three more below the
+                // chosen schedule, saying the same thing twice (rule 5)
+                "Fixed the moment this exercise exists: the same holds on another schedule " +
+                    "are a separate exercise.",
+                fontSize = TextSize.Meta,
+                color = colors.inkSecondary,
+            )
+        }
         ScheduleKind.entries.forEach { candidate ->
             ScheduleCard(
                 kind = candidate,
                 selected = kind == candidate,
                 onSelect = { kind = candidate },
-            )
+            ) {
+                /*
+                 * The pair's two fields live INSIDE the card of the branch that asks for them.
+                 * They used to stand in a row under all three cards, belonging to none of them
+                 * by anything the eye could see.
+                 *
+                 * The cost, said out loud: the "Simple pair" card is then taller than the two
+                 * beside it, so the three stop being the same size at the moment they are being
+                 * compared. The alternative — fields outside, captioned "Simple pair" — puts two
+                 * places about one branch on one screen, which is worse.
+                 */
+                if (candidate == ScheduleKind.SIMPLE_PAIR) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+                        OutlinedTextField(
+                            value = work, onValueChange = { work = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true, label = { Text("Work, s") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        )
+                        OutlinedTextField(
+                            value = rest, onValueChange = { rest = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true, label = { Text("Rest, s") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        )
+                    }
+                }
+            }
         }
 
-        when (kind) {
-            ScheduleKind.FREE -> Unit
-
-            ScheduleKind.SIMPLE_PAIR -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = work, onValueChange = { work = it }, modifier = Modifier.weight(1f),
-                    singleLine = true, label = { Text("Work, s") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-                OutlinedTextField(
-                    value = rest, onValueChange = { rest = it }, modifier = Modifier.weight(1f),
-                    singleLine = true, label = { Text("Rest, s") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-            }
-
-            ScheduleKind.STRICT -> ScheduleBranch(
+        if (kind == ScheduleKind.STRICT) {
+            ScheduleBranch(
                 name = name,
                 draft = draft,
                 picked = picked,
@@ -588,14 +760,39 @@ private fun CreateExerciseForm(
                     draft = null
                 },
             )
-
-            null -> Unit
         }
     }
 
+    /*
+     * A hold cannot be created until it has said which of the three it is, and the branch it
+     * named has to actually carry an answer.
+     *
+     * The gate is ON THE BUTTON THAT STARTS THE THING rather than in a message afterwards, for
+     * the same reason the past-day plan rule ended up there: a refusal at the end of a form is
+     * a form that let you fill it in wrong. And the reason the gate exists at all is that the
+     * wrong answers here are not correctable — §18.9 freezes an exercise's schedule at creation
+     * — so "Simple pair with both fields empty" would silently produce a FREE exercise,
+     * permanently, from a card the user had explicitly tapped to say otherwise.
+     *
+     * What is new is only that the gate SAYS SO. It used to be an `enabled = ...` expression
+     * and silence: the button was grey and the reason was nowhere on the screen.
+     */
+    val missing: String? = when {
+        name.isBlank() -> "Give it a name."
+        !hold -> null
+        kind == null -> "Say how this exercise is timed - it cannot be changed later."
+        kind == ScheduleKind.SIMPLE_PAIR &&
+            (parseProtocolSeconds(work) == null || parseProtocolSeconds(rest) == null) ->
+            "Fill in both work and rest."
+        kind == ScheduleKind.STRICT && strictSchedule == null ->
+            "Build a schedule, or take one from the library."
+        else -> null
+    }
+    if (missing != null) MissingNote(missing)
+
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Block),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         OutlinedButton(onClick = onCancel, modifier = Modifier.heightIn(min = 48.dp)) { Text("Back") }
@@ -628,7 +825,7 @@ private fun CreateExerciseForm(
                         form = form,
                         workSec = pair?.first,
                         restSec = pair?.second,
-                        // a form with no sides never reports one, whatever the chip was
+                        // a form with no sides never reports one, whatever the switch was
                         // left at before the form was switched
                         oneSided = lifted && oneSided,
                         protocolProgramId = if (strict) picked?.id else null,
@@ -636,93 +833,95 @@ private fun CreateExerciseForm(
                     )
                 )
             },
-            /*
-             * A hold cannot be created until it has said which of the three it is, and the
-             * branch it named has to actually carry an answer.
-             *
-             * The gate is ON THE BUTTON THAT STARTS THE THING rather than in a message
-             * afterwards, for the same reason the past-day plan rule ended up there: a refusal
-             * at the end of a form is a form that let you fill it in wrong. And the reason the
-             * gate exists at all is that the wrong answers here are not correctable — §18.9
-             * freezes an exercise's schedule at creation — so "Simple pair with both fields
-             * empty" would silently produce a FREE exercise, permanently, from a card the user
-             * had explicitly tapped to say otherwise.
-             */
-            enabled = name.isNotBlank() && (
-                !hold || when (kind) {
-                    ScheduleKind.FREE -> true
-                    ScheduleKind.SIMPLE_PAIR ->
-                        parseProtocolSeconds(work) != null && parseProtocolSeconds(rest) != null
-                    ScheduleKind.STRICT -> strictSchedule != null
-                    null -> false
-                }
-                ),
+            enabled = missing == null,
             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
         ) { Text(confirmLabel) }
     }
 }
 
 /**
- * One of the three branches, as a card that says what it is and when to take it.
+ * One of the three branches, as a card that says what it is and what it costs before a run.
  *
  * A card rather than a chip, and a sentence rather than a label, because the complaint that
  * produced this was not "the control is wrong", it was "I cannot tell what I am choosing"
  * (owner, 2026-08-11). A row of chips reading Free / Pair / Strict would have been the same
  * screen with shorter words on it.
  *
+ * ── Chosen shows as a RING, not as a tint ───────────────────────────────────────
+ * It used to be `secondaryContainer` against `surfaceVariant`, and in this palette
+ * `surfaceVariant` IS the plane the sheet sits on — an unchosen card was invisible, and a
+ * chosen one differed from it by a step of surface nobody can see at arm's length. A two
+ * pixel ring in the accent is visible in both themes and survives the card being over any
+ * surface. The inner padding drops by exactly the pixel the ring gained, so the text does not
+ * shift when the card is tapped.
+ *
  * The radio button is not decoration either: it makes the group read as "one of these" to
  * anyone arriving with a screen reader, and it is what `assertIsSelected` in the tests is
  * asserting on.
  */
 @Composable
-private fun ScheduleCard(kind: ScheduleKind, selected: Boolean, onSelect: () -> Unit) {
+private fun ScheduleCard(
+    kind: ScheduleKind,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    /** What belongs to this branch and only to it, drawn inside the card when it is chosen. */
+    extra: @Composable () -> Unit = {},
+) {
     val colors = LocalGachiColors.current
-    Card(
+    val shape = RoundedCornerShape(Radius.Card)
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            },
-        ),
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) colors.accent else colors.border,
+                shape = shape,
+            )
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            // one dp back for the one the ring took, so the geometry does not jump
+            .padding(if (selected) Spacing.Inset - 1.dp else Spacing.Inset),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Line),
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // null onClick: the whole card is the target, and a second one inside it
-                // would give the same choice two hit areas with different sizes
-                RadioButton(selected = selected, onClick = null)
-                Text(kind.title, style = MaterialTheme.typography.titleSmall)
-            }
+            // null onClick: the whole card is the target, and a second one inside it
+            // would give the same choice two hit areas with different sizes
+            RadioButton(selected = selected, onClick = null)
+            Text(kind.title, style = MaterialTheme.typography.titleMedium)
+        }
+        Text(
+            when (kind) {
+                ScheduleKind.FREE -> "Nothing counts time; you type in how long each hold was."
+                ScheduleKind.SIMPLE_PAIR -> "One work time and one rest time, and nothing else."
+                ScheduleKind.STRICT -> "Every effort, gap, repeat and set fixed in advance."
+            },
+            fontSize = TextSize.Meta,
+            color = colors.inkSecondary,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+            // the same four words on all three cards, so the three answers line up under each
+            // other and are read as a column rather than as three paragraphs
+            Text(
+                "Before a run:",
+                fontSize = TextSize.Caption,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.inkMuted,
+            )
             Text(
                 when (kind) {
-                    ScheduleKind.FREE ->
-                        "No schedule at all. Nothing counts time for you: how long each hold " +
-                            "lasted is typed in by hand. Take it when the holds are improvised."
-
-                    ScheduleKind.SIMPLE_PAIR ->
-                        "One work time and one rest time, and nothing else. How many holds " +
-                            "and how many sets is asked before every run. Take it when the " +
-                            "pair is the whole of it."
-
-                    ScheduleKind.STRICT ->
-                        "Every timing fixed in advance: which efforts, how long, in what " +
-                            "order, the gaps between them, the repeats and the sets. Before a " +
-                            "run nothing is asked but the weight. Take it when the session is " +
-                            "a protocol you follow."
+                    ScheduleKind.FREE -> "nothing is asked."
+                    ScheduleKind.SIMPLE_PAIR -> "how many holds, how many sets."
+                    ScheduleKind.STRICT -> "the weight only."
                 },
-                style = MaterialTheme.typography.labelSmall,
+                fontSize = TextSize.Caption,
                 color = colors.inkSecondary,
             )
         }
+        if (selected) extra()
     }
 }
 
@@ -745,14 +944,17 @@ private fun ScheduleCard(kind: ScheduleKind, selected: Boolean, onSelect: () -> 
  * inside the composable that owns the draft: the sheet stays exactly where it was, and the
  * editor's Save hands a value back to a local variable.
  *
+ * ── The button says that it leaves this screen (rule 2) ─────────────────────────
+ * It was a plain outlined button, behind which a whole editor unfolded over the sheet. Now it
+ * carries a chevron and one line saying where it goes and that it comes back here — which is
+ * the honest half of what can be fixed by drawing.
+ *
  * ── What is bad about it, said out loud ─────────────────────────────────────────
  * It stacks a full-window dialog on top of a modal sheet — three windows deep counting the
  * activity — and Compose's own dismissal handling is what has to keep the order straight;
- * the app's single [xyz.oleolegka.gachimuchi.ui.backStep] never sees any of it. And the
- * editor's own top bar is written for the library ("New program", Save), which is a second
- * vocabulary arriving in the middle of a form that says "schedule"; `asSchedule` renames the
- * two words that would otherwise contradict it, but the editor is still visibly a screen
- * borrowed from elsewhere.
+ * the app's single [xyz.oleolegka.gachimuchi.ui.backStep] never sees any of it. The editor's
+ * top bar now says which exercise it was opened for and that its arrow returns here, but that
+ * is a caption over an architectural stack, not a fix for it.
  *
  * ── Nothing is written until the exercise is ────────────────────────────────────
  * The built schedule goes home as a value on [NewExercise] and is stored one step before the
@@ -775,60 +977,87 @@ private fun ScheduleBranch(
     val chosen = draft ?: picked
 
     if (chosen != null) {
-        Text(
-            "Schedule: ${chosen.name}",
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
-            chosen.scheduleSummary(),
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkSecondary,
-        )
-        Text(
-            "Fixed from the moment this exercise exists: a schedule an exercise is led by " +
-                "is not edited afterwards, it is what the exercise IS.",
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkSecondary,
-        )
-    }
-
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { editing = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text(if (draft != null) "Edit the schedule" else "Build a schedule")
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Radius.Card))
+                .background(colors.recessed)
+                .padding(Spacing.Inset),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Text(chosen.name, fontSize = TextSize.Body, fontWeight = FontWeight.SemiBold)
+            Text(
+                chosen.scheduleSummary(),
+                fontSize = TextSize.Caption,
+                color = colors.inkSecondary,
+            )
+            Text(
+                if (draft != null) {
+                    "Built here, not in the library yet - it is stored with the exercise."
+                } else {
+                    "Fixed once this exercise exists."
+                },
+                fontSize = TextSize.Caption,
+                color = colors.inkMuted,
+            )
         }
     }
 
-    if (candidates.isNotEmpty()) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+        OutlinedButton(
+            onClick = { editing = true },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Text(
+                if (draft != null) "Edit the schedule" else "Build a schedule",
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null, // the line under the button says where it goes
+            )
+        }
         Text(
-            "Or use one already in the library. Two exercises sharing a schedule is normal " +
-                "and deliberate: 20 mm and 15 mm hangs are the same protocol on a different edge.",
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkSecondary,
+            "Opens the schedule editor full screen and comes back here.",
+            fontSize = TextSize.Caption,
+            color = colors.inkMuted,
         )
-        candidates.forEach { program ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .selectable(
-                        selected = picked?.id == program.id,
-                        role = Role.RadioButton,
-                        onClick = { onPick(program.id) },
-                    )
-                    .heightIn(min = 48.dp)
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                RadioButton(selected = picked?.id == program.id, onClick = null)
-                Column {
-                    Text(program.name, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        program.scheduleSummary(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkSecondary,
-                    )
+    }
+
+    if (candidates.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+            Text("Or take one from the library".uppercase(), style = EyebrowStyle, color = colors.inkMuted)
+            candidates.forEach { program ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = picked?.id == program.id,
+                            role = Role.RadioButton,
+                            onClick = { onPick(program.id) },
+                        )
+                        .heightIn(min = 48.dp)
+                        .padding(vertical = Spacing.Tight),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                ) {
+                    RadioButton(selected = picked?.id == program.id, onClick = null)
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                        Text(program.name, fontSize = TextSize.Body)
+                        Text(
+                            program.scheduleSummary(),
+                            fontSize = TextSize.Caption,
+                            color = colors.inkSecondary,
+                        )
+                    }
                 }
             }
+            Text(
+                "Two exercises may share one schedule: 20 mm and 15 mm hangs are the same " +
+                    "protocol on a different edge.",
+                fontSize = TextSize.Caption,
+                color = colors.inkMuted,
+            )
         }
     }
 
@@ -852,6 +1081,7 @@ private fun ScheduleBranch(
                     candidates = emptyList(),
                     categories = categories,
                     asSchedule = true,
+                    forExercise = name.trim().ifEmpty { null },
                     onSave = {
                         onDraft(it)
                         editing = false
@@ -887,17 +1117,40 @@ private fun blankSchedule(exerciseName: String): WorkoutProgram {
 }
 
 /**
- * The library programs an exercise can be led by: those with a first block that is a real
- * work:rest pair.
+ * The library programs the STRICT branch can be led by: the ones that ARE a strict schedule.
  *
- * A block of zero seconds is not a protocol — `HoldSet`'s validator refuses one by throwing,
- * which on the logging screen surfaces as a crash on the Add button rather than as a message
- * — so such a program is not offered rather than offered and then refused. Everything else is
- * fair game, INCLUDING programs with several groups and a warm-up: that richness is the whole
- * point of picking one instead of typing two numbers.
+ * ── The test is the classifier, and that is the whole point ─────────────────────
+ * This list sits under a card the user has just tapped that promises "every timing fixed in
+ * advance, nothing asked before a run but the weight". Whether that promise is kept is
+ * decided later by [scheduleKindOf] reading the shape of the program, so the only programs
+ * that may appear here are the ones that classifier calls [ScheduleKind.STRICT]. Anything
+ * else is an exercise created as one branch and conducted as another — which
+ * `domain/HoldSchedule.kt` names as the worst failure it can have.
+ *
+ * Two kinds of row leave the list because of it, and both were offers of something the app
+ * would not then do:
+ *
+ * - a program with NOTHING TO COUNT (no groups, a group with no blocks, blocks of zero work).
+ *   The library editor stores such a program, [flatten] turns it into an empty list of steps,
+ *   and an exercise pointed at one classifies as [ScheduleKind.FREE] — so the strict card
+ *   would have produced a free hold, permanently (§18.9), from a row whose own caption said
+ *   "empty - 0 efforts";
+ * - a program shaped like a plain PAIR — one group, one block, no repeats. It classifies as
+ *   [ScheduleKind.SIMPLE_PAIR], which is the branch that asks how many holds and how many sets
+ *   before every run. That is the pair branch's own job, reached by typing the two numbers,
+ *   and offering it here made the card above the list a lie.
+ *
+ * Richness is still fair game, INCLUDING several groups and a warm-up: that is the whole point
+ * of picking one instead of typing two numbers.
+ *
+ * ── What is no longer required, and why it never should have been ───────────────
+ * The old test was "the first block is a real work:rest pair", rest included. A strict
+ * schedule whose first effort is followed by no pause at all — a maximum hang with the rest
+ * carried on the group — is a perfectly ordinary hangboard protocol, and it was silently
+ * absent from this list. The reason given was that `HoldSet`'s validator throws on a
+ * non-positive protocol, but it never sees one: [xyz.oleolegka.gachimuchi.domain.ExerciseRef.
+ * protocol] answers null unless BOTH numbers are positive, and a null protocol writes both
+ * fields as null, which is the pair the validator asks for.
  */
 internal fun protocolCandidates(programs: List<WorkoutProgram>): List<WorkoutProgram> =
-    programs.filter { program ->
-        val block = program.firstBlock()
-        block != null && block.workSec > 0 && block.restSec > 0
-    }
+    programs.filter { scheduleKindOf(it) == ScheduleKind.STRICT }

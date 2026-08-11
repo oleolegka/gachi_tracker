@@ -35,6 +35,9 @@ import xyz.oleolegka.gachimuchi.domain.exerciseToLogNext
 import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.lastHoldSet
 import xyz.oleolegka.gachimuchi.domain.loggingDay
+import xyz.oleolegka.gachimuchi.domain.looseWorkout
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
+import xyz.oleolegka.gachimuchi.domain.frozenScheduleIds
 import xyz.oleolegka.gachimuchi.domain.openWorkoutRow
 import xyz.oleolegka.gachimuchi.timer.SpeechStatus
 import xyz.oleolegka.gachimuchi.ui.components.DayActions
@@ -48,7 +51,6 @@ import xyz.oleolegka.gachimuchi.ui.screens.ConductorScreen
 import xyz.oleolegka.gachimuchi.ui.screens.DayEntriesScreen
 import xyz.oleolegka.gachimuchi.ui.screens.EditExerciseScreen
 import xyz.oleolegka.gachimuchi.ui.screens.FormDetailScreen
-import xyz.oleolegka.gachimuchi.ui.screens.LogScreen
 import xyz.oleolegka.gachimuchi.ui.screens.OverviewScreen
 import xyz.oleolegka.gachimuchi.ui.screens.ProgramEditorScreen
 import xyz.oleolegka.gachimuchi.ui.screens.SettingsScreen
@@ -122,6 +124,9 @@ fun GachiApp(viewModel: MainViewModel) {
     // the workout being sketched before it has actually begun (§13.1) — null whenever there
     // is none, which is most of the time
     val draft by viewModel.draft.collectAsStateWithLifecycle()
+    // exercises admitted on the standalone entry screen and not yet recorded against — the
+    // same staging a draft does, for the case that has no workout row to write them to
+    val loose by viewModel.loose.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(HomeTab) }
     /*
@@ -230,15 +235,17 @@ fun GachiApp(viewModel: MainViewModel) {
 
     /*
      * Every program some exercise's protocol currently IS, and the exercises that point at it
-     * — the UI-side mirror of ProgramRepository.isReferenced, computed here from state already
-     * loaded rather than by a second query, because both this screen's lock and TimerScreen's
-     * schedule section need the same answer on every recomposition of a live catalog. The
-     * enforcement itself lives in the repository (see save's own KDoc); this is only what
-     * decides which controls to show.
+     * — computed here from state already loaded rather than by a second query, because both
+     * this screen's lock and TimerScreen's schedule section need the same answer on every
+     * recomposition of a live catalog.
      *
      * A LIST of names per program, not one name: twins (a hang on 20 mm and the same hang on
      * 15 mm) deliberately share one schedule (decisions §18.15), and a row that named only the
      * first of them would read as if the other one had none.
+     *
+     * BEING A SCHEDULE AND BEING FROZEN ARE TWO FACTS NOW, and this is only the first: it is
+     * what files a program under the "Exercise schedules" heading and what makes a row say
+     * whose it is. Whether it may still be EDITED is [frozenProgramIds] below.
      */
     val scheduleOwners = remember(state.exercises) {
         val owners = LinkedHashMap<Long, MutableList<String>>()
@@ -248,7 +255,24 @@ fun GachiApp(viewModel: MainViewModel) {
         }
         owners.mapValues { it.value.toList() }
     }
-    val referencedProgramIds = scheduleOwners.keys
+    /*
+     * The UI-side mirror of ProgramRepository.isFrozen — the schedules that have had a set
+     * recorded against them and are therefore closed to editing and to deletion (§18.19).
+     *
+     * THE SAME DOMAIN FUNCTION THE REPOSITORY ASKS, not a second rule spelled out here: the
+     * editor showing a field the repository would then silently drop is the exact failure the
+     * owner named, and a screen with its own copy of the rule is how that happens. Folded once
+     * for the whole library rather than per program, and keyed on the journal as well as the
+     * catalog so that recording the first set of a hang closes its schedule on the spot.
+     */
+    val frozenProgramIds = remember(state.exercises, state.events) {
+        val owners = LinkedHashMap<Long, MutableList<ExerciseLink>>()
+        for (exercise in state.exercises) {
+            val programId = exercise.protocolProgramId ?: continue
+            owners.getOrPut(programId) { mutableListOf() } += ExerciseLink(exercise.uid, exercise.id)
+        }
+        frozenScheduleIds(state.events, owners.mapValues { it.value.toList() })
+    }
 
     /*
      * Opening the entry card. Kept current by rememberUpdatedState so the lambdas handed to
@@ -465,7 +489,7 @@ fun GachiApp(viewModel: MainViewModel) {
             initial = editorTarget.program,
             candidates = holdExercises,
             categories = programCategories,
-            locked = editorTarget.program?.id?.let { it != 0L && it in referencedProgramIds } == true,
+            locked = editorTarget.program?.id?.let { it != 0L && it in frozenProgramIds } == true,
             onSave = {
                 viewModel.saveProgram(it)
                 editing = null
@@ -527,8 +551,10 @@ fun GachiApp(viewModel: MainViewModel) {
             val workoutActions = remember(workoutBeingLogged) {
                 if (workoutBeingLogged != null) {
                     WorkoutLogActions(
-                        addExercise = { exerciseId, restSec, side ->
-                            viewModel.addExerciseToWorkout(workoutBeingLogged, exerciseId, restSec, side)
+                        addExercise = { exerciseId, restSec, side, plannedSets ->
+                            viewModel.addExerciseToWorkout(
+                                workoutBeingLogged, exerciseId, restSec, side, plannedSets,
+                            )
                         },
                         createExercise = { new, then -> viewModel.createExercise(new, then) },
                         /*
@@ -560,8 +586,8 @@ fun GachiApp(viewModel: MainViewModel) {
                         },
                         unfinishExercise = viewModel::unfinishWorkoutExercise,
                         unfinishWorkout = viewModel::unfinishWorkout,
-                        startProtocolSet = { exercise, addedKg, side ->
-                            viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                        startProtocolSet = { start ->
+                            viewModel.startProgramForExercise(start)
                             conductorOpen = true
                         },
                         openConductor = { conductorOpen = true },
@@ -580,8 +606,8 @@ fun GachiApp(viewModel: MainViewModel) {
                      * just created.
                      */
                     WorkoutLogActions(
-                        addExercise = { exerciseId, restSec, side ->
-                            viewModel.updateDraftCard(exerciseId, restSec, side)
+                        addExercise = { exerciseId, restSec, side, plannedSets ->
+                            viewModel.updateDraftCard(exerciseId, restSec, side, plannedSets)
                         },
                         createExercise = { new, then -> viewModel.createExercise(new, then) },
                         addSet = { form ->
@@ -600,10 +626,10 @@ fun GachiApp(viewModel: MainViewModel) {
                         finishExercise = { _, _ -> }, // no card of a draft can be finished
                         unfinishExercise = {},
                         unfinishWorkout = {},
-                        startProtocolSet = { exercise, addedKg, side ->
+                        startProtocolSet = { start ->
                             viewModel.promoteDraft { id ->
                                 loggingWorkoutId = id
-                                viewModel.startProgramForExercise(ProgramStart(exercise, side, addedKg))
+                                viewModel.startProgramForExercise(start)
                                 conductorOpen = true
                             }
                         },
@@ -632,34 +658,82 @@ fun GachiApp(viewModel: MainViewModel) {
                 floors = restFloors,
                 actions = workoutActions,
                 liveExerciseId = timerRun?.exerciseId,
+                liveSide = timerRun?.side,
                 readySummary = floorSummary,
                 onDismissSummary = viewModel::dismissFloorSummary,
             )
         }
 
+        /*
+         * A SINGLE ENTRY: the same screen, over a container folded out of the day's entries
+         * that no workout claims (domain/Workout.kt, `looseWorkout`).
+         *
+         * It used to be a screen of its own, and that is exactly how the two ways of recording
+         * came to disagree — one asked for the rest between sets and one never did, one raised
+         * a card and one pushed a prefilled form at you the moment an exercise was chosen. The
+         * questions are not kept in step here; there is only one place they are asked.
+         */
         loggingOn != null -> {
             val day = remember(loggingOn) {
                 runCatching { LocalDate.parse(loggingOn) }.getOrDefault(today)
             }
-            LogScreen(
+            // staged cards belong to the day being written under, and survive leaving the
+            // screen and coming back to it — see MainViewModel.beginLoose
+            LaunchedEffect(day) { viewModel.beginLoose(day) }
+            val looseContainer = remember(state.events, day, loose) {
+                looseWorkout(state.events, day.toString(), loose?.cards.orEmpty()) { id -> state.linkOf(id) }
+            }
+            val looseActions = remember(day) {
+                WorkoutLogActions(
+                    // the plan is dropped on purpose: how many sets are PLANNED (§18.17) is
+                    // written on the "exercise added to workout" event, and here there is no
+                    // workout to write it on. The dialog still asks - one question, one place -
+                    // and outside a workout the answer has nowhere to land, so the card counts
+                    // what was done and says nothing about what was intended.
+                    addExercise = { exerciseId, restSec, side, _ ->
+                        viewModel.admitLooseExercise(exerciseId, restSec, side)
+                    },
+                    createExercise = { new, then -> viewModel.createExercise(new, then) },
+                    // an entry logged with no workout behind it must not be swallowed by the
+                    // workout that happens to be open — see ActivityRepository.record
+                    addSet = { form -> viewModel.addSet(form, attachToWorkout = false) },
+                    undoSet = viewModel::undoSet,
+                    removeExercise = { eventIds, exerciseId, side ->
+                        viewModel.removeLooseExercise(eventIds, exerciseId, side)
+                    },
+                    // no workout, no order row to write — see WorkoutLogScreen's `standalone`,
+                    // which is why nothing on the screen offers the move in the first place
+                    reorderExercises = {},
+                    finish = {}, // nothing to finish; the button is not drawn
+                    finishExercise = { _, _ -> },
+                    unfinishExercise = {},
+                    unfinishWorkout = {},
+                    // straight to the conductor, with no workout to promote on the way — the
+                    // card that was tapped has already answered the side, exactly as it does
+                    // inside a workout
+                    startProtocolSet = { start ->
+                        viewModel.startProgramForExercise(start)
+                        conductorOpen = true
+                    },
+                    openConductor = { conductorOpen = true },
+                    close = {
+                        loggingDate = null
+                        loggingWorkoutId = null
+                        loggingDraft = false
+                    },
+                )
+            }
+            WorkoutLogScreen(
                 state = state,
-                day = day,
-                activeExerciseId = activeExerciseId,
-                timer = timerState,
-                timerActions = timerActions,
-                onEnableTimer = enableTimer,
-                onStartExerciseProgram = { viewModel.startProgramForExercise(it) },
-                onSelectExercise = viewModel::selectExercise,
-                onCreateExercise = { new -> viewModel.createExercise(new) },
-                // an entry logged with no workout behind it must not be swallowed by the
-                // workout that happens to be open — see ActivityRepository.record
-                onAddSet = { form -> viewModel.addSet(form, attachToWorkout = false) },
-                onUndoSet = viewModel::undoSet,
-                onClose = {
-                    loggingDate = null
-                    loggingWorkoutId = null
-                    loggingDraft = false
-                },
+                workoutId = null,
+                draftWorkout = looseContainer,
+                standalone = true,
+                settings = timerSettings,
+                floors = restFloors,
+                actions = looseActions,
+                liveExerciseId = timerRun?.exerciseId,
+                readySummary = floorSummary,
+                onDismissSummary = viewModel::dismissFloorSummary,
             )
         }
 
@@ -744,6 +818,7 @@ fun GachiApp(viewModel: MainViewModel) {
                             state.exercises.associate { it.id to it.name }
                         },
                         scheduleOwners = scheduleOwners,
+                        frozenSchedules = frozenProgramIds,
                         onRunProgram = viewModel::runProgram,
                         onEditProgram = { editing = EditorTarget(it) },
                         onDeleteProgram = viewModel::deleteProgram,

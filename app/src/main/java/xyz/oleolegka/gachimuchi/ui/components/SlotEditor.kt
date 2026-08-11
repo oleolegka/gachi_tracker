@@ -1,13 +1,23 @@
 package xyz.oleolegka.gachimuchi.ui.components
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -18,11 +28,17 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,6 +54,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -47,17 +67,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import java.time.LocalDate
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.REPEAT_DAILY
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.REPEAT_RULES
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
-import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.SlotProblem
-import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
-import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
 import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatTime
@@ -83,7 +105,7 @@ import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
 import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
-import java.time.LocalDate
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * Planning a session: the editor behind the calendar's "Plan a session" button and behind
@@ -231,165 +253,337 @@ fun SlotEditorDialog(
         )
     }
 
-    AlertDialog(
+    val body = rememberScrollState()
+    var menuOpen by remember { mutableStateOf(false) }
+    val dialogColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "Plan a session" else "Edit this session") },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Line),
-            ) {
-                OutlinedTextField(
-                    value = draft.name,
-                    onValueChange = { draft = draft.copy(name = it) },
-                    label = { Text("Session name") },
-                    placeholder = { Text("Gym") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                )
-
-                // the names already in the plan: a second "Gym" should not be typed again
-                if (suggestions.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
-                    ) {
-                        suggestions.forEach { name ->
-                            SiblingChip(
-                                text = name,
-                                selected = draft.name.trim().equals(name, ignoreCase = true),
-                                accent = colors.accent,
-                                onClick = { draft = draft.copy(name = name) },
+        // the platform default is a percentage of the screen; this dialog is 312 wide on
+        // every phone, which is 360 less the 24 of margin either side
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .padding(horizontal = Spacing.Cards)
+                .fillMaxWidth()
+                .widthIn(max = DIALOG_WIDTH)
+                .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.9f).dp),
+            shape = MaterialTheme.shapes.large,
+            color = dialogColor,
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                /*
+                 * The header holds the title and the ONE destructive action of this dialog.
+                 * Deleting the session used to be a text button at the bottom of the scrolling
+                 * body — that is, directly above "Save": two words of the same weight, one
+                 * storing the plan and the other wiping the whole series (SYSTEM.md, rule 3).
+                 */
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = Spacing.Cards,
+                            end = Spacing.Line,
+                            top = Spacing.Cards,
+                            bottom = Spacing.Block,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                ) {
+                    Text(
+                        if (initial == null) "Plan a session" else "Edit this session",
+                        fontSize = TextSize.Figure,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (initial != null) {
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "More for this session",
+                                    tint = colors.inkSecondary,
+                                )
+                            }
+                            ActionMenu(
+                                expanded = menuOpen,
+                                onDismiss = { menuOpen = false },
+                                title = initial.name,
+                                actions = listOf(
+                                    ItemAction("Delete this session", destructive = true) {
+                                        menuOpen = false
+                                        onDelete()
+                                    },
+                                ),
                             )
                         }
                     }
                 }
+                HorizontalDivider(color = colors.grid)
 
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = timeField,
-                        // the colon is inserted for the user: it is not on the number keypad,
-                        // and the caret is moved along with it
-                        onValueChange = { typed ->
-                            val formatted = formatTimeDigits(typed.text)
-                            val digitsTyped = typed.text
-                                .take(typed.selection.end)
-                                .count { it.isDigit() }
-                            timeField = TextFieldValue(
-                                text = formatted,
-                                selection = TextRange(caretAfterDigits(formatted, digitsTyped)),
+                Box(Modifier.weight(1f, fill = false)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(body)
+                            .padding(horizontal = Spacing.Cards, vertical = Spacing.Block),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Block),
+                    ) {
+                        OutlinedTextField(
+                            value = draft.name,
+                            onValueChange = { draft = draft.copy(name = it) },
+                            label = { Text("Session name") },
+                            placeholder = { Text("Gym") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        )
+
+                        // the names already in the plan: a second "Gym" should not be typed
+                        // again. This one stays a strip, because the number of names is not
+                        // known in advance — unlike the six quick times below it
+                        if (suggestions.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                                Text(
+                                    "Already in the plan",
+                                    fontSize = TextSize.Caption,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.inkSecondary,
+                                )
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                                ) {
+                                    suggestions.forEach { name ->
+                                        SiblingChip(
+                                            text = name,
+                                            selected = draft.name.trim().equals(name, ignoreCase = true),
+                                            accent = colors.accent,
+                                            onClick = { draft = draft.copy(name = name) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = timeField,
+                            // the colon is inserted for the user: it is not on the number keypad,
+                            // and the caret is moved along with it
+                            onValueChange = { typed ->
+                                val formatted = formatTimeDigits(typed.text)
+                                val digitsTyped = typed.text
+                                    .take(typed.selection.end)
+                                    .count { it.isDigit() }
+                                timeField = TextFieldValue(
+                                    text = formatted,
+                                    selection = TextRange(caretAfterDigits(formatted, digitsTyped)),
+                                )
+                                draft = draft.copy(timeText = formatted)
+                            },
+                            label = { Text("Time (optional)") },
+                            placeholder = { Text("18:00") },
+                            singleLine = true,
+                            isError = timeBroken,
+                            // inside the field, so the field does not change width the moment
+                            // a first digit is typed — it used to be a "Clear" button beside it
+                            trailingIcon = if (draft.timeText.isNotBlank()) {
+                                {
+                                    IconButton(onClick = { setTime("") }) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = "Clear the time",
+                                            tint = colors.inkMuted,
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done,
+                            ),
+                        )
+
+                        QuickTimes(
+                            selected = parsedTime,
+                            onPick = { setTime(it) },
+                            onClock = { clockOpen = true },
+                        )
+
+                        SegmentControl(
+                            options = REPEAT_RULES,
+                            selected = draft.repeatRule.takeIf { it in REPEAT_RULES } ?: REPEAT_NONE,
+                            label = { ruleLabel(it) },
+                            onSelect = { draft = draft.copy(repeatRule = it) },
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                            DayField(
+                                label = if (draft.repeatRule == REPEAT_NONE) "On" else "Starts on",
+                                day = anchor,
+                                onChange = { draft = draft.copy(anchorDate = it.toString()) },
                             )
-                            draft = draft.copy(timeText = formatted)
-                        },
-                        label = { Text("Time (optional)") },
-                        placeholder = { Text("18:00") },
-                        singleLine = true,
-                        isError = timeBroken,
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done,
-                        ),
-                    )
-                    if (draft.timeText.isNotBlank()) {
-                        TextButton(onClick = { setTime("") }) { Text("Clear") }
-                    }
-                }
+                            /*
+                             * ONE line where there were two greys saying the same thing:
+                             * "Repeats every Thursday" and, under it, "Next: Thu 13 Aug at
+                             * 18:00" — same size, same colour, one fact (SYSTEM.md, rule 5).
+                             * Both values are still here, joined by the app's own separator.
+                             */
+                            Text(
+                                buildString {
+                                    append(repeatLabel(draft.repeatRule, draft.anchorDate))
+                                    draft.toSlot(initial?.id ?: 0L)?.let { candidate ->
+                                        val next = nextOccurrence(candidate, today)
+                                        append(" · ")
+                                        if (next == null) {
+                                            append("that day is already gone")
+                                        } else {
+                                            append("next ${fmtWeekdayDay(next)}")
+                                            candidate.atTime?.let { append(", $it") }
+                                        }
+                                    }
+                                },
+                                fontSize = TextSize.Meta,
+                                color = colors.inkSecondary,
+                            )
+                        }
 
-                // a numeric keyboard has no colon, so "1830" has to be as good as "18:30";
-                // the chips cover the hours a session actually starts at, and the clock is
-                // the way in for everything they do not cover
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
-                ) {
-                    QUICK_TIMES.forEach { time ->
-                        SiblingChip(
-                            text = time,
-                            selected = parsedTime == time,
-                            accent = colors.accent,
-                            onClick = { setTime(time) },
+                        PlannedExercisesSection(
+                            exercises = draft.exercises,
+                            open = exercisesOpen,
+                            onToggle = { exercisesOpen = !exercisesOpen },
+                            nameOf = { state.exerciseById(it)?.name },
+                            onAdd = { picking = true },
+                            onRemove = { draft = draft.withExerciseRemoved(it) },
+                            onMove = { index, delta -> draft = draft.withExerciseMoved(index, delta) },
+                            onRest = { index, sec -> draft = draft.withExerciseRest(index, sec) },
                         )
                     }
-                    SiblingChip(
-                        text = "Clock",
-                        selected = false,
-                        accent = colors.accent,
-                        onClick = { clockOpen = true },
-                    )
+                    /*
+                     * The sign that there IS more below. The body used to be a bare scrolling
+                     * Column: on a phone the composition simply stopped at the edge, and
+                     * nothing said whether that was the end of it (SYSTEM.md, rule 2).
+                     */
+                    if (body.canScrollForward) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(Spacing.Cards)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color.Transparent, dialogColor)
+                                    )
+                                )
+                        )
+                    }
                 }
+                HorizontalDivider(color = colors.grid)
 
-                SegmentControl(
-                    options = REPEAT_RULES,
-                    selected = draft.repeatRule.takeIf { it in REPEAT_RULES } ?: REPEAT_NONE,
-                    label = { ruleLabel(it) },
-                    onSelect = { draft = draft.copy(repeatRule = it) },
-                    modifier = Modifier.padding(top = Spacing.Tight),
-                )
-
-                DayField(
-                    label = if (draft.repeatRule == REPEAT_NONE) "On" else "Starts on",
-                    day = anchor,
-                    onChange = { draft = draft.copy(anchorDate = it.toString()) },
-                )
-
-                Text(
-                    repeatLabel(draft.repeatRule, draft.anchorDate),
-                    fontSize = 12.sp,
-                    color = colors.inkSecondary,
-                )
-
-                // what the plan will actually say once this is saved, in one line
-                draft.toSlot(initial?.id ?: 0L)?.let { candidate ->
-                    val next = nextOccurrence(candidate, today)
-                    Text(
-                        if (next == null) {
-                            "This day is in the past, so nothing is coming up for it."
-                        } else {
-                            "Next: ${fmtWeekdayDay(next)}" + candidate.atTime?.let { " at $it" }.orEmpty()
-                        },
-                        fontSize = 12.sp,
-                        color = colors.inkMuted,
-                    )
-                }
-
-                PlannedExercisesSection(
-                    exercises = draft.exercises,
-                    open = exercisesOpen,
-                    onToggle = { exercisesOpen = !exercisesOpen },
-                    nameOf = { state.exerciseById(it)?.name },
-                    onAdd = { picking = true },
-                    onRemove = { draft = draft.withExerciseRemoved(it) },
-                    onMove = { index, delta -> draft = draft.withExerciseMoved(index, delta) },
-                    onRest = { index, sec -> draft = draft.withExerciseRest(index, sec) },
-                )
-
+                // why Save is shut, pinned where Save is. It used to be inkMuted 13 sp — the
+                // palest thing in the dialog, the colour of the hints — and it sat in the
+                // body, which means it could be scrolled off the screen entirely
                 if (problem != null) {
-                    Text(problemText(problem), fontSize = 12.sp, color = colors.inkMuted)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(colors.recessed)
+                            .padding(horizontal = Spacing.Cards, vertical = Spacing.Inset),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                    ) {
+                        Icon(
+                            Icons.Filled.Warning,
+                            contentDescription = null,
+                            tint = colors.critical,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            problemText(problem),
+                            fontSize = TextSize.Meta,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
 
-                if (initial != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.Cards, vertical = Spacing.Block),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     TextButton(
-                        onClick = onDelete,
-                        modifier = Modifier.padding(top = Spacing.Tight),
+                        onClick = onDismiss,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("Cancel") }
+                    Button(
+                        enabled = problem == null,
+                        onClick = { onSave(draft) },
+                        modifier = Modifier.heightIn(min = 48.dp),
                     ) {
-                        Text("Delete this session", color = colors.critical)
+                        Text(if (initial == null) "Add to the plan" else "Save")
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(enabled = problem == null, onClick = { onSave(draft) }) {
-                Text(if (initial == null) "Add to the plan" else "Save")
+        }
+    }
+}
+
+/** The width of the editor on every phone: 360 less the 24 of margin on each side. */
+private val DIALOG_WIDTH = 312.dp
+
+/**
+ * The six times a session is actually given, as a grid rather than a strip.
+ *
+ * All six are known in advance, and a strip could not hold them: 6 x 62 + 5 x 8 is 412 dp
+ * against the 264 a 360 dp phone has inside this dialog, so a third of the values sat past
+ * the edge with nothing to say they were there. Three columns of (264 - 2 x 8) / 3 = 82 dp
+ * show the lot at once.
+ */
+@Composable
+private fun QuickTimes(selected: String?, onPick: (String) -> Unit, onClock: () -> Unit) {
+    val colors = LocalGachiColors.current
+    val entries = QUICK_TIMES.map { it to { onPick(it) } } + ("Clock" to onClock)
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+        entries.chunked(3).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+            ) {
+                row.forEach { (label, click) ->
+                    val on = label == selected
+                    OutlinedButton(
+                        onClick = click,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                        border = BorderStroke(1.dp, if (on) colors.accent else colors.border),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (on) {
+                                MaterialTheme.colorScheme.surface
+                            } else {
+                                colors.recessed
+                            },
+                            contentColor = if (on) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                colors.inkSecondary
+                            },
+                        ),
+                    ) {
+                        Text(
+                            label,
+                            fontSize = TextSize.Meta,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+        }
+    }
 }
 
 /**
@@ -412,10 +606,28 @@ fun DeleteSlotDialog(slot: Slot, onConfirm: () -> Unit, onDismiss: () -> Unit) {
                 color = colors.inkSecondary,
             )
         },
+        /*
+         * The one place in this app where the destructive choice is the heavier button, and
+         * that is deliberate: rule 7 is about facts on a card, not about a confirmation.
+         * Anyone who has reached this dialog has already said what they want, and the two
+         * choices used to be two text buttons of identical weight — "Delete" and "Keep it"
+         * told apart by colour alone.
+         */
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Delete", color = colors.critical) }
+            Button(
+                onClick = onConfirm,
+                modifier = Modifier.heightIn(min = 48.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.critical,
+                    contentColor = Color.White,
+                ),
+            ) { Text("Delete") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep it") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Keep it")
+            }
+        },
     )
 }
 
@@ -453,14 +665,24 @@ private fun PlannedExercisesSection(
     onRest: (Int, Int?) -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    Column(Modifier.fillMaxWidth()) {
+    /*
+     * WHICH row is having its rest changed, or none. The mm:ss field used to be open on every
+     * row at once: with the chip, the caption, the field and four bump buttons, one exercise
+     * took about 210 dp of a dialog body that is about 360 dp tall on a 360 dp phone, so a
+     * plan of four came to 840 dp of composition — two and a half screens, behind a scrollbar
+     * that was not drawn. Collapsed to a chip, a row is 104 dp and the four fit.
+     *
+     * Held by index, so it is dropped whenever the indices move under it.
+     */
+    var editingRest by remember { mutableStateOf<Int?>(null) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            Modifier.fillMaxWidth().clickable(onClick = onToggle).heightIn(min = 48.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 if (exercises.isEmpty()) "Exercises - none planned" else "Exercises (${exercises.size})",
-                fontSize = 13.sp,
+                fontSize = TextSize.Meta,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.inkSecondary,
                 modifier = Modifier.weight(1f),
@@ -473,12 +695,12 @@ private fun PlannedExercisesSection(
         }
 
         if (open) {
+            // one phrase. The second sentence of the paragraph that was here said the first
+            // one again in more words (SYSTEM.md, rule 5)
             Text(
-                "Optional. A session with nothing listed is a plan just the same - this is " +
-                    "only here for when you already know what you are going to do.",
-                fontSize = 12.sp,
+                "Optional - a session with nothing listed is a plan just the same.",
+                fontSize = TextSize.Meta,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(top = Spacing.Tight, bottom = Spacing.Tight),
             )
 
             exercises.forEachIndexed { index, planned ->
@@ -490,14 +712,16 @@ private fun PlannedExercisesSection(
                     // showing a line it cannot name (data/db/Entities.kt, SlotExerciseEntity)
                     name = nameOf(planned.exerciseId) ?: "Removed exercise",
                     restSec = planned.restSec,
-                    onUp = { onMove(index, -1) },
-                    onDown = { onMove(index, 1) },
-                    onRemove = { onRemove(index) },
+                    editingRest = editingRest == index,
+                    onEditRest = { editingRest = if (editingRest == index) null else index },
+                    onUp = { editingRest = null; onMove(index, -1) },
+                    onDown = { editingRest = null; onMove(index, 1) },
+                    onRemove = { editingRest = null; onRemove(index) },
                     onRest = { onRest(index, it) },
                 )
             }
 
-            TextButton(onClick = onAdd, modifier = Modifier.padding(top = Spacing.Tight)) {
+            TextButton(onClick = onAdd, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Filled.Add, contentDescription = null, tint = colors.accent)
                 Text("  Add an exercise", color = colors.accent)
             }
@@ -521,6 +745,9 @@ private fun PlannedExerciseRow(
     last: Boolean,
     name: String,
     restSec: Int?,
+    /** Whether THIS row is the one whose rest is open for editing — at most one is. */
+    editingRest: Boolean,
+    onEditRest: () -> Unit,
     onUp: () -> Unit,
     onDown: () -> Unit,
     onRemove: () -> Unit,
@@ -531,20 +758,98 @@ private fun PlannedExerciseRow(
     // slot opened, an exercise moved to this row by a reorder — but left alone the rest of the
     // time, so a keystroke that does not yet parse (a lone "1") is not erased by its own write
     var restText by remember(restSec) { mutableStateOf(restSec?.let(::formatDurationSec) ?: "") }
-    Column(Modifier.fillMaxWidth().padding(top = Spacing.Tight)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, colors.border, MaterialTheme.shapes.small)
+            .padding(
+                start = Spacing.Inset,
+                end = Spacing.Tight,
+                top = Spacing.Tight,
+                bottom = Spacing.Tight,
+            ),
+    ) {
+        /*
+         * 264 dp of dialog content, spent: 12 (the card's own left inset) + 20 (the number)
+         * + 8 + NAME + 8 + 48 (the menu) + 4 = 264, so the name gets 164. It used to get 98,
+         * with three 48 dp buttons taking 144 of the line next to it.
+         */
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+        ) {
             Text(
                 "${position + 1}.",
-                fontSize = 13.sp,
+                fontSize = TextSize.Meta,
                 color = colors.inkMuted,
-                modifier = Modifier.padding(end = Spacing.Tight),
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(20.dp),
             )
             Text(
                 name,
-                fontSize = 13.5.sp,
+                fontSize = TextSize.Body,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "More for \"$name\"",
+                        tint = colors.inkSecondary,
+                    )
+                }
+                /*
+                 * Taking an exercise OUT lives in here, and it used to be a critical-coloured
+                 * cross flush against the "move down" arrow — nothing at all between "shift
+                 * this by one" and "throw it off the plan" (SYSTEM.md, rule 3).
+                 */
+                ActionMenu(
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    title = name,
+                    actions = buildList {
+                        if (position > 0) {
+                            add(ItemAction("Move earlier") { menuOpen = false; onUp() })
+                        }
+                        if (!last) {
+                            add(ItemAction("Move later") { menuOpen = false; onDown() })
+                        }
+                        add(
+                            ItemAction(if (editingRest) "Hide the rest" else "Change the rest") {
+                                menuOpen = false
+                                onEditRest()
+                            }
+                        )
+                        add(
+                            ItemAction("Take out of the plan", destructive = true) {
+                                menuOpen = false
+                                onRemove()
+                            }
+                        )
+                    },
+                )
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            // the value, always visible, and the way in to changing it. Every row says what
+            // its rest is; only the row being edited spends the height on a field
+            RestChip(
+                text = restSec?.let { "Rest ${formatDurationSec(it)}" } ?: "Rest: usual",
+                accented = restSec != null,
+                open = editingRest,
+                onClick = onEditRest,
+            )
+            Spacer(Modifier.weight(1f))
             IconButton(onClick = onUp, enabled = position > 0) {
                 Icon(
                     Icons.Filled.KeyboardArrowUp,
@@ -559,36 +864,62 @@ private fun PlannedExerciseRow(
                     tint = colors.inkSecondary,
                 )
             }
-            IconButton(onClick = onRemove) {
-                Icon(
-                    Icons.Filled.Close,
-                    contentDescription = "Take \"$name\" out of the plan",
-                    tint = colors.critical,
+        }
+
+        if (editingRest) {
+            HorizontalDivider(color = colors.grid)
+            Column(
+                Modifier.padding(top = Spacing.Line),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Line),
+            ) {
+                TimeField(
+                    label = "Rest, mm:ss",
+                    value = restText,
+                    onValueChange = { text ->
+                        restText = text
+                        // committed only once it is a real rest — MIN_STEP_SEC excludes zero,
+                        // which restHintSec would otherwise read back as "nothing chosen"
+                        // (§13.9's ceiling is MAX_REST_INPUT_SEC, an exercise's own, not
+                        // MAX_STEP_SEC's hour)
+                        parseDurationText(text)
+                            ?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
+                            ?.let(onRest)
+                    },
+                    bumpsSec = listOf(10, 30),
+                    isError = restText.isNotBlank() &&
+                        parseDurationText(restText)?.let { it !in MIN_STEP_SEC..MAX_REST_INPUT_SEC } ?: true,
+                )
+                SiblingChip(
+                    text = "Usual",
+                    selected = restSec == null,
+                    accent = colors.accent,
+                    onClick = { restText = ""; onRest(null) },
                 )
             }
         }
-        SiblingChip(
-            text = "Usual",
-            selected = restSec == null,
-            accent = colors.accent,
-            onClick = { restText = ""; onRest(null) },
-            modifier = Modifier.padding(top = Spacing.Tight),
-        )
-        TimeField(
-            label = "Rest, mm:ss",
-            value = restText,
-            onValueChange = { text ->
-                restText = text
-                // committed only once it is a real rest — MIN_STEP_SEC excludes zero, which
-                // restHintSec would otherwise read back as "nothing chosen" (§13.9's ceiling
-                // is MAX_REST_INPUT_SEC, an exercise's own, not MAX_STEP_SEC's hour)
-                parseDurationText(text)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }?.let(onRest)
-            },
-            bumpsSec = listOf(10, 30),
-            isError = restText.isNotBlank() &&
-                parseDurationText(restText)?.let { it !in MIN_STEP_SEC..MAX_REST_INPUT_SEC } ?: true,
-            modifier = Modifier.padding(top = Spacing.Tight),
-        )
+    }
+}
+
+/**
+ * The rest of one planned exercise, said in the space of a chip.
+ *
+ * It is a button as well as a value: tapping it is what opens the mm:ss field, and tapping
+ * it again puts it away. There is no separate "done" — the panel has exactly one way in and
+ * the same way out, and opening another row's rest closes this one.
+ */
+@Composable
+private fun RestChip(text: String, accented: Boolean, open: Boolean, onClick: () -> Unit) {
+    val colors = LocalGachiColors.current
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.heightIn(min = 48.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.Inset),
+        border = BorderStroke(1.dp, if (open) colors.accent else colors.grid),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = if (accented) colors.accent else colors.inkSecondary,
+        ),
+    ) {
+        Text(text, fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -605,7 +936,7 @@ private fun DayField(label: String, day: LocalDate, onChange: (LocalDate) -> Uni
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontSize = 12.sp, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
+        Text(label, fontSize = TextSize.Caption, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
         IconButton(onClick = { onChange(day.minusDays(1)) }) {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
@@ -615,7 +946,7 @@ private fun DayField(label: String, day: LocalDate, onChange: (LocalDate) -> Uni
         }
         Text(
             fmtWeekdayDay(day),
-            fontSize = 13.5.sp,
+            fontSize = TextSize.Body,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurface,

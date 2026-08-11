@@ -143,8 +143,15 @@ fun WorkoutScreen(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            listOfNotNull(date?.let { fmtWeekdayDay(it) }, summaryOf(workout))
-                                .joinToString(" - "),
+                            listOfNotNull(
+                                date?.let { fmtWeekdayDay(it) },
+                                summaryOf(workout),
+                                // a workout the APP closed says so, here as well as on the
+                                // logging feed (§18.18): this is the screen a past workout is
+                                // opened on, so it is where the explanation is looked for, and
+                                // "Reopen" in the same bar is the one tap back
+                                "closed after a pause".takeIf { workout.finishedAutomatically },
+                            ).joinToString(" - "),
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.inkSecondary,
                         )

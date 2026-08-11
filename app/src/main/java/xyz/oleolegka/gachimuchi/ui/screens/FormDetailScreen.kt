@@ -53,7 +53,7 @@ import xyz.oleolegka.gachimuchi.domain.Period
 import xyz.oleolegka.gachimuchi.domain.RecordHit
 import xyz.oleolegka.gachimuchi.domain.SeriesOnAxis
 import xyz.oleolegka.gachimuchi.domain.ValueFormat
-import xyz.oleolegka.gachimuchi.domain.firstBlock
+import xyz.oleolegka.gachimuchi.domain.scheduleCaption
 import xyz.oleolegka.gachimuchi.domain.granularity
 import xyz.oleolegka.gachimuchi.domain.onAxis
 import xyz.oleolegka.gachimuchi.domain.readActivities
@@ -314,13 +314,13 @@ fun FormDetailScreen(
                  */
                 item {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
-                        val protocolBlock =
-                            entity.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
-                        if (protocolBlock != null) {
-                            IdentityChip(
-                                "protocol",
-                                "${protocolBlock.workSec}:${protocolBlock.restSec}",
-                            )
+                        // the same words the picker and the overview use, from the one
+                        // function that answers "what is this exercise's schedule" — see
+                        // [scheduleCaption] for what the three of them used to say instead
+                        val scheduleLine =
+                            scheduleCaption(entity.protocolProgramId?.let { state.programsById[it] })
+                        if (scheduleLine != null) {
+                            IdentityChip("schedule", scheduleLine)
                         }
                         IdentityChip("tracked", "weight")
                     }
@@ -584,9 +584,10 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
                  * label, figure and date can be compared at a glance, and the figure comes
                  * down to the one size the system has for the large number of a screen.
                  *
-                 * `groupBy` keeps the order [holdRecord] already produced (left, right, then the
-                 * sets that named no side), so a two-handed exercise or a strength exercise —
-                 * where every group is a singleton — draws as a single column.
+                 * `groupBy` keeps the order [holdRecord] already produced (left, then right), so
+                 * a two-handed exercise or a strength exercise — where every group is a
+                 * singleton — draws as a single column. There is no third column for the sets
+                 * that named no hand: they belong to both hands now (domain/Records.kt).
                  */
                 val grouped = records.groupBy { it.axis }.values.toList()
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.Inset)) {
@@ -616,7 +617,7 @@ private fun RecordsBlock(form: ExerciseForm, records: List<ExerciseRecord>, toda
 
 /** One side's best on a record card: what it is, what it was, and when. */
 private data class RecordColumn(
-    /** "Left" / "Right" / "No side", or null when the axis is not split by side at all. */
+    /** "Left" / "Right", or null when the axis is not split by side at all. */
     val side: String?,
     val value: String,
     val unit: String?,
@@ -725,15 +726,20 @@ private fun RecordCard(
 }
 
 /**
- * "Left" / "Right" / "No side" — the same words [FormDetailScreen]'s own identity chip and
- * `WorkoutLogScreen`'s cards already use for a [HoldSide], plus the honest third case: a
- * record built from sets that named no hand at all ([ExerciseRecord.sideMissing]). Never
- * called for a record that is not part of a merged, side-split group — see [mergedValue].
+ * "Left" / "Right" — the same words [FormDetailScreen]'s own identity chip and
+ * `WorkoutLogScreen`'s cards already use for a [HoldSide].
+ *
+ * There used to be a third answer here, "No side", for a record built out of sets that named no
+ * hand. It drew as a THIRD COLUMN beside the two hands on any exercise ticked one-sided after
+ * its history had already been logged, which is what the owner asked to have taken away
+ * (2026-08-11). Such sets now count for both hands instead, so `domain/Records.kt` no longer
+ * produces a sideless record inside a split group and this branch is unreachable — it returns
+ * no label rather than inventing a word for a case that cannot arrive.
  */
-private fun sideTag(record: ExerciseRecord): String = when (record.side) {
+private fun sideTag(record: ExerciseRecord): String? = when (record.side) {
     HoldSide.LEFT -> "Left"
     HoldSide.RIGHT -> "Right"
-    null -> "No side"
+    null -> null
 }
 
 private fun recordLabel(record: ExerciseRecord): String = when (record.axis) {

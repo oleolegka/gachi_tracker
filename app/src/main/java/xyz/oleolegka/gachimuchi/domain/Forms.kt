@@ -889,11 +889,39 @@ data class WorkoutExerciseAdded(
      * always did.
      */
     @SerialName("side") val side: String? = null,
+    /**
+     * How many sets of this exercise are PLANNED for this card, or null for "nobody said".
+     *
+     * ── Why the plan is a fact of the workout and not of the run (§18.17) ───────
+     * It used to be asked before every conducted run, as a field of the "before this run"
+     * dialog, and the answer became group repeats in the conductor's program — which is what
+     * put the pauses between sets under the single conductor and made two hands taking turns
+     * impossible. §18.17 settles it: a run is one set, and the set count is a PLAN. A plan is
+     * not a countdown and not a limit; nothing refuses a sixth set of a card that planned five.
+     * It is a number to work against, and the card reads "2 of 5" from it.
+     *
+     * ── Why here, next to the rest ─────────────────────────────────────────────
+     * The rest between sets is already answered exactly once, when the exercise enters the
+     * workout, and it is the same kind of statement — how this exercise goes TODAY, as opposed
+     * to what it is (the catalog) or what happened (the sets). Asking both in the one dialog
+     * that already opens costs no extra screen, and asking the set count before each set was
+     * asking the same question over and over.
+     *
+     * Null and not a default: a row written before this field existed says nothing about a
+     * plan, and the card then simply counts sets as it always did. That distinction is why it
+     * is nullable rather than zero — see [xyz.oleolegka.gachimuchi.domain.WorkoutExercise.plannedSets].
+     */
+    @SerialName("planned_sets") val plannedSets: Int? = null,
 ) {
     init {
         // zero is a legitimate answer ("go straight into the next set"); a negative one is
         // a corrupt row, and the readers skip rows that will not parse rather than throwing
         require(restSec >= 0) { "rest_sec: expected a non-negative number of seconds, got $restSec" }
+        // a plan of zero sets is not a plan, and a negative one is a corrupt row; both are
+        // refused rather than silently drawn as "2 of 0"
+        require(plannedSets == null || plannedSets > 0) {
+            "planned_sets: expected a positive number of sets or nothing, got $plannedSets"
+        }
     }
 }
 

@@ -2,6 +2,8 @@ package xyz.oleolegka.gachimuchi.domain
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.time.Duration
+import java.time.LocalDateTime
 
 /**
  * The workout as an explicit thing: a point in the journal you can add exercises to before
@@ -75,6 +77,28 @@ const val TYPE_WORKOUT_FINISHED = "workout_finished"
 data class WorkoutFinished(
     @SerialName("workout_id") val workoutId: Long,
     @SerialName("workout_uid") val workoutUid: String? = null,
+    /**
+     * The app wrote this, not the user — see [abandonedWorkoutRow].
+     *
+     * ── Why the journal is made to say who closed it ────────────────────────────
+     * This event is a FACT about the user's training, and writing one on their behalf is a
+     * decision rather than a detail. A journal that recorded the automatic close and the
+     * pressed button identically would be a journal in which "I finished at half past eight"
+     * and "the app gave up on you four hours later" are the same sentence — and the screen
+     * would have nothing to explain the workout that closed itself with nobody near the phone.
+     * So the flag rides in the payload, and the workout screen says which of the two happened.
+     *
+     * DEFAULTS TO FALSE, so every row written before this field existed reads as the user's
+     * own doing — which is what it was: nothing but the button and "start closes the previous"
+     * wrote one until now.
+     *
+     * It carries no time, for the same reason the event as a whole does not: the end of a
+     * workout is READ OFF ITS LAST SET ([Workout.endTs]), so an automatic close dates itself
+     * to the last thing recorded rather than to the moment the app noticed. That is exactly
+     * what the owner asked for — "the workout becomes what it was, rather than stretching to
+     * the evening" — and it needs no field to do it.
+     */
+    @SerialName("auto") val auto: Boolean = false,
 )
 
 /**
@@ -296,6 +320,16 @@ data class WorkoutExercise(
      * deleting it does.
      */
     val finishedEventId: Long? = null,
+    /**
+     * How many sets of this card were PLANNED, or null when nobody said (§18.17).
+     *
+     * Last "added" row wins, the same rule [restSec] follows and for the same reason: adding an
+     * exercise again is how a choice is changed in an append-only journal.
+     *
+     * A PLAN and not a limit — see [WorkoutExerciseAdded.plannedSets]. Nothing anywhere refuses
+     * a set past it; the card reads "2 of 5" and that is the whole of its effect.
+     */
+    val plannedSets: Int? = null,
 ) {
     /**
      * Whether this CARD has been marked done — see [TYPE_WORKOUT_EXERCISE_FINISHED]. A status
@@ -402,9 +436,19 @@ data class Workout(
      * second `finished: Boolean` beside it would only be a fact that could disagree.
      */
     val finishedEventId: Long? = null,
+    /**
+     * Whether the event named by [finishedEventId] was written by the app rather than by the
+     * user — see [WorkoutFinished.auto] and [abandonedWorkoutRow].
+     *
+     * Beside the id rather than derived from it because the screen has to SAY which of the two
+     * happened, and a screen that had to re-read the payload to find out would be a second
+     * place the answer is decoded. False whenever nothing has closed this workout at all.
+     */
+    val finishedAutomatically: Boolean = false,
 ) {
     /**
-     * Somebody said this workout was over — by the button, or by starting the next one.
+     * Somebody said this workout was over — by the button, by starting the next one, or by
+     * leaving it untouched long enough that the app closed it ([abandonedWorkoutRow]).
      *
      * A STATUS AND NOT A LOCK: a finished workout can still be opened and written into, and
      * doing so does not re-open it. See [TYPE_WORKOUT_FINISHED].
@@ -482,7 +526,13 @@ data class Workout(
  * exercise, and the rest chosen for it — because that is all a card can say before it exists:
  * no sets, no "added" row, nothing a card in a real workout also has to have written for it.
  */
-data class DraftCard(val exerciseId: Long, val restSec: Int, val side: HoldSide? = null)
+data class DraftCard(
+    val exerciseId: Long,
+    val restSec: Int,
+    val side: HoldSide? = null,
+    /** How many sets are planned for this card, or null when nobody said — see §18.17. */
+    val plannedSets: Int? = null,
+)
 
 /**
  * [cards] shaped as a [Workout], so the screen that draws one can draw the other without
@@ -500,9 +550,90 @@ fun draftWorkout(opDate: String, name: String?, cards: List<DraftCard>, linkOf: 
         opDate = opDate,
         slot = null,
         name = name,
-        exercises = cards.map { WorkoutExercise(linkOf(it.exerciseId), it.restSec, emptyList(), side = it.side) },
+        exercises = cards.map {
+            WorkoutExercise(
+                linkOf(it.exerciseId), it.restSec, emptyList(),
+                side = it.side, plannedSets = it.plannedSets,
+            )
+        },
         entriesWithoutExercise = emptyList(),
     )
+
+/**
+ * A day's entries that belong to NO workout, shaped as a [Workout] — the container behind the
+ * "single entry" way in.
+ *
+ * ── Why this exists at all ──────────────────────────────────────────────────────
+ * Recording on its own and recording inside a workout were two screens, and the two drifted:
+ * one asked for the rest between sets and the other never did, one raised a card and the other
+ * pushed a prefilled form at you the moment an exercise was chosen. A single entry is an
+ * exercise of a workout with no workout around it, so the honest fix is not to teach the second
+ * screen the first one's questions — it is to have ONE screen and hand it a container either
+ * way. This builds the container for the case where there is nothing in the journal to build
+ * one from.
+ *
+ * [staged] are exercises admitted on that screen and not yet recorded against — the same
+ * [DraftCard] a workout draft stages, for the same reason: an exercise is added BEFORE the
+ * first set of it, and with no workout row there is nothing to write an "added" event against.
+ * A staged card whose exercise already has entries of the day contributes only its rest.
+ *
+ * [id]/[uid]/[ts] are sentinels, exactly as in [draftWorkout]: nothing here is a row, and no
+ * action the screen is handed reads them.
+ */
+fun looseWorkout(
+    events: List<JournalEvent>,
+    opDate: String,
+    staged: List<DraftCard>,
+    linkOf: (Long) -> ExerciseLink,
+): Workout {
+    /*
+     * Keyed by [workoutCardKey] and folded in journal order, the same two rules [buildWorkout]
+     * follows — an entry naming its exercise by identity and one naming it by number land in
+     * one card, and the two hands of a one-sided exercise land in two.
+     */
+    val blocks = LinkedHashMap<String, WorkoutExercise>()
+    val unkeyed = ArrayList<ActivityEvent>()
+    for (activity in setsOutsideWorkouts(events, opDate)) {
+        val link = activity.form.exerciseLink()
+        if (link == null) {
+            // a weigh-in carries no exercise_id by design — shown, never dropped
+            unkeyed += activity
+            continue
+        }
+        val side = (activity.form as? LoadedSet)?.sideOf
+        val key = workoutCardKey(link.key, side)
+        val held = blocks[key]
+        blocks[key] = held?.copy(exercise = held.exercise.mergedWith(link), sets = held.sets + activity)
+            ?: WorkoutExercise(link, restSec = null, sets = listOf(activity), side = side)
+    }
+    /*
+     * Staged cards are applied AFTER the fold, so one that names an exercise already recorded
+     * today lands on that card and gives it the rest that was chosen for it, rather than
+     * opening a second card for the same thing. One that names nothing recorded appends — the
+     * "added afterwards goes to the end" rule a real workout gets from its order event.
+     */
+    for (card in staged) {
+        val link = linkOf(card.exerciseId)
+        val key = workoutCardKey(link.key, card.side)
+        val held = blocks[key]
+        blocks[key] = held?.copy(restSec = card.restSec)
+            ?: WorkoutExercise(link, card.restSec, emptyList(), side = card.side)
+    }
+    return Workout(
+        id = 0L,
+        uid = "",
+        ts = "",
+        opDate = opDate,
+        slot = null,
+        name = null,
+        // sorted by when it happened, then by journal order for a same-second tie — the rule
+        // [buildWorkout] and [buildSession] both settle the tape of a card by
+        exercises = blocks.values.map { block ->
+            block.copy(sets = block.sets.sortedWith(compareBy({ it.happenedAt }, { it.id })))
+        },
+        entriesWithoutExercise = unkeyed,
+    )
+}
 
 /**
  * What a journal row says about the workout it was recorded during, or null for a row
@@ -597,7 +728,7 @@ fun WorkoutStarted.slotLink(): SlotLink? =
     if (slotUid == null && slotId == null) null else SlotLink(slotUid, slotId)
 
 /** The day a row was WRITTEN on, which is not the day the training it records belongs to. */
-private fun JournalEvent.writeDay(): String = ts.substringBefore('T')
+internal fun JournalEvent.writeDay(): String = ts.substringBefore('T')
 
 /**
  * The workout in progress, or null when there is none.
@@ -668,6 +799,100 @@ private fun isFinished(events: List<JournalEvent>, startRow: JournalEvent): Bool
     events.any { it.type == TYPE_WORKOUT_FINISHED && it.workoutRef()?.matches(startRow) == true }
 
 /**
+ * How long a workout may sit with nothing recorded into it before the app calls it over.
+ *
+ * ── Four hours, and why a number rather than a setting ──────────────────────────
+ * A long session — warm-up, the work, a cool-down, the walk between two machines and the
+ * phone in a pocket for twenty minutes of it — fits inside four hours. A workout somebody
+ * walked away from does not. Both ends of that were the owner's own reasoning.
+ *
+ * It is a CONSTANT on purpose (§18.18, verbatim: "a setting nobody touches is one more way of
+ * drifting apart"). A number chosen once and written down with its reasoning is a rule; the
+ * same number behind a slider is a question asked of somebody standing in a gym, and the
+ * answer would be whatever the default was anyway.
+ *
+ * ── What makes four hours safe to be wrong about ────────────────────────────────
+ * The owner, verbatim: "we gave a button to resume a workout, so even if we close the wrong
+ * one it is not critical." The automatic close is an ordinary [TYPE_WORKOUT_FINISHED] event
+ * and "Reopen" deletes it, exactly as it does for the button — one tap, nothing recorded
+ * touched. That reversibility is the whole reason automatic beats asking: the alternative
+ * ("continue that one or start a new one?") arrives at the worst possible moment, phone in
+ * hand, one set in.
+ */
+const val WORKOUT_IDLE_HOURS = 4L
+
+/**
+ * The open workout if it has been abandoned — nothing recorded into it for
+ * [WORKOUT_IDLE_HOURS] — or null when there is no open workout or it is still alive.
+ *
+ * ── The defect this closes ──────────────────────────────────────────────────────
+ * Nothing but the button and "start closes the previous" ever closed a workout, and midnight
+ * deliberately does not (a session running to three in the morning is one session). So a
+ * workout nobody finished stayed open indefinitely, and a set logged NEXT WEEK with no
+ * workout started went into it: the journal grew a workout a week long, and the week's
+ * statistics went with it.
+ *
+ * ── Dated by the last entry, not by when the app noticed ────────────────────────
+ * There is nothing to arrange for this: a workout's end is [Workout.endTs], read off its last
+ * set, and this function only decides WHETHER it is over, never when. So a workout abandoned
+ * at half past eight in the evening still ends at half past eight, whether the app notices at
+ * midnight or the following Tuesday — "the workout becomes what it was, rather than
+ * stretching to the evening", in the owner's words.
+ *
+ * A workout that recorded nothing at all is measured from its own start ([Workout.endTs]
+ * falls back to it), which is the honest reading of "started and forgotten".
+ *
+ * ── Why this only DECIDES, and does not hide ────────────────────────────────────
+ * [openWorkout] is deliberately left alone: it answers off the journal and nothing else, so
+ * that every reader of a journal agrees about it whatever the clock says. Abandonment is a
+ * fact about NOW, and a rule that quietly re-answered "which workout is open" as time passed
+ * would be a rule the "Reopen" button could not defeat — reopen it, look again, and the same
+ * clock would close it a second time. So this hands back the row and the caller
+ * ([xyz.oleolegka.gachimuchi.data.ActivityRepository.closeAbandonedWorkout]) writes a real
+ * finish event, which is a fact in the journal that a deletion can take back.
+ *
+ * A clock that has gone backwards (a manual correction, a timezone the phone reconsidered)
+ * yields a negative idle time and closes nothing, which is the safe direction.
+ */
+fun abandonedWorkoutRow(events: List<JournalEvent>, now: LocalDateTime): JournalEvent? {
+    val startRow = openWorkoutRow(events) ?: return null
+    if (autoCloseOverruled(events, startRow)) return null
+    val workout = buildWorkout(events, startRow.id) ?: return null
+    val lastActivity = runCatching { LocalDateTime.parse(workout.endTs) }.getOrNull() ?: return null
+    return startRow.takeIf { Duration.between(lastActivity, now) >= Duration.ofHours(WORKOUT_IDLE_HOURS) }
+}
+
+/**
+ * Whether the app has already closed this workout automatically and been overruled — an
+ * `auto` [TYPE_WORKOUT_FINISHED] event of its own that has since been DELETED, which is what
+ * the "Reopen" button writes ([xyz.oleolegka.gachimuchi.data.ActivityRepository.unfinishWorkout]).
+ *
+ * ── Without this the button would not work ──────────────────────────────────────
+ * Reopening deletes the close; it does not record any training, so the workout's last set is
+ * exactly as old as it was a second ago and the rule would shut it again on the very next
+ * look — at the next set logged, at the next start-up, forever. The owner would press a button
+ * and watch it undone. So being overruled is remembered, and remembered the only way an
+ * append-only journal can remember anything: by reading what is in it, including the rows a
+ * deletion has folded away.
+ *
+ * ONCE per workout, deliberately. This is not "never close this workout" — a workout reopened
+ * and then genuinely finished takes an ordinary finish event like any other, and a NEW workout
+ * gets the rule afresh. It is "the app has said its piece about this one and been told no".
+ *
+ * Reads the RAW list rather than [liveEvents]: the whole question is about a row that is no
+ * longer live, so folding first would hide the only evidence there is.
+ */
+private fun autoCloseOverruled(events: List<JournalEvent>, startRow: JournalEvent): Boolean {
+    val view = journalView(events)
+    return events.any {
+        it.type == TYPE_WORKOUT_FINISHED &&
+            it.workoutRef()?.matches(startRow) == true &&
+            it.workoutFinishedOrNull()?.auto == true &&
+            !view.isAlive(it)
+    }
+}
+
+/**
  * Folds one workout out of the journal, or null when [workoutId] names no start event here.
  *
  * ── The order of the exercises ──────────────────────────────────────────────────
@@ -727,6 +952,8 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
     val links = LinkedHashMap<String, ExerciseLink>()
     val sides = HashMap<String, HoldSide?>()
     val rests = HashMap<String, Int>()
+    /** The planned set count of each card, by the same key — see [WorkoutExercise.plannedSets]. */
+    val plans = HashMap<String, Int?>()
     val addedRows = HashMap<String, MutableList<Long>>()
     /** The live "card finished" event of each card, keyed the same way — see [WorkoutExercise.finished]. */
     val cardFinished = HashMap<String, Long>()
@@ -745,6 +972,8 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
      * the one [unfinishWorkoutExercise]'s whole-workout twin has to name to undo it.
      */
     var finishedRowId: Long? = null
+    /** Whether the event [finishedRowId] names was the app's doing — see [WorkoutFinished.auto]. */
+    var finishedAuto = false
     var order: WorkoutOrder? = null
     var orderRowId = 0L
 
@@ -763,6 +992,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             // sets recorded AFTER this one are still folded in below: finishing is a status,
             // not a lock, and the forgotten set typed up afterwards belongs here
             finishedRowId = row.id
+            // last one wins along with the id it belongs to: a workout closed automatically,
+            // reopened and then finished by hand must not go on claiming the app did it
+            finishedAuto = row.workoutFinishedOrNull()?.auto == true
             continue
         }
         val stated = row.workoutOrderOrNull()
@@ -777,6 +1009,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             val side = HoldSide.fromCode(added.side)
             val key = remember(ExerciseLink(added.exerciseUid, added.exerciseId), row.id, side)
             rests[key] = added.restSec
+            // last one wins, exactly as the rest does — and a later row that says nothing about
+            // a plan CLEARS it, because that row is the current statement about this card
+            plans[key] = added.plannedSets
             addedRows.getOrPut(key) { mutableListOf() } += row.id
             continue
         }
@@ -816,6 +1051,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
             // buildSession settles its own tie by
             ofExercise.sortedWith(compareBy({ it.happenedAt }, { it.id })),
             addedRows[key].orEmpty(), sides[key], finishedEventId = cardFinished[key],
+            plannedSets = plans[key],
         )
     }
     val ordered = order?.let { reordered(blocks, it.order, orderRowId, firstRow) } ?: blocks
@@ -832,6 +1068,7 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         exercises = ordered.groupedByCardStatus(),
         entriesWithoutExercise = unkeyed,
         finishedEventId = finishedRowId,
+        finishedAutomatically = finishedAuto,
     )
 }
 

@@ -337,6 +337,21 @@ data class PortableProgramRow(
     /** Order on the timer tab. Kept so a restored list reads the way it was arranged. */
     @SerialName("position") val position: Int = 0,
     @SerialName("created_at") val createdAt: String = "",
+    /**
+     * Whether the program is kept out of the library list (schema version 20) — see
+     * [xyz.oleolegka.gachimuchi.data.db.ProgramEntity.hidden].
+     *
+     * FOUND MISSING BY `BackupColumnCoverageTest` ON ITS FIRST RUN, which is the third instance
+     * of the defect backlog.md §14.2 describes and the reason that test exists: the column was
+     * added to the table, nothing was added here, and a restore handed back a library with
+     * every hidden program showing again. It travels for the same reason
+     * [PortableExercise.hidden] does — tidying a library is work, and a restore that undid it
+     * would be handing back the mess.
+     *
+     * Optional with the entity's own default, like every field here, so a file written before
+     * this existed still reads and lands on `false`, which is what those rows were.
+     */
+    @SerialName("hidden") val hidden: Boolean = false,
 )
 
 /**

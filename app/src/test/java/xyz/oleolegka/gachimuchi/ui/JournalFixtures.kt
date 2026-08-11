@@ -73,9 +73,10 @@ class Journal {
      * Closes a workout. It carries NO time of its own: when the training ended is folded out
      * of the last set recorded, so this row states only which workout is over.
      */
-    fun finishWorkout(workoutId: Long, day: String, at: String = "20:00") = add(
+    /** [auto] = the app closed it after a pause rather than the user pressing the button. */
+    fun finishWorkout(workoutId: Long, day: String, at: String = "20:00", auto: Boolean = false) = add(
         TYPE_WORKOUT_FINISHED,
-        payloadJson.encodeToString(WorkoutFinished(workoutId)),
+        payloadJson.encodeToString(WorkoutFinished(workoutId, auto = auto)),
         "${day}T$at:00",
         workoutId,
     )
@@ -92,9 +93,15 @@ class Journal {
         restSec: Int,
         at: String = "09:01",
         side: HoldSide? = null,
+        /** How many sets are planned for this card, or null when nobody said — see §18.17. */
+        plannedSets: Int? = null,
     ) = add(
         TYPE_WORKOUT_EXERCISE_ADDED,
-        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exercise.id, restSec, side = side?.code)),
+        payloadJson.encodeToString(
+            WorkoutExerciseAdded(
+                workoutId, exercise.id, restSec, side = side?.code, plannedSets = plannedSets,
+            )
+        ),
         "${day}T$at:00",
         workoutId,
     )

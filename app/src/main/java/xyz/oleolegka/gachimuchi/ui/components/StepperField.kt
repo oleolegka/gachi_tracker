@@ -29,6 +29,7 @@ import xyz.oleolegka.gachimuchi.domain.applyStep
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * A number field with +/- buttons on both sides — the workhorse of the logging screen.
@@ -45,8 +46,8 @@ import xyz.oleolegka.gachimuchi.ui.theme.Spacing
  *
  * ── [stacked]: the same field with its buttons UNDERNEATH ────────────────────
  * Beside the field is right where the field has a screen's width to sit in. Inside a
- * DIALOG it is not: four buttons of 50dp each, plus the gaps, leave the value itself
- * about 48dp — narrower than any one of the buttons changing it, which is what the run
+ * DIALOG it is not: four buttons plus the gaps leave the value itself about 48dp —
+ * narrower than any one of the buttons changing it, which is what the run
  * offer looked like. [stacked] is the layout [TimeField] already uses for exactly this
  * reason: the field takes the full width and the four buttons share it out below, a
  * quarter each, which on the narrowest phone this app targets is still 57dp.
@@ -65,8 +66,29 @@ fun StepperField(
     stacked: Boolean = false,
     /** What a screen reader calls the field, for callers that pass no [label]. */
     fieldDescription: String? = null,
+    /**
+     * Whether the value this field holds has a NEGATIVE HALF, and the minus buttons may
+     * therefore walk into it.
+     *
+     * Off for everything a body can only have a positive amount of — reps, seconds, body
+     * weight, the load on a bar. On for added weight, which is signed
+     * ([xyz.oleolegka.gachimuchi.domain.StrengthSet.addedKg]): below zero is a band taking
+     * load OFF the hang, which on a fingerboard is the half of the axis most of the training
+     * actually happens on.
+     *
+     * ── Why the buttons and not just the keyboard ───────────────────────────────
+     * The field takes [KeyboardType.Decimal], which asks Android for a numeric pad and does
+     * NOT ask for a signed one; whether a minus key is on it is up to whichever keyboard is
+     * installed. So on the offer after a run — where the four step buttons ARE the control,
+     * sitting under the field a quarter of the width each — "minus fifteen" could be
+     * unreachable altogether, and pressing minus from zero looked like the app refusing the
+     * press for no stated reason. With this the buttons reach it in three taps.
+     */
+    signed: Boolean = false,
 ) {
     val colors = LocalGachiColors.current
+    // no floor at all when the axis is signed; [applyStep] clamps at this
+    val floor = if (signed) Double.NEGATIVE_INFINITY else 0.0
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -90,12 +112,12 @@ fun StepperField(
             ) {
                 steps.sortedDescending().forEach { step ->
                     StepButton("-${formatNumber(step)}", Modifier.weight(1f)) {
-                        onValueChange(applyStep(value, -step))
+                        onValueChange(applyStep(value, -step, floor))
                     }
                 }
                 steps.sorted().forEach { step ->
                     StepButton("+${formatNumber(step)}", Modifier.weight(1f)) {
-                        onValueChange(applyStep(value, step))
+                        onValueChange(applyStep(value, step, floor))
                     }
                 }
             }
@@ -107,7 +129,7 @@ fun StepperField(
             ) {
                 steps.sortedDescending().forEach { step ->
                     StepButton("-${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
-                        onValueChange(applyStep(value, -step))
+                        onValueChange(applyStep(value, -step, floor))
                     }
                 }
                 NumberField(
@@ -120,7 +142,7 @@ fun StepperField(
                 )
                 steps.sorted().forEach { step ->
                     StepButton("+${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
-                        onValueChange(applyStep(value, step))
+                        onValueChange(applyStep(value, step, floor))
                     }
                 }
             }
@@ -151,7 +173,7 @@ private fun NumberField(
         ),
         singleLine = true,
         placeholder = placeholder?.let { { Text(it, textAlign = TextAlign.Center) } },
-        textStyle = TextStyle(fontSize = 18.sp, textAlign = TextAlign.Center),
+        textStyle = TextStyle(fontSize = TextSize.Title, textAlign = TextAlign.Center),
         keyboardOptions = KeyboardOptions(
             keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
             imeAction = ImeAction.Done,
@@ -163,8 +185,8 @@ private fun NumberField(
 /**
  * Shared with [TimeField].
  *
- * [modifier] exists for that other caller: this one packs its buttons beside the field and
- * wants them a fixed 50dp wide, while [TimeField] puts a row of four UNDER its field and
+ * [modifier] exists for that other caller: this one packs its buttons beside the field at a
+ * fixed [STEP_BUTTON_WIDTH], while [TimeField] puts a row of four UNDER its field and
  * shares the width out between them. The default keeps this file's own layout unchanged.
  */
 @Composable
@@ -175,9 +197,21 @@ internal fun StepButton(label: String, modifier: Modifier = Modifier, onClick: (
         contentPadding = PaddingValues(0.dp),
         shape = MaterialTheme.shapes.small,
     ) {
-        Text(label, fontSize = 13.sp, maxLines = 1)
+        Text(label, fontSize = TextSize.Meta, maxLines = 1)
     }
 }
 
-/** How wide a step button is when it sits BESIDE the field, as it does on this one. */
-private val STEP_BUTTON_WIDTH = 50.dp
+/**
+ * How wide a step button is when it sits BESIDE the field, as it does on this one.
+ *
+ * ── Forty-four, measured on 360 (SYSTEM.md rule 8) ─────────────────────────────
+ * It was 50, and 50 is what makes the field too narrow on the phone this app is actually
+ * built for. A stepper with two steps has four of these: on a 360 dp screen, inside a card
+ * (360 - 32 of screen margin - 24 of card padding = 304), four buttons of 50 plus four gaps
+ * of 4 take 216 and leave the VALUE 88 dp — less than two buttons, for the number all four
+ * of them exist to change. At 44 the same row leaves 112.
+ *
+ * The height stays 48: this is the width of the target, not its reach, and 48 is the floor
+ * a thumb needs whatever the mock-ups draw.
+ */
+private val STEP_BUTTON_WIDTH = 44.dp

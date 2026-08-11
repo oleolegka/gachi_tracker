@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -73,7 +72,7 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
  * The tracking is what makes 11 sp uppercase readable rather than a grey brick.
  */
 val EyebrowStyle = TextStyle(
-    fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
+    fontSize = TextSize.Caption, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
 )
 
 
@@ -101,24 +100,38 @@ fun GachiCard(
     )
 }
 
-/** The caption row above a block: an eyebrow on the left, a quiet note on the right. */
+/**
+ * The caption row above a block: an eyebrow on the left, a quiet note on the right, and
+ * optionally the one control that belongs to the block itself.
+ *
+ * [action] exists because of what the overview did without it: the way into the exercise
+ * catalog was a full-width button placed UNDER this header, so the header captioned the
+ * button and the feed it was written for started below both. A control that belongs to a
+ * section belongs on the section's own line.
+ */
 @Composable
-fun SectionHeader(title: String, note: String? = null, modifier: Modifier = Modifier) {
+fun SectionHeader(
+    title: String,
+    note: String? = null,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
     val colors = LocalGachiColors.current
     Row(
         modifier.fillMaxWidth().padding(bottom = Spacing.Line),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+        verticalAlignment = if (action == null) Alignment.Bottom else Alignment.CenterVertically,
     ) {
         Text(
             title.uppercase(),
             style = EyebrowStyle,
             color = colors.inkMuted,
-            modifier = Modifier.weight(1f, fill = false),
+            modifier = Modifier.weight(1f),
         )
         if (note != null) {
             Text(note, fontSize = TextSize.Caption, color = colors.inkMuted, maxLines = 1)
         }
+        action?.invoke()
     }
 }
 
@@ -153,15 +166,19 @@ fun HeroCard(
             Row(Modifier.padding(top = Spacing.Line), verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = 52.sp,
+                    // Figure, not Display: the owner compared the two side by side in the
+                    // design system (app-next/hero-size.html) and chose the quieter one.
+                    // Display stays what SYSTEM.md says it is - the conductor's clock, read
+                    // from two metres with wet hands - and this card is read at arm's length.
+                    fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = (-1.5).sp,
-                    lineHeight = 52.sp,
+                    lineHeight = TextSize.Figure,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     " $unit",
-                    fontSize = 22.sp,
+                    fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.inkSecondary,
                     modifier = Modifier.padding(bottom = Spacing.Tight),
@@ -169,7 +186,7 @@ fun HeroCard(
             }
             Text(
                 subtitle,
-                fontSize = 14.sp,
+                fontSize = TextSize.Body,
                 color = colors.inkSecondary,
                 lineHeight = 19.sp,
                 modifier = Modifier.padding(top = Spacing.Line),
@@ -177,7 +194,7 @@ fun HeroCard(
             if (meta != null) {
                 Text(
                     meta,
-                    fontSize = 12.sp,
+                    fontSize = TextSize.Meta,
                     color = colors.inkMuted,
                     lineHeight = 17.sp,
                     modifier = Modifier.padding(top = Spacing.Tight),
@@ -190,7 +207,7 @@ fun HeroCard(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 ) {
                     CheckGlyph(colors.goodText, 13.dp)
-                    Text(highlight, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.goodText)
+                    Text(highlight, fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold, color = colors.goodText)
                 }
             }
         }
@@ -208,15 +225,20 @@ fun HeroCard(
  * favour of the written decision.
  *
  * Colour never carries the meaning alone: the tick and the word say "record" without it.
+ *
+ * The corner is [Radius.Small] and not a circle. In this system the radius states the SIZE
+ * of a thing rather than its character, and a fully rounded pill was the only shape on the
+ * overview that disagreed with the chips and badges of every other screen.
  */
 @Composable
 fun RecordBadge(date: String?, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
+    val shape = RoundedCornerShape(Radius.Small)
     Row(
         modifier
-            .clip(CircleShape)
+            .clip(shape)
             .background(colors.good.copy(alpha = 0.13f))
-            .border(1.dp, colors.good.copy(alpha = 0.34f), CircleShape)
+            .border(1.dp, colors.good.copy(alpha = 0.34f), shape)
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -296,16 +318,34 @@ fun DoorTile(
             ),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Line)) {
-                Text(
-                    name,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (recordDate != null) RecordBadge(recordDate, Modifier.align(Alignment.CenterVertically))
-            }
-            Text(caption, fontSize = 11.sp, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            /*
+             * The name is the TITLE of this tile, and it took until the redraw to be sized
+             * like one: the name was 15 and the value on the right was 18, so a tile
+             * announced how much louder than what. They are both 17 now and told apart by
+             * weight, position and the tabular digits on the right - two equal facts, "what"
+             * and "how much".
+             */
+            Text(
+                name,
+                fontSize = TextSize.Title,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            /*
+             * THE BADGE IS A ROW OF ITS OWN, always under the name.
+             *
+             * It used to share a FlowRow with the name, which put it to the RIGHT of a short
+             * name and UNDER a long one — the same tile in two different shapes depending on
+             * how many letters the exercise happens to be called by, and the feed then read as
+             * a column of misaligned pills. Owner's report, 2026-08-11: "sometimes underneath,
+             * sometimes to the right. It has to be underneath, always."
+             *
+             * Under the name rather than under the caption because that is where the wrapped
+             * case already put it, and because the badge is about the exercise (this name has a
+             * record) rather than about the form-and-recency line below.
+             */
+            if (recordDate != null) RecordBadge(recordDate)
+            Text(caption, fontSize = TextSize.Meta, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(
             Modifier.padding(
@@ -318,7 +358,7 @@ fun DoorTile(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = 18.sp,
+                    fontSize = TextSize.Title,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -432,7 +472,7 @@ fun StatCard(
             ) {
                 Text(
                     label,
-                    fontSize = 11.sp,
+                    fontSize = TextSize.Caption,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.inkSecondary,
                     lineHeight = 14.sp,
@@ -443,7 +483,7 @@ fun StatCard(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = 26.sp,
+                    fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = (-0.5).sp,
                     lineHeight = 28.sp,
@@ -452,7 +492,7 @@ fun StatCard(
                 if (unit != null) {
                     Text(
                         " $unit",
-                        fontSize = 12.sp,
+                        fontSize = TextSize.Meta,
                         fontWeight = FontWeight.Medium,
                         color = colors.inkMuted,
                         modifier = Modifier.padding(bottom = 2.dp),
@@ -462,7 +502,7 @@ fun StatCard(
             if (delta != null) {
                 Text(
                     delta,
-                    fontSize = 11.sp,
+                    fontSize = TextSize.Caption,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.goodText,
                     modifier = Modifier.padding(top = Spacing.Tight),
@@ -526,7 +566,7 @@ fun <T> SegmentControl(
             ) {
                 Text(
                     label(option),
-                    fontSize = 13.sp,
+                    fontSize = TextSize.Meta,
                     fontWeight = if (isOn) FontWeight.SemiBold else FontWeight.Medium,
                     color = if (isOn) MaterialTheme.colorScheme.onSurface
                     else colors.inkSecondary,
@@ -570,7 +610,7 @@ fun SiblingChip(
     ) {
         Text(
             text,
-            fontSize = 11.sp,
+            fontSize = TextSize.Caption,
             fontWeight = FontWeight.SemiBold,
             color = if (selected) MaterialTheme.colorScheme.onSurface
             else colors.inkSecondary,
@@ -591,10 +631,10 @@ fun IdentityChip(label: String, value: String, modifier: Modifier = Modifier) {
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.inkMuted)
+        Text(label, fontSize = TextSize.Meta, fontWeight = FontWeight.Medium, color = colors.inkMuted)
         Text(
             value,
-            fontSize = 12.sp,
+            fontSize = TextSize.Meta,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -605,7 +645,7 @@ fun IdentityChip(label: String, value: String, modifier: Modifier = Modifier) {
 @Composable
 fun NoteText(text: String, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
-    Text(text, fontSize = 11.sp, color = colors.inkMuted, lineHeight = 16.sp, modifier = modifier)
+    Text(text, fontSize = TextSize.Caption, color = colors.inkMuted, lineHeight = 16.sp, modifier = modifier)
 }
 
 // --- empty state ---------------------------------------------------------------------------------------
@@ -642,14 +682,14 @@ fun EmptyState(
             }
             Text(
                 title,
-                fontSize = 14.sp,
+                fontSize = TextSize.Title,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
-                lineHeight = 19.sp,
+                lineHeight = TextSize.Title * 1.25f,
             )
             Text(
                 hint,
-                fontSize = 13.sp,
+                fontSize = TextSize.Body,
                 color = colors.inkSecondary,
                 lineHeight = 18.sp,
                 modifier = Modifier.padding(top = Spacing.Line),
@@ -670,7 +710,7 @@ fun DashedNote(text: String, modifier: Modifier = Modifier) {
             .padding(Spacing.Inset),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = 12.sp, color = colors.inkMuted)
+        Text(text, fontSize = TextSize.Meta, color = colors.inkMuted)
     }
 }
 

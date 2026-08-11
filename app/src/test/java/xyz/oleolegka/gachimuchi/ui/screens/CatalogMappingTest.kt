@@ -87,13 +87,16 @@ class CatalogMappingTest {
     }
 
     /**
-     * The flag's own job, isolated from the sides on the sets: a history that named no hand is
-     * only a DEFECT once the catalog says the exercise is done one hand at a time. Without the
-     * flag reaching `recordsOf`, that history reports a clean record for an exercise whose two
-     * hands were never told apart.
+     * The flag's own job, isolated from the sides on the sets: it decides whether a history that
+     * named no hand is read as ONE exercise's record or as one per hand. Without the flag
+     * reaching `recordsOf`, the tile would carry the two-handed answer for an exercise the
+     * catalog says is trained one hand at a time.
+     *
+     * The sideless set itself is credited to both hands (the owner's symmetric reading), so what
+     * the flag changes here is the label, not the number.
      */
     @Test
-    fun `the one-sided flag reaches the records, so a history with no hands admits it`() {
+    fun `the one-sided flag reaches the records, so a sideless history is read per hand`() {
         val entity = exerciseEntity(2, "One-arm hang", ExerciseForm.HOLD).copy(oneSided = true)
         val events = journal(
             HoldSet(
@@ -103,7 +106,7 @@ class CatalogMappingTest {
         )
 
         val flagged = doorTiles(events, listOf(entity.toCatalog()!!)).single()
-        assertEquals("added weight 5 kg (side not recorded)", flagged.record!!.text)
+        assertEquals("added weight 5 kg (left)", flagged.record!!.text)
 
         val held = doorTiles(events, listOf(entity.copy(oneSided = false).toCatalog()!!)).single()
         assertEquals("added weight 5 kg", held.record!!.text)

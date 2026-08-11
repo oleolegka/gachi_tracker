@@ -49,13 +49,24 @@ import java.time.ZoneId
  * rep — so [holdSetsFromRun] refuses anything but [ExerciseForm.HOLD] rather than
  * inventing numbers.
  *
- * ── Known limitation, stated rather than hidden ─────────────────────────────────
- * Completion is judged by POSITION, not by presence: a step the run moved past counts as
- * done. Skipping forward with the Skip button therefore counts the skipped efforts as
- * completed, because the runner keeps no per-step record of how each one ended (see
- * domain/Runner.kt — the state is one index and one end moment, which is what makes it
- * survive process death). The proposal being editable is what covers this: the numbers are
- * shown before anything is written.
+ * ── Completion is judged by FACT, not by position (§18.20) ──────────────────────
+ * It used to be judged by position: a step the run had moved past counted as done, so
+ * skipping forward wrote the skipped efforts into the journal as though they had been held.
+ * The offer being editable was called the cover for that, and it is not one — the numbers
+ * arrive filled in and are confirmed with one tap, so a default that overstates is what gets
+ * written on every session nobody audits line by line.
+ *
+ * What was missing was not a judgement but a FACT: after the event, a run standing on step 7
+ * looks the same whether it counted its way there or jumped. So the jump is recorded when it
+ * happens, in the persisted state ([RunState.skipped]), and an effort now counts only when the
+ * position says the run reached it AND no mark says it was jumped. Nothing about surviving
+ * process death changes: the mark travels in the same snapshot as the index it qualifies, so a
+ * run rebuilt by a fresh process — or salvaged across a reboot — judges it the same way.
+ *
+ * NOT closed by this, and deliberately: an effort cut short with the minus button still counts
+ * at its planned length (domain/Runner.kt, [adjustStep]), because a row here carries one length
+ * and the run keeps no measurement of what any single effort actually lasted. Recording that is
+ * the deferred half of §18.20 — the one that changes the shape of a journal row.
  */
 
 /**
@@ -108,43 +119,109 @@ data class CompletedSet(
  * ran to the end. When [finished] is true the whole list ran and the index is ignored.
  * Sets that produced nothing are left out entirely — stopping during the lead-in offers
  * nothing at all, which is the right amount to offer.
+ *
+ * ── A row claims ONE length, so a row covers only efforts of one length ─────────
+ * A [CompletedSet] becomes exactly one [HoldSet] in the journal (see [holdSetsFromRun]), and a
+ * [HoldSet] has ONE `hold_sec`. So a row that covered efforts of different lengths could not
+ * be written truthfully whatever it said — and what it used to say was the length of the
+ * FIRST effort in it, applied to every other. A strict schedule of "10 s on the 20 mm, then
+ * 7 s on the 15 mm, six of each" went into the journal as twelve hangs of ten seconds: half
+ * the record wrong, silently, in the one place the app exists to keep honest.
+ *
+ * Three ways out were on the table.
+ *
+ * 1. A ROW PER LENGTH — what this does. A set is cut wherever the length changes, so each row
+ *    claims one length and claims it truthfully.
+ * 2. ONE ROW CARRYING A LIST OF LENGTHS. It keeps "one set = one row" but costs a new shape
+ *    for [HoldSet], which is the payload written into the journal, carried by the backup file
+ *    (domain/JournalTransfer.kt), read by the records, the charts and the volume maths, and
+ *    documented for a separate bot that writes the same shape. A format change across all of
+ *    that, to describe a case one schedule shape in ten produces.
+ * 3. REFUSE TO OFFER A MIXED SET at all, and let it be typed in by hand. It is the only option
+ *    that writes nothing false and changes nothing — and it hands the user a full session to
+ *    re-enter with ruined fingers, which is the exact failure the whole offer exists to
+ *    prevent.
+ *
+ * (1) wins because the record it produces is exactly true and the FORMAT does not move: every
+ * row is the same [HoldSet] the entry card writes by hand, so backup, records and the bot are
+ * untouched, and nothing already written is rewritten. What it costs, stated rather than
+ * hidden: a set of two lengths is TWO rows in the journal and therefore counts as two sets
+ * wherever sets are counted. That is a real change in what the day says — and it is the
+ * honest one, because there is no such thing as "one set of two different hangs" in a journal
+ * whose row is a set at one length. The dialog says which is which by putting the length on
+ * the row (`ui/components/RunLogDialog.kt`), so the split is visible before it is confirmed
+ * rather than discovered in the history later.
+ *
+ * A run of one length throughout — every simple pair, every repeater protocol, which is nearly
+ * all of them — comes out exactly as it always did: one row per set of the schedule.
+ *
+ * ── Cut on the SEQUENCE, not on a map ───────────────────────────────────────────
+ * The buckets used to be a map keyed on group name and repeat. A map cannot express "the same
+ * set, but the length changed here", because that key is not the whole answer any more: a
+ * bucket is now closed by the next effort disagreeing with it about EITHER the set it belongs
+ * to or its length, which is a statement about order. [flatten] emits a group's repeats
+ * contiguously, so walking the steps once is all the information needed.
+ *
+ * ── The limit this does NOT lift, said out loud ─────────────────────────────────
+ * Two GROUPS that happen to share a name and a repeat number are still one bucket, exactly as
+ * under the map: a step carries its group's NAME and nothing that says which group it was, so
+ * "Set" followed by another group also called "Set" is indistinguishable from one group's
+ * efforts continuing. They merge into one row, and the pause between the two groups is
+ * swallowed rather than reported. Telling them apart needs a field on [WorkoutStep] that does
+ * not exist; until something makes that case matter, it is written down here rather than
+ * quietly assumed away.
  */
-fun completedSets(steps: List<WorkoutStep>, endedAtIndex: Int, finished: Boolean): List<CompletedSet> {
+fun completedSets(
+    steps: List<WorkoutStep>,
+    endedAtIndex: Int,
+    finished: Boolean,
+    /**
+     * The steps the run jumped out of instead of holding to their end ([RunState.skipped]).
+     * Subtracted from what the position says was done — see the "judged by fact" note above.
+     */
+    skipped: Set<Int> = emptySet(),
+): List<CompletedSet> {
     if (steps.isEmpty()) return emptyList()
     val doneThrough = if (finished) steps.size else endedAtIndex.coerceIn(0, steps.size)
 
-    class Bucket {
+    class Bucket(val key: String, val workSec: Int, val firstIndex: Int) {
         var planned = 0
         var done = 0
-        var workSec = 0
-        var firstIndex = -1
-        var lastIndex = -1
+        var lastIndex = firstIndex
     }
 
-    // one bucket per (group, repeat of that group) — which for a program generated from an
-    // exercise is exactly one bucket per set
-    val buckets = LinkedHashMap<String, Bucket>()
+    // one bucket per unbroken run of equal-length efforts inside one (group, repeat of that
+    // group) — which for a program generated from an exercise is exactly one bucket per set
+    val ordered = ArrayList<Bucket>()
     steps.forEachIndexed { index, step ->
         if (step.kind != StepKind.WORK) return@forEachIndexed
-        val bucket = buckets.getOrPut("${step.groupName}#${step.groupRepeat}") { Bucket() }
-        if (bucket.planned == 0) {
-            bucket.firstIndex = index
-            bucket.workSec = step.durationSec
+        val key = "${step.groupName}#${step.groupRepeat}"
+        val open = ordered.lastOrNull()
+        val bucket = if (open != null && open.key == key && open.workSec == step.durationSec) {
+            open
+        } else {
+            Bucket(key, step.durationSec, index).also { ordered += it }
         }
         bucket.planned++
         bucket.lastIndex = index
-        if (index < doneThrough) bucket.done++
+        // POSITION SAYS THE RUN GOT HERE; the mark says whether it held this one or jumped it.
+        // `planned` counts either way — what the schedule asked for did not change because an
+        // effort was skipped, and "4 of 6" is the whole of what the offer has to say.
+        if (index < doneThrough && index !in skipped) bucket.done++
     }
 
-    val ordered = buckets.values.toList()
     val out = ArrayList<CompletedSet>()
     ordered.forEachIndexed { position, bucket ->
         if (bucket.done <= 0) return@forEachIndexed
         val next = ordered.getOrNull(position + 1)
         // the pause is only known when it fully elapsed, i.e. when the run reached the
-        // first effort of the next set; a run stopped inside the pause reports nothing
+        // first effort of the next set; a run stopped inside the pause reports nothing.
+        // A pause the Skip button cut short is the same case arrived at differently: what
+        // the program would have counted is no longer what the user rested, and stating the
+        // planned figure as a measured one is the overstatement §18.20 is about.
         val rest = next
             ?.takeIf { doneThrough >= it.firstIndex }
+            ?.takeIf { (bucket.lastIndex + 1 until it.firstIndex).none { step -> step in skipped } }
             ?.let { steps.subList(bucket.lastIndex + 1, it.firstIndex).sumOf { step -> step.durationSec } }
         out += CompletedSet(
             setNumber = position + 1,
@@ -274,7 +351,7 @@ fun runOutcome(
         exerciseId = snapshot.exerciseId,
         programId = snapshot.programId,
         interrupted = !settled.finished,
-        sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished),
+        sets = completedSets(snapshot.steps, settled.stepIndex, settled.finished, settled.skipped),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
         side = snapshot.side,
@@ -311,7 +388,15 @@ fun salvagedOutcome(snapshot: RunSnapshot, zone: ZoneId = ZoneId.systemDefault()
         exerciseId = snapshot.exerciseId,
         programId = snapshot.programId,
         interrupted = true,
-        sets = completedSets(snapshot.steps, endedAtIndex = snapshot.state.stepIndex, finished = false),
+        sets = completedSets(
+            snapshot.steps,
+            endedAtIndex = snapshot.state.stepIndex,
+            finished = false,
+            // a skip is recorded in the snapshot, so it survives the restart exactly as the
+            // step count does; a reconstruction that forgot it would put back the efforts the
+            // user had already declined
+            skipped = snapshot.state.skipped,
+        ),
         endedAtWallMs = endedAtWallMs,
         opDate = isoDateOf(endedAtWallMs, zone),
         side = snapshot.side,
@@ -381,11 +466,20 @@ fun holdSetsFromRun(
  * is the one that keeps it (`ui/components/RunLogDialog.kt`), because that is where the
  * number is live — turn a set down to zero and it is not written, and the button says so
  * before it is pressed. This line's own job is the SHAPE of the run, which the pluses show.
+ *
+ * ── "of 7 s" only when everything in it was 7 s ─────────────────────────────────
+ * The length used to be taken off the FIRST row and stated once for the whole line, which is
+ * the same assumption [completedSets] used to make inside a set and is wrong in the same
+ * place: a schedule that mixes lengths would have been summarised as though it did not. When
+ * the rows disagree, each one says its own — "6 x 10 s + 6 x 7 s" — and the reader can see at
+ * a glance that this run was two different efforts rather than one.
  */
 fun runSummaryLine(sets: List<CompletedSet>): String {
     val live = sets.filter { it.reps > 0 }
     if (live.isEmpty()) return "Nothing was completed."
+    val lengths = live.map { it.workSec }.distinct()
+    if (lengths.size > 1) return live.joinToString(" + ") { "${it.reps} x ${it.workSec} s" }
     val counts = live.joinToString(" + ") { it.reps.toString() }
     val effortWord = if (live.sumOf { it.reps } == 1) "effort" else "efforts"
-    return "$counts $effortWord of ${live.first().workSec} s"
+    return "$counts $effortWord of ${lengths.single()} s"
 }

@@ -127,6 +127,7 @@ fun EntryEditorDialog(
                             value = weight,
                             onValueChange = { weight = it },
                             steps = listOf(2.5, 5.0),
+                            signed = entry.ownWeight,
                         )
                         StepperField(
                             label = "Reps",
@@ -150,6 +151,7 @@ fun EntryEditorDialog(
                             value = weight,
                             onValueChange = { weight = it },
                             steps = listOf(0.5, 1.0),
+                            signed = true,
                         )
                         StepperField(
                             label = "Reps",

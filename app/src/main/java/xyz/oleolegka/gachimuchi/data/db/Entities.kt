@@ -298,10 +298,11 @@ data class ExerciseEntity(
      * exists — the entry card has to know to ask which side, and the timer has to know to
      * announce the change of sides between sets. Neither can wait for a set to be logged.
      *
-     * It is also what makes a MISSING side a defect rather than a shrug: on an exercise
-     * marked one-sided, a set that named no hand is a hole in the data, and the reducers say
-     * so out loud instead of filing it as "both"
-     * (see [xyz.oleolegka.gachimuchi.domain.holdRecord]).
+     * It is also what makes the entry card ASK for a side, so that nothing logged from here on
+     * is missing one. What is already in the journal without a hand — everything recorded before
+     * the flag was ticked — is read as work both sides did equally and counted for each of them
+     * (see [xyz.oleolegka.gachimuchi.domain.holdRecord]); it used to be reported as a record of
+     * unknown side, which drew a third column beside the two hands.
      *
      * NOT NULL with false as the answer for every row that predates it, which is the true
      * one: nothing in the catalog was one-sided before there was a way to say so. It is

@@ -8,12 +8,11 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
 import org.junit.Test
+import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.BuildConfig
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
 
@@ -37,6 +36,16 @@ import xyz.oleolegka.gachimuchi.ui.ScreenTest
  * composes the screen. Asserting on the store's default would therefore pass or fail on the
  * order the methods happen to run in. Each assertion below follows a click of its own.
  */
+/*
+ * Measured on a TALL window, and scrolled through by nobody.
+ *
+ * This class used to walk the tab with performScrollToNode, and it hung the whole suite for
+ * half an hour when the screen underneath it was redrawn: the animation clock is frozen in
+ * [ScreenTest], so a scroll that does not immediately find what it hunts for never finishes
+ * and never fails either. A window tall enough to hold the tab has no such failure mode, and
+ * the assertions are text and callbacks, which the window size does not change.
+ */
+@Config(sdk = [34], qualifiers = "w411dp-h3000dp-xhdpi")
 class SettingsScreenTest : ScreenTest() {
 
     @Test
@@ -44,7 +53,8 @@ class SettingsScreenTest : ScreenTest() {
         screen { SettingsScreen() }
 
         compose.onNodeWithText("Settings").assertIsDisplayed()
-        compose.onNodeWithText("Celebration").assertIsDisplayed()
+        // SettingsBlock draws its title as an eyebrow, in caps
+        compose.onNodeWithText("CELEBRATION").assertIsDisplayed()
 
         compose.onNodeWithText("On every set").assertIsDisplayed()
         compose.onNodeWithText("A picture each time a set is written down.").assertIsDisplayed()
@@ -59,18 +69,17 @@ class SettingsScreenTest : ScreenTest() {
         screen { SettingsScreen() }
 
         // the tab is a lazy list, so the lower rows have to be scrolled to before they exist
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Add pictures"))
         compose.onNodeWithText("Add pictures").assertIsDisplayed().assertHasClickAction()
-        compose.onNodeWithText("none yet").assertIsDisplayed()
-        compose.onNodeWithText(
-            "No pictures yet. Pictures are chosen with the system picker, and the app " +
-                "keeps its own copy of each one — moving or deleting the original later " +
-                "changes nothing here. Until there is at least one, nothing is ever shown."
-        ).assertExists()
+        // the count belongs to the section it counts, not beside the button that adds
+        // to it - beside the button it read as a caption for the button
+        compose.onNodeWithText("CELEBRATION").assertIsDisplayed()
+        // two short lines, not the three-sentence wall this used to be: an empty gallery is
+        // asking a question, and the answer to it is not a paragraph (SYSTEM.md, rule 5)
+        compose.onNodeWithText("No pictures yet").assertExists()
+        compose.onNodeWithText("Until there is at least one, nothing is ever shown.").assertExists()
 
         // choosing a mode must not throw: the row writes through to the process-wide store,
         // which is a real SharedPreferences write even under Robolectric
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("On every set"))
         compose.onNodeWithText("On every set").assertHasClickAction().performClick()
     }
 
@@ -119,7 +128,6 @@ class SettingsScreenTest : ScreenTest() {
         screen { SettingsScreen() }
 
         val version = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText(version))
         compose.onNodeWithText(version).assertIsDisplayed()
     }
 
@@ -137,11 +145,10 @@ class SettingsScreenTest : ScreenTest() {
     fun `the backup section offers both directions, and restoring asks first`() {
         screen { SettingsScreen() }
 
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Export the journal"))
         compose.onNodeWithText("Export the journal").assertIsDisplayed().assertHasClickAction()
-        compose.onNodeWithText("Restore").assertIsDisplayed().assertHasClickAction()
+        compose.onNodeWithText("Restore from a file").assertIsDisplayed().assertHasClickAction()
 
-        compose.onNodeWithText("Restore").performClick()
+        compose.onNodeWithText("Restore from a file").performClick()
         settle()
 
         // the question, not the picker: a merge and a settings overwrite are not things to
@@ -153,7 +160,6 @@ class SettingsScreenTest : ScreenTest() {
 
     /** The row carrying [title], brought into the lazy list's window first. */
     private fun modeRow(title: String): SemanticsNodeInteraction {
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText(title))
         return compose.onNodeWithText(title)
     }
 
