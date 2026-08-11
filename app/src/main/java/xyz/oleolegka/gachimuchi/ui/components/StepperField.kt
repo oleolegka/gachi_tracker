@@ -5,7 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.FilledTonalButton
@@ -60,7 +61,9 @@ fun StepperField(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             steps.sortedDescending().forEach { step ->
-                StepButton("-${formatNumber(step)}") { onValueChange(applyStep(value, -step)) }
+                StepButton("-${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
+                    onValueChange(applyStep(value, -step))
+                }
             }
             OutlinedTextField(
                 value = value,
@@ -76,21 +79,32 @@ fun StepperField(
                 keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
             )
             steps.sorted().forEach { step ->
-                StepButton("+${formatNumber(step)}") { onValueChange(applyStep(value, step)) }
+                StepButton("+${formatNumber(step)}", Modifier.width(STEP_BUTTON_WIDTH)) {
+                    onValueChange(applyStep(value, step))
+                }
             }
         }
     }
 }
 
-/** Shared with [TimeField], which offers only the "+" half of this. */
+/**
+ * Shared with [TimeField].
+ *
+ * [modifier] exists for that other caller: this one packs its buttons beside the field and
+ * wants them a fixed 50dp wide, while [TimeField] puts a row of four UNDER its field and
+ * shares the width out between them. The default keeps this file's own layout unchanged.
+ */
 @Composable
-internal fun StepButton(label: String, onClick: () -> Unit) {
+internal fun StepButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     FilledTonalButton(
         onClick = onClick,
-        modifier = Modifier.size(width = 50.dp, height = 48.dp),
+        modifier = modifier.then(Modifier.height(48.dp)),
         contentPadding = PaddingValues(0.dp),
         shape = MaterialTheme.shapes.medium,
     ) {
         Text(label, fontSize = 13.sp, maxLines = 1)
     }
 }
+
+/** How wide a step button is when it sits BESIDE the field, as it does on this one. */
+private val STEP_BUTTON_WIDTH = 50.dp
