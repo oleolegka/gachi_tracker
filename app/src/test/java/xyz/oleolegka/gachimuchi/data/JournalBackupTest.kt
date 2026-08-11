@@ -490,6 +490,47 @@ class JournalBackupTest {
     }
 
     /**
+     * A HIDDEN PROGRAM COMES BACK HIDDEN.
+     *
+     * The column (schema version 20) was not carried by the backup at all until
+     * `BackupColumnCoverageTest` found it missing on its first run — the third instance of the
+     * defect backlog.md §14.2 describes, and the reason that test was written. A restore handed
+     * back a library with every tidied-away program showing again, silently, because
+     * `PortableProgramRow`'s fields all default.
+     *
+     * Kept as a test of its own rather than folded into the fixture the round-trip tests share:
+     * the counts in those are asserted exactly, and a fourth program in the fixture would have
+     * meant editing three unrelated assertions to cover one column.
+     */
+    @Test
+    fun `a program hidden from the library is still hidden after a restore`() = runTest {
+        val tidiedAway = programs.save(
+            WorkoutProgram(
+                name = "Old ladder, kept for reference",
+                prepareSec = 10,
+                groups = listOf(
+                    ProgramGroup(
+                        name = "Ladder",
+                        blocks = listOf(ProgramBlock("Hang", workSec = 10, restSec = 5, repeats = 3)),
+                    )
+                ),
+            )
+        )
+        programs.setHidden(tidiedAway, true)
+        val text = backup.export()
+
+        val other = freshDb()
+        try {
+            JournalBackup(other, null).restore(accepted(text))
+            val restored = other.programs().allPrograms()
+                .single { it.name == "Old ladder, kept for reference" }
+            assertTrue("hiding a program is part of how the library was set up", restored.hidden)
+        } finally {
+            other.close()
+        }
+    }
+
+    /**
      * A program whose name is taken by a DIFFERENT program is marked rather than merged over,
      * exactly as the program file does it: the copy on the phone may have been edited since the
      * backup was taken, and overwriting a hand-tuned protocol with an older one cannot be undone.
