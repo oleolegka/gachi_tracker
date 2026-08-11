@@ -5,18 +5,24 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -34,14 +40,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.DayCard
 import xyz.oleolegka.gachimuchi.domain.DayCardAction
 import xyz.oleolegka.gachimuchi.domain.DayCardKind
+import xyz.oleolegka.gachimuchi.domain.DayCardRecord
 import xyz.oleolegka.gachimuchi.domain.DayCards
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Radius
@@ -172,28 +181,33 @@ fun DayCardList(
      */
     pastWorkoutNames: List<String> = emptyList(),
 ) {
+    val colors = LocalGachiColors.current
+
     /** Whether the question "what shall this one be called" is on screen. */
     var naming by remember(day.date) { mutableStateOf(false) }
 
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.Cards)) {
         if (day.isEmpty) {
             /*
-             * The note names the button underneath it rather than reporting a count of zero.
-             * This is the first thing a new install shows, and it used to be able to lean on
-             * demo data to make the day look inhabited; with that gone, an empty day is the
-             * whole first impression and it has to say where training gets written down.
+             * ONE SENTENCE, and no plaque around it. The dashed box repeated in a second voice
+             * what the section heading above already says, and its dashes (the axis colour) were
+             * all but invisible in the dark theme — a frame drawn around nothing. What is left
+             * says what is empty, which is the whole job of an empty state, and the button under
+             * it is the only thing on the screen to press.
              */
-            DashedNote(
+            Text(
                 if (day.canRecord) {
-                    "Nothing planned and nothing recorded. Start a workout below, or log a " +
-                        "single entry."
+                    "Nothing planned or recorded for today."
                 } else {
                     // a day that has not happened cannot have "nothing recorded" held
                     // against it, so it is not told that it does. It is also only ever drawn
                     // on the calendar (Today is never in the future), which is why the
                     // sentence can name the "Plan a session" button sitting under this list
                     "Nothing planned for this day. Plan a session below and it appears here."
-                }
+                },
+                fontSize = TextSize.Body,
+                color = colors.inkSecondary,
+                modifier = Modifier.padding(top = Spacing.Line),
             )
         }
 
@@ -203,6 +217,9 @@ fun DayCardList(
             AddMenuButton(
                 onWorkout = { naming = true },
                 onSingleEntry = { actions.logSingleEntry(date) },
+                // an empty day has exactly one thing to do on it, so the one button says so by
+                // being filled; with cards above it, it is the quiet second option it always was
+                filled = day.isEmpty,
                 /*
                  * There is at most ONE draft in the app, so starting a second workout would
                  * replace the one being composed — silently, which is the very thing §23.A3
@@ -211,7 +228,6 @@ fun DayCardList(
                  * that says why.
                  */
                 workoutEnabled = day.cards.none { it.kind == DayCardKind.DRAFT },
-                modifier = Modifier.padding(top = Spacing.Tight),
             )
         }
     }
@@ -235,11 +251,20 @@ fun DayCardList(
 }
 
 /**
- * One card: a coloured spine, the name and its time, the subtitle that says what KIND of
- * card this is, an optional record line, and the action.
+ * One card: a coloured spine, the name, two lines of meta, an optional record, and the action.
  *
- * The kind is never said in colour alone — the spine follows it, but the subtitle underneath
- * carries the same information in words, which is the rule everywhere else in this app.
+ * The kind is never said in colour alone — the spine follows it, but the first meta line
+ * underneath carries the same information in words, which is the rule everywhere else in this
+ * app. The DRAFT spine is dashed as well as coloured, because it shares its colour with the
+ * plan and "assembled but not yet a fact" is exactly what a dashed line says.
+ *
+ * ── One way in, and a sign that there is a menu ─────────────────────────────────
+ * A button appears only where it does something the card body does NOT. That is the plan, where
+ * the body opens the plan and the button starts the workout. On a running workout and on a
+ * draft the button used to call the very same handler as a tap on the card — two ways to do one
+ * thing, and the word "Continue" printed twice on one screen — so it is gone and a chevron says
+ * that the card opens. The three-dot button next to it opens the menu the long press has always
+ * raised; the press still works, and now there is something on the card that says so.
  */
 @Composable
 private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
@@ -271,14 +296,17 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
 
         DayCardAction.NONE -> null
     }
-    val spine = when (card.kind) {
-        DayCardKind.PLANNED -> colors.accent
-        DayCardKind.RUNNING -> colors.good
-        DayCardKind.DONE -> colors.inkSecondary
-        DayCardKind.SINGLE -> colors.inkMuted
-        // the same accent a plan gets: both are things not done yet, and the subtitle is
-        // what says which is which — no kind is ever told by colour alone here
-        DayCardKind.DRAFT -> colors.accent
+    val spine = when {
+        // a plan whose hour went by with nothing recorded is not the same news as one still
+        // ahead, and it was drawn in the same accent as one — see [DayCard.missed]
+        card.missed -> colors.serious
+        card.kind == DayCardKind.PLANNED -> colors.accent
+        card.kind == DayCardKind.RUNNING -> colors.good
+        card.kind == DayCardKind.DONE -> colors.inkSecondary
+        card.kind == DayCardKind.SINGLE -> colors.inkMuted
+        // the same accent a plan gets: both are things not done yet. Told apart by the DASH
+        // below and by the word "draft" in the meta line — never by colour alone
+        else -> colors.accent
     }
 
     /** The workout this card is about, for the actions a long press offers. */
@@ -310,92 +338,93 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
         actions = menu,
         onTap = onTap,
         modifier = Modifier.fillMaxWidth(),
-    ) { press ->
+    ) { press, openMenu ->
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(Radius.Card))
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, colors.border, RoundedCornerShape(Radius.Card))
-            .then(press),
+            .then(press)
+            .height(IntrinsicSize.Min),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .width(4.dp)
-                .heightIn(min = 62.dp)
-                .clip(RoundedCornerShape(topStart = Radius.Card, bottomStart = Radius.Card))
-                .background(spine)
-        )
+        Spine(spine, dashed = card.kind == DayCardKind.DRAFT)
         Column(
-            Modifier.weight(1f).padding(
-                start = Spacing.Inset, end = Spacing.Line,
-                top = Spacing.Line, bottom = Spacing.Line,
-            ),
+            Modifier.weight(1f).padding(Spacing.Inset),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    card.title,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (card.timeLabel.isNotEmpty()) {
-                    Text(
-                        card.timeLabel,
-                        fontSize = TextSize.Caption,
-                        color = colors.inkMuted,
-                        modifier = Modifier.padding(start = Spacing.Line),
+            Text(
+                card.title,
+                fontSize = TextSize.Title,
+                fontWeight = FontWeight.SemiBold,
+                // a workout already done steps back a shade; everything else is at full ink
+                color = if (card.kind == DayCardKind.DONE) {
+                    colors.inkSecondary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(card.metaLine, fontSize = TextSize.Meta, color = colors.inkSecondary)
+            if (card.detailLine.isNotEmpty()) {
+                Text(card.detailLine, fontSize = TextSize.Meta, color = colors.inkMuted)
+            }
+            // a record is stated in words, never by colour alone — and it is no longer the
+            // palest thing on the card, which is what a piece of good news must never be
+            card.record?.let { RecordChip(it) }
+        }
+
+        Row(
+            Modifier.padding(start = Spacing.Line, end = Spacing.Inset),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+        ) {
+            val edit = actions.editSlot
+            val delete = actions.deleteSlot
+            val slotId = card.slotId
+            if (card.kind == DayCardKind.PLANNED && slotId != null && edit != null && delete != null) {
+                RowIcon(Icons.Filled.Edit, "Edit \"${card.title}\"", colors.inkSecondary) { edit(slotId) }
+                RowIcon(Icons.Filled.Delete, "Delete \"${card.title}\"", colors.critical) { delete(slotId) }
+            }
+
+            /*
+             * A button ONLY where it does something the card body does not.
+             *
+             * That is the plan and nothing else: the card opens the plan, the button starts the
+             * workout — deliberately two different acts since a plan for the evening became a
+             * workout an hour early. On the running workout and on the draft the button called
+             * the card's own handler, so it was a second way to do one thing, and it printed
+             * "Continue" twice on one screen. Those two now show the chevron below.
+             */
+            if (card.action == DayCardAction.START && card.slotId != null) {
+                val slot = card.slotId
+                Button(
+                    onClick = { actions.startFromPlan(slot, date) },
+                    shape = RoundedCornerShape(Radius.Small),
+                    contentPadding = PaddingValues(horizontal = Spacing.Inset),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("Start", fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold) }
+            } else {
+                if (menu.isNotEmpty()) {
+                    RowIcon(Icons.Filled.MoreVert, "Actions for \"${card.title}\"", colors.inkMuted) {
+                        openMenu()
+                    }
+                }
+                /*
+                 * Drawn only where a tap really leads somewhere. A weigh-in card names no
+                 * catalog exercise and so has no breakdown behind it; a chevron there would be
+                 * a promise the card cannot keep.
+                 */
+                if (onTap != null) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = colors.inkMuted,
+                        modifier = Modifier.size(16.dp),
                     )
                 }
             }
-            Text(card.subtitle, fontSize = 11.5.sp, color = colors.inkSecondary)
-            // a record is stated in words, never by colour alone
-            card.recordLine?.let {
-                Text(it, fontSize = 11.sp, color = colors.good, fontWeight = FontWeight.Medium)
-            }
-        }
-
-        val edit = actions.editSlot
-        val delete = actions.deleteSlot
-        val slotId = card.slotId
-        if (card.kind == DayCardKind.PLANNED && slotId != null && edit != null && delete != null) {
-            RowIcon(Icons.Filled.Edit, "Edit \"${card.title}\"", colors.inkSecondary) { edit(slotId) }
-            RowIcon(Icons.Filled.Delete, "Delete \"${card.title}\"", colors.critical) { delete(slotId) }
-        }
-
-        /*
-         * Only the two actions that BEGIN something get a button of their own; "open" is the
-         * card itself, and a button saying "open" next to a card that opens is noise.
-         *
-         * The button carries its OWN handler rather than reusing the card's tap: for a plan
-         * the two are deliberately different things now — the card opens the plan, the button
-         * starts the workout.
-         */
-        val begin: Pair<String, () -> Unit>? = when (card.action) {
-            DayCardAction.START ->
-                card.slotId?.let { id -> "Start" to { actions.startFromPlan(id, date) } }
-
-            DayCardAction.CONTINUE ->
-                card.workoutId?.let { id -> "Continue" to { actions.continueWorkout(id) } }
-
-            // "Continue", the same word the running workout gets: from the user's side both
-            // are "the session I am in the middle of", and only one of them can exist at once
-            DayCardAction.RESUME -> "Continue" to { actions.resumeDraft() }
-
-            DayCardAction.OPEN, DayCardAction.NONE -> null
-        }
-        if (begin != null) {
-            val (label, onBegin) = begin
-            Button(
-                onClick = onBegin,
-                contentPadding = PaddingValues(horizontal = Spacing.Inset),
-                modifier = Modifier.padding(end = Spacing.Line).heightIn(min = 40.dp),
-            ) { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
-        } else {
-            Box(Modifier.width(Spacing.Inset))
         }
     }
     }
@@ -420,7 +449,7 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
     if (confirmingDelete) {
         // the card's own two lines, so the dialog is unmistakably about the card that was
         // pressed and not about the one next to it
-        val subject = listOf(card.title, card.subtitle).filter { it.isNotEmpty() }
+        val subject = listOf(card.title, card.detailLine).filter { it.isNotEmpty() }
             .joinToString(" - ")
         if (card.kind == DayCardKind.DRAFT) {
             ConfirmRemoveDialog(
@@ -470,9 +499,84 @@ private fun DayCardRow(card: DayCard, date: LocalDate, actions: DayActions) {
     }
 }
 
+/**
+ * The coloured edge of a card, and — for a draft — a DASHED one.
+ *
+ * Drawn rather than filled because there is no dashed fill: the dash is a stroked line down the
+ * middle of a four-point-wide box, which is the same four points of colour with gaps in it. A
+ * draft is a plan that has been assembled and has not become a fact, and a broken line is what
+ * that looks like without asking for a colour the palette does not have.
+ */
+@Composable
+private fun Spine(color: Color, dashed: Boolean) {
+    val shape = RoundedCornerShape(topStart = Radius.Card, bottomStart = Radius.Card)
+    Box(
+        Modifier
+            .width(SPINE_WIDTH)
+            .fillMaxHeight()
+            .heightIn(min = 62.dp)
+            .clip(shape)
+            .drawBehind {
+                if (!dashed) {
+                    drawRect(color)
+                } else {
+                    val on = SPINE_DASH.toPx()
+                    drawLine(
+                        color = color,
+                        start = Offset(size.width / 2f, 0f),
+                        end = Offset(size.width / 2f, size.height),
+                        strokeWidth = size.width,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(on, on)),
+                    )
+                }
+            }
+    )
+}
+
+private val SPINE_WIDTH = 4.dp
+
+/** The dash and the gap of a draft's spine — equal, so it reads as a broken line and not dots. */
+private val SPINE_DASH = 6.dp
+
+/**
+ * The record of a card: a quiet word and a loud number, on a recessed chip.
+ *
+ * It used to be the palest line on the card — 11 sp in a fill colour — which broke the rule that
+ * good news is never fainter than bad. The chip gives it a place of its own, the word stays
+ * secondary, and the value is set at body size in full ink: after the title it is the darkest
+ * thing here, which is what it deserves to be.
+ */
+@Composable
+private fun RecordChip(record: DayCardRecord) {
+    val colors = LocalGachiColors.current
+    Row(
+        Modifier
+            .padding(top = Spacing.Tight)
+            .clip(RoundedCornerShape(Radius.Small))
+            .background(colors.recessed)
+            .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            record.label,
+            fontSize = TextSize.Meta,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.goodText,
+        )
+        Text(
+            record.value,
+            fontSize = TextSize.Body,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** An icon that acts. 48 dp of target under an 18 dp drawing — the platform floor, not the mock's. */
 @Composable
 private fun RowIcon(icon: ImageVector, description: String, tint: Color, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(38.dp)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
         Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(18.dp))
     }
 }
@@ -492,15 +596,21 @@ private fun AddMenuButton(
     modifier: Modifier = Modifier,
     /** False while a draft is already being composed — see the call site. */
     workoutEnabled: Boolean = true,
+    /** Filled rather than outlined, for the day where this is the only action on screen. */
+    filled: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        OutlinedButton(
-            onClick = { open = true },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) {
+        val shape = RoundedCornerShape(Radius.Small)
+        val body: @Composable RowScope.() -> Unit = {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text("Add", modifier = Modifier.padding(start = Spacing.Line))
+            Text("Add", fontSize = TextSize.Body, modifier = Modifier.padding(start = Spacing.Line))
+        }
+        val size = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        if (filled) {
+            Button(onClick = { open = true }, shape = shape, modifier = size, content = body)
+        } else {
+            OutlinedButton(onClick = { open = true }, shape = shape, modifier = size, content = body)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(

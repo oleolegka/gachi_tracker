@@ -124,10 +124,10 @@ class AmendedReadersTest {
         // both entries are outside any workout, so they share one card and the count on it is
         // what the reader has to get right
         val plain = dayCards(listOf(first, second), emptyList(), date, date, late)
-        assertTrue(plain.cards.single().subtitle.contains("2 entries"))
+        assertTrue(plain.cards.single().detailLine.contains("2 sets"))
 
         val pruned = dayCards(listOf(first, second, delete(second)), emptyList(), date, date, late)
-        assertTrue(pruned.cards.single().subtitle.contains("1 entry"))
+        assertTrue(pruned.cards.single().detailLine.contains("1 set"))
 
         // corrected onto the day before: this day has nothing to show at all
         val moved = dayCards(

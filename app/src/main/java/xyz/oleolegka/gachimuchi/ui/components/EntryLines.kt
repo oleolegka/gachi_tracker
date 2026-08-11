@@ -173,7 +173,7 @@ private fun EntryLine(
         onRemove?.let { add(ItemAction("Remove entry", destructive = true) { confirming = true }) }
     }
 
-    ItemActions(title = summary, actions = menu, modifier = Modifier.fillMaxWidth()) { press ->
+    ItemActions(title = summary, actions = menu, modifier = Modifier.fillMaxWidth()) { press, _ ->
         Column(
             Modifier
                 .fillMaxWidth()

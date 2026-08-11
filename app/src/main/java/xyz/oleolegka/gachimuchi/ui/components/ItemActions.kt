@@ -118,6 +118,13 @@ private val DRAG_INTENT_SLOP = 6.dp
  * `combinedClickable`'s, and its long press is still declared (as an empty one) so that a press
  * held and released does not ALSO fire the tap: what that press meant is decided below, by the
  * detector that knows whether the finger moved.
+ *
+ * ── The gesture is not the only way in ─────────────────────────────────────────
+ * [content] is also handed `openMenu`, and a caller that draws a control calling it puts THE
+ * SAME menu behind a visible button. That is the second half of the rule "a hidden action has a
+ * sign": the press stays exactly as it was for the hand that already knows it, and the card
+ * stops being a thing whose actions can only be found by holding a finger on it and hoping.
+ * A caller that draws no such control simply ignores the lambda, and nothing changes for it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -127,7 +134,7 @@ fun ItemActions(
     modifier: Modifier = Modifier,
     onTap: (() -> Unit)? = null,
     drag: ItemDrag? = null,
-    content: @Composable (Modifier) -> Unit,
+    content: @Composable (press: Modifier, openMenu: () -> Unit) -> Unit,
 ) {
     val colors = LocalGachiColors.current
     var open by remember { mutableStateOf(false) }
@@ -182,7 +189,7 @@ fun ItemActions(
     }
 
     Box(modifier) {
-        content(press)
+        content(press) { if (actions.isNotEmpty()) open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             Text(
                 title,

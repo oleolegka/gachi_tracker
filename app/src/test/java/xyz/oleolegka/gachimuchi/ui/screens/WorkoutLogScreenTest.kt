@@ -10,6 +10,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.up
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -236,13 +237,41 @@ class WorkoutLogScreenTest : ScreenTest() {
         show(journal, supersetWorkout(journal))
 
         compose.onNodeWithText("Bench press").assertIsDisplayed()
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").assertIsDisplayed()
+        // a table now, one line per set, with the loads under each other
+        compose.onNodeWithText("2 sets").assertIsDisplayed()
+        compose.onNodeWithText("60 kg").assertIsDisplayed()
+        compose.onNodeWithText("62.5 kg").assertIsDisplayed()
         /*
          * The empty card is the point of the whole model, not an edge case: exercises are put
          * into the workout on the way in, before a single set of them exists.
          */
         compose.onNodeWithText("Abs").assertIsDisplayed()
-        compose.onNodeWithText("no sets yet").assertIsDisplayed()
+        compose.onNodeWithText("0 sets").assertIsDisplayed()
+    }
+
+    /**
+     * The three things the set block does that the joined line could not: count the sets (asked
+     * for outright — "нет общего какого-то счётчика 'сделано 5 сетов', а мы хотели"), say the
+     * protocol ONCE instead of once per set, and mark the sets that are not ordinary working
+     * ones. The warm-up is inside the count, because it is a set.
+     */
+    @Test
+    fun `the card counts its sets, says the protocol once, and marks the two that are not ordinary`() {
+        val journal = Journal()
+        val workout = journal.startWorkout(iso, at = "18:05")
+        journal.addExercise(workout, iso, hangs, restSec = 240)
+        journal.holdSet(hangs, iso, at = "18:10", addedKg = 5.0, warmup = true, workoutId = workout)
+        journal.holdSet(hangs, iso, at = "18:14", addedKg = 7.5, workoutId = workout)
+        journal.holdSet(hangs, iso, at = "18:18", addedKg = 7.5, incomplete = true, workoutId = workout)
+        show(journal, workout)
+
+        compose.onNodeWithText("3 sets \u00b7 7:3 protocol").assertIsDisplayed()
+        compose.onNodeWithText("Warm-up").assertIsDisplayed()
+        compose.onNodeWithText("Not completed").assertIsDisplayed()
+        // and the load stands in a column of its own: the ramp-up hang at +5, the working
+        // ones at +7.5 (two rows, not collapsed into one — the second fell short)
+        compose.onNodeWithText("+5 kg").assertIsDisplayed()
+        compose.onNodeWithText("+7.5 kg").assertIsDisplayed()
     }
 
     @Test
@@ -250,8 +279,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("rest 2:30").assertIsDisplayed()
-        compose.onNodeWithText("rest 1:30").assertIsDisplayed()
+        compose.onNodeWithText("Rest 2:30").assertIsDisplayed()
+        compose.onNodeWithText("Rest 1:30").assertIsDisplayed()
     }
 
     @Test
@@ -259,7 +288,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("Fri 7 Aug - 2 exercises, 2 sets").assertIsDisplayed()
+        compose.onNodeWithText("Fri 7 Aug · 2 exercises, 2 sets").assertIsDisplayed()
     }
 
     /**
@@ -284,10 +313,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val workout = journal.startWorkout(iso, at = "18:05")
         show(journal, workout)
 
-        compose.onNodeWithText(
-            "Nothing in this workout yet. Add the exercises you are about to do - " +
-                "a card with no sets on it is fine, it is the plan for the next hour."
-        ).assertIsDisplayed()
+        compose.onNodeWithText("No exercises in this workout yet.").assertIsDisplayed()
     }
 
     @Test
@@ -305,7 +331,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         val workout = supersetWorkout(journal)
         show(journal, workout, floors = listOf(countingFloor(1, "Bench press", 74_000, 150_000)))
 
-        compose.onNodeWithText("rest 1:14 left").assertIsDisplayed()
+        compose.onNodeWithText("Rest left").assertIsDisplayed()
+        compose.onNodeWithText("1:14").assertIsDisplayed()
+        // the denominator is on the line too, in the same m:ss as the button above it
+        compose.onNodeWithText("of 2:30").assertIsDisplayed()
     }
 
     /**
@@ -318,7 +347,8 @@ class WorkoutLogScreenTest : ScreenTest() {
         val workout = supersetWorkout(journal)
         show(journal, workout, floors = listOf(countingFloor(1, "Bench press", -150_000, 150_000)))
 
-        compose.onNodeWithText("ready, +2:30").assertIsDisplayed()
+        compose.onNodeWithText("Ready").assertIsDisplayed()
+        compose.onNodeWithText("+2:30").assertIsDisplayed()
     }
 
     /** Two exercises resting at once is the case the whole model was rebuilt for. */
@@ -334,8 +364,8 @@ class WorkoutLogScreenTest : ScreenTest() {
             ),
         )
 
-        compose.onNodeWithText("rest 1:14 left").assertIsDisplayed()
-        compose.onNodeWithText("ready, +0:30").assertIsDisplayed()
+        compose.onNodeWithText("1:14").assertIsDisplayed()
+        compose.onNodeWithText("+0:30").assertIsDisplayed()
     }
 
     // --- the quick form -------------------------------------------------------------------
@@ -345,7 +375,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -367,7 +397,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal.strengthSet(bench, "2026-08-05", at = "18:15", weightKg = 60.0, reps = 8)
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -379,7 +409,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("no sets yet").performClick()
+        compose.onNodeWithText("Abs").performClick()
         settle()
         settle()
 
@@ -401,9 +431,10 @@ class WorkoutLogScreenTest : ScreenTest() {
         show(journal, workout)
 
         // the set line is what "collapsed" takes away, and bench had two sets on it
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").assertDoesNotExist()
+        compose.onNodeWithText("60 kg").assertDoesNotExist()
+        compose.onNodeWithText("2 sets").assertDoesNotExist()
         // the other card is untouched: one card finishing is not the workout finishing
-        compose.onNodeWithText("no sets yet").assertExists()
+        compose.onNodeWithText("0 sets").assertExists()
         // and the name is still there to be found, and to be put back from
         compose.onNodeWithText("Bench press").assertExists()
     }
@@ -422,7 +453,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal.strengthSet(bench, past, at = "18:10", weightKg = 60.0, reps = 5, workoutId = workout)
         show(journal, workout)
 
-        compose.onNodeWithText("60 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
         compose.onNodeWithText("Repeat set").performClick()
@@ -445,7 +476,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -469,7 +500,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -491,7 +522,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -512,7 +543,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -539,7 +570,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         )
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -555,7 +586,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal.strengthSet(bench, "2026-08-05", at = "18:10", weightKg = 60.0, reps = 9)
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("60 kg × 5 reps, 62.5 kg × 5 reps").performClick()
+        compose.onNodeWithText("Bench press").performClick()
         settle()
         settle()
 
@@ -730,7 +761,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("rest 2:30").performClick()
+        compose.onNodeWithText("Rest 2:30").performClick()
         settle()
 
         compose.onNodeWithText("Save").assertExists()
@@ -774,7 +805,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         journal.finishWorkout(workout, iso, at = "19:55")
         show(journal, workout)
 
-        compose.onNodeWithText("Fri 7 Aug - 1 exercise, 2 sets - finished 19:42").assertIsDisplayed()
+        compose.onNodeWithText("Fri 7 Aug · 1 exercise, 2 sets · finished 19:42").assertIsDisplayed()
         // the button offers the way back rather than a dead label — see "Reopen" below (§13)
         compose.onNodeWithText("Reopen").assertIsDisplayed()
     }
@@ -785,7 +816,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, supersetWorkout(journal))
 
-        compose.onNodeWithText("Fri 7 Aug - 2 exercises, 2 sets").assertIsDisplayed()
+        compose.onNodeWithText("Fri 7 Aug · 2 exercises, 2 sets").assertIsDisplayed()
         compose.onNodeWithText("Finish").assertIsDisplayed()
     }
 
@@ -914,7 +945,7 @@ class WorkoutLogScreenTest : ScreenTest() {
         val journal = Journal()
         show(journal, hangWorkout(journal), liveExerciseId = 3L)
 
-        compose.onNodeWithText("Set running - tap to go back to it").assertIsDisplayed()
+        compose.onNodeWithText("Set running · tap to go back to it").assertIsDisplayed()
 
         compose.onNodeWithText("Hangs").performClick()
         settle()
@@ -932,7 +963,11 @@ class WorkoutLogScreenTest : ScreenTest() {
         val workout = supersetWorkout(journal)
         show(journal, workout)
 
-        compose.onNodeWithText("Undo last").performClick()
+        // it lives in the bar's menu now: pressed once a session, and a mis-tap cancels a
+        // set that really happened
+        compose.onNodeWithContentDescription("Actions for this workout").performClick()
+        settle()
+        compose.onNodeWithText("Undo last set").performClick()
 
         // rows 1..3 opened the workout and put its two exercises in it, so 5 is the second
         // bench set and the newest thing the workout wrote
@@ -1221,9 +1256,9 @@ class WorkoutLogScreenTest : ScreenTest() {
         showDraft(listOf(DraftCard(bench.id, 150), DraftCard(abs.id, 90)))
 
         compose.onNodeWithText("Bench press").assertIsDisplayed()
-        compose.onNodeWithText("rest 2:30").assertIsDisplayed()
+        compose.onNodeWithText("Rest 2:30").assertIsDisplayed()
         compose.onNodeWithText("Abs").assertIsDisplayed()
-        compose.onNodeWithText("rest 1:30").assertIsDisplayed()
+        compose.onNodeWithText("Rest 1:30").assertIsDisplayed()
     }
 
     /**

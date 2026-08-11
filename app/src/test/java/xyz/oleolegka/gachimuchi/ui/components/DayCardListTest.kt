@@ -103,8 +103,8 @@ class DayCardListTest : ScreenTest() {
         day(slots = listOf(slot(7, "Gym", "18:00", today.toString())))
 
         compose.onNodeWithText("Gym").assertIsDisplayed()
-        compose.onNodeWithText("18:00").assertIsDisplayed()
-        compose.onNodeWithText("not started yet").assertIsDisplayed()
+        compose.onNodeWithText("plan · 18:00").assertIsDisplayed()
+        compose.onNodeWithText("not started").assertIsDisplayed()
         compose.onNodeWithText("Start").assertIsDisplayed()
 
         compose.onNodeWithText("Start").performClick()
@@ -139,10 +139,17 @@ class DayCardListTest : ScreenTest() {
 
         day(journal.events)
 
-        compose.onNodeWithText("in progress - 2 exercises, 3 sets").assertIsDisplayed()
-        compose.onNodeWithText("Continue").assertIsDisplayed()
+        // nobody named it, so the title is its clock reading and the meta line is the state
+        compose.onNodeWithText("in progress").assertIsDisplayed()
+        compose.onNodeWithText("2 exercises · 3 sets").assertIsDisplayed()
+        /*
+         * NO BUTTON. It said "Continue" and called the very handler a tap on the card calls —
+         * two ways to do one thing, which is the first rule of the redraw. The card is the way
+         * in, and the chevron on it is what says so.
+         */
+        compose.onNodeWithText("Continue").assertDoesNotExist()
 
-        compose.onNodeWithText("Continue").performClick()
+        compose.onNodeWithText("18:05 - 18:20").performClick()
         assertEquals(workout, continued)
     }
 
@@ -158,7 +165,7 @@ class DayCardListTest : ScreenTest() {
 
         day(journal.events, date = yesterday)
 
-        compose.onNodeWithText("1 exercise, 1 set").assertIsDisplayed()
+        compose.onNodeWithText("1 exercise · 1 set").assertIsDisplayed()
         // the two words that begin something are the only ones that get a button of their own
         compose.onNodeWithText("Continue").assertDoesNotExist()
         compose.onNodeWithText("Start").assertDoesNotExist()
@@ -178,8 +185,9 @@ class DayCardListTest : ScreenTest() {
         day(journal.events)
 
         compose.onNodeWithText("Fingerboard 20 mm").assertIsDisplayed()
-        compose.onNodeWithText("outside a workout - 3 entries").assertIsDisplayed()
-        compose.onNodeWithText("12:00 - 12:08").assertIsDisplayed()
+        compose.onNodeWithText("outside a workout · 12:00 - 12:08").assertIsDisplayed()
+        // counted by what they are, not by the generic word: these are sets
+        compose.onNodeWithText("3 sets").assertIsDisplayed()
 
         compose.onNodeWithText("Fingerboard 20 mm").performClick()
         assertEquals("the breakdown is opened for the day on screen", fingerboard.id to today, openedExercise)
@@ -194,8 +202,8 @@ class DayCardListTest : ScreenTest() {
 
         day(journal.events)
 
-        compose.onNodeWithText("outside a workout - 2 entries").assertIsDisplayed()
-        compose.onNodeWithText("outside a workout - 1 entry").assertIsDisplayed()
+        compose.onNodeWithText("2 sets").assertIsDisplayed()
+        compose.onNodeWithText("1 set").assertIsDisplayed()
     }
 
     @Test
@@ -206,7 +214,8 @@ class DayCardListTest : ScreenTest() {
         day(journal.events)
 
         compose.onNodeWithText("Body weight").assertIsDisplayed()
-        compose.onNodeWithText("outside a workout - 1 entry").assertIsDisplayed()
+        // the app knows perfectly well what this is, so the card says it
+        compose.onNodeWithText("1 weigh-in").assertIsDisplayed()
         compose.onNodeWithText("Body weight").performClick()
         assertNull("a weigh-in has no exercise history behind it", openedExercise)
     }
@@ -217,9 +226,7 @@ class DayCardListTest : ScreenTest() {
     fun `an empty day that can still be trained names the button underneath it`() {
         day()
 
-        compose.onNodeWithText(
-            "Nothing planned and nothing recorded. Start a workout below, or log a single entry."
-        ).assertIsDisplayed()
+        compose.onNodeWithText("Nothing planned or recorded for today.").assertIsDisplayed()
         compose.onNodeWithText("Add").assertIsDisplayed()
     }
 
@@ -239,7 +246,9 @@ class DayCardListTest : ScreenTest() {
         day(slots = listOf(slot(7, "Gym", "18:00", tomorrow.toString())), date = tomorrow)
 
         compose.onNodeWithText("Gym").assertIsDisplayed()
-        compose.onNodeWithText("planned").assertIsDisplayed()
+        compose.onNodeWithText("plan · 18:00").assertIsDisplayed()
+        // and NOT "not started": a session at six tonight has not failed to start
+        compose.onNodeWithText("not started").assertDoesNotExist()
         compose.onNodeWithText("Start").assertDoesNotExist()
         compose.onNodeWithText("Add").assertDoesNotExist()
     }
@@ -328,7 +337,7 @@ class DayCardListTest : ScreenTest() {
         compose.onNodeWithText("Delete workout").performClick()
         settle()
 
-        compose.onNodeWithText("18:05 - 18:10 - 1 exercise, 1 set").assertExists()
+        compose.onNodeWithText("18:05 - 18:10 - 1 exercise · 1 set").assertExists()
         compose.onNodeWithText(
             "Everything recorded in it goes too - its sets stop counting towards volume, " +
                 "records and the streak. The journal keeps the original rows - removing is " +
@@ -405,9 +414,12 @@ class DayCardListTest : ScreenTest() {
         day(draft = DraftSummary(today.toString(), "Legs", exerciseCount = 3))
 
         compose.onNodeWithText("Legs").assertIsDisplayed()
-        compose.onNodeWithText("not started - 3 exercises").assertIsDisplayed()
+        compose.onNodeWithText("draft · not started").assertIsDisplayed()
+        compose.onNodeWithText("3 exercises · nothing recorded").assertIsDisplayed()
+        // the same removal as on the running card, for the same reason
+        compose.onNodeWithText("Continue").assertDoesNotExist()
 
-        compose.onNodeWithText("Continue").performClick()
+        compose.onNodeWithText("Legs").performClick()
         assertEquals(true, resumedDraft)
     }
 

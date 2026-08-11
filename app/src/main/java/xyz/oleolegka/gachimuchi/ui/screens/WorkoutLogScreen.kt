@@ -1,9 +1,14 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,21 +24,23 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -46,7 +53,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,12 +92,14 @@ import xyz.oleolegka.gachimuchi.domain.restHintSec
 import xyz.oleolegka.gachimuchi.domain.startsRest
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.label
-import xyz.oleolegka.gachimuchi.ui.components.DashedNote
 import xyz.oleolegka.gachimuchi.ui.components.ConfirmRemoveDialog
 import xyz.oleolegka.gachimuchi.ui.components.GachiCard
 import xyz.oleolegka.gachimuchi.ui.components.ItemAction
 import xyz.oleolegka.gachimuchi.ui.components.ItemActions
 import xyz.oleolegka.gachimuchi.ui.components.ItemDrag
+import xyz.oleolegka.gachimuchi.ui.components.SetTable
+import xyz.oleolegka.gachimuchi.ui.components.TabularFigures
+import xyz.oleolegka.gachimuchi.ui.components.setTable
 import xyz.oleolegka.gachimuchi.ui.components.moved
 import xyz.oleolegka.gachimuchi.ui.components.rememberReorderState
 import xyz.oleolegka.gachimuchi.ui.components.REMOVAL_IS_REVERSIBLE
@@ -99,6 +111,8 @@ import xyz.oleolegka.gachimuchi.ui.fmtWeekdayDay
 import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Radius
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 import java.time.LocalDate
 
 /**
@@ -465,65 +479,42 @@ fun WorkoutLogScreen(
         modifier = modifier.imePadding(),
         topBar = {
             Column {
-            TopAppBar(
-                title = {
-                    Column {
-                        // the name snapshot taken when "start" was pressed, never the plan's
-                        // name as it reads today — a plan is editable and a fact is not
-                        Text(
-                            workout.name ?: "Workout",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            listOfNotNull(
-                                date?.let { fmtWeekdayDay(it) },
-                                summaryOf(workout),
-                                // stated only once it means something: an unfinished workout
-                                // has an end time too, and it is simply "so far"
-                                "finished ${clockOf(workout.endTs)}".takeIf { workout.finished },
-                            ).joinToString(" - "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.inkSecondary,
-                        )
-                    }
+            WorkoutBar(
+                // the name snapshot taken when "start" was pressed, never the plan's name as it
+                // reads today — a plan is editable and a fact is not
+                title = workout.name ?: "Workout",
+                meta = listOfNotNull(
+                    date?.let { fmtWeekdayDay(it) },
+                    summaryOf(workout),
+                    // stated only once it means something: an unfinished workout has an end
+                    // time too, and it is simply "so far"
+                    "finished ${clockOf(workout.endTs)}".takeIf { workout.finished },
+                ).joinToString(" · "),
+                onClose = actions.close,
+                /*
+                 * THE SAME SLOT DOES THREE THINGS, one at a time, never more than one on screen
+                 * at once: draft, finish, and undo the finish. A draft has nothing to finish yet
+                 * — this IS the explicit "start workout" §13.1 asks for — and a finished workout
+                 * is a status and not a lock, so the way back is right where the way there was.
+                 */
+                stateLabel = when {
+                    draftMode -> "Start workout"
+                    workout.finished -> "Reopen"
+                    else -> "Finish"
                 },
-                navigationIcon = {
-                    IconButton(onClick = actions.close) {
-                        Icon(Icons.Filled.Close, contentDescription = "Leave the workout")
-                    }
-                },
-                actions = {
-                    /*
-                     * Small, plain, and as far from the bottom of the screen as it can be put.
-                     * A mis-tap here cancels a set that was actually done, so it is deliberately
-                     * nowhere near the thumb the rest of this screen is laid out for.
-                     */
-                    val last = lastSetOf(workout)
-                    TextButton(onClick = { last?.let(actions.undoSet) }, enabled = last != null) {
-                        Text("Undo last")
-                    }
-                    /*
-                     * Up here for the same reason as "Undo last", and not because it is
-                     * dangerous — it is not, nothing is lost and the screen carries on
-                     * working. It is simply pressed once at the end of a session, and every
-                     * control the thumb can reach without aiming is reserved for the moves
-                     * made twenty times an hour.
-                     *
-                     * THE SAME SLOT DOES THREE THINGS, one at a time, never more than one on
-                     * screen at once: draft, finish, and undo the finish. A draft has nothing
-                     * to finish yet — this IS the explicit "start workout" §13.1 asks for — and
-                     * a finished workout is a status and not a lock, so the way back is right
-                     * where the way there was.
-                     */
-                    when {
-                        draftMode -> TextButton(onClick = actions.finish) { Text("Start workout") }
-                        workout.finished -> TextButton(
-                            onClick = { workout.finishedEventId?.let(actions.unfinishWorkout) },
-                        ) { Text("Reopen") }
+                onState = when {
+                    workout.finished && !draftMode ->
+                        ({ workout.finishedEventId?.let(actions.unfinishWorkout); Unit })
 
-                        else -> TextButton(onClick = actions.finish) { Text("Finish") }
-                    }
+                    else -> actions.finish
                 },
+                /*
+                 * "Undo last" has moved into the menu. It is pressed about once a session, and
+                 * as a text button it took a third of the width of a 360 dp bar to say a thing
+                 * that is usually greyed out. It stays as far from the thumb as it can be put:
+                 * a mis-tap here cancels a set that really happened.
+                 */
+                onUndoLast = lastSetOf(workout)?.let { last -> ({ actions.undoSet(last) }) },
             )
             /*
              * PINNED under the title bar rather than put in the scrolling list. It appears at
@@ -544,21 +535,26 @@ fun WorkoutLogScreen(
              * gesture nav, larger on three-button nav) rather than a guessed constant, which is
              * what keeps gesture nav exactly as it already was.
              */
-            Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
-                Button(
-                    onClick = { picking = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 15.dp, vertical = 10.dp)
-                        .heightIn(min = 52.dp),
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Text(
-                        "Add exercise",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Column {
+                    HorizontalDivider(color = colors.border)
+                    Button(
+                        onClick = { picking = true },
+                        shape = RoundedCornerShape(Radius.Small),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = Spacing.Block, vertical = Spacing.Inset)
+                            .heightIn(min = 52.dp),
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Text(
+                            "Add exercise",
+                            fontSize = TextSize.Body,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = Spacing.Line),
+                        )
+                    }
                 }
             }
         },
@@ -566,14 +562,25 @@ fun WorkoutLogScreen(
         LazyColumn(
             state = listState,
             modifier = Modifier.padding(padding).fillMaxWidth(),
-            contentPadding = PaddingValues(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(
+                start = Spacing.Block, end = Spacing.Block,
+                top = Spacing.Block, bottom = Spacing.Cards,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Cards),
         ) {
             if (workout.exercises.isEmpty()) {
                 item {
-                    DashedNote(
-                        "Nothing in this workout yet. Add the exercises you are about to do - " +
-                            "a card with no sets on it is fine, it is the plan for the next hour."
+                    /*
+                     * ONE CALL TO ACTION on an empty draft, not three. There used to be this
+                     * note in a dashed box, the filled button under it, and "Start workout" in
+                     * the bar — and the third of those does something else entirely. What is
+                     * left says what is empty, which is all an empty state owes anybody.
+                     */
+                    Text(
+                        "No exercises in this workout yet.",
+                        fontSize = TextSize.Body,
+                        color = colors.inkSecondary,
+                        modifier = Modifier.padding(top = Spacing.Block),
                     )
                 }
             }
@@ -589,7 +596,7 @@ fun WorkoutLogScreen(
                 ExerciseCard(
                     name = exerciseName(state, exercise),
                     restSec = exercise.restSec,
-                    sets = exercise.sets.map { it.form.summaryLine() },
+                    sets = exercise.sets.map { it.form },
                     running = running,
                     floor = id?.let { e -> floors.firstOrNull { it.exerciseId == e && it.side == exercise.side?.code } },
                     nowMs = nowMs,
@@ -701,11 +708,21 @@ fun WorkoutLogScreen(
                      * without belonging to any of its exercises. Shown rather than dropped: an
                      * entry that is in the journal and on no screen is how a record silently
                      * stops existing.
+                     *
+                     * IT IS CALLED WHAT IT IS. The heading was "Other entries" on a card that,
+                     * nine times in ten, holds one weigh-in — and the app knows the name of the
+                     * thing (`activityName`). It generalises only when the card really does hold
+                     * more than one kind of entry; "belongs to no exercise" is a fact about it
+                     * and has gone to the meta line, where facts about a card live.
                      */
+                    val loose = workout.entriesWithoutExercise
                     ExerciseCard(
-                        name = "Other entries",
+                        name = loose.map { it.form.activityName() }.distinct().singleOrNull()
+                            ?: "Other entries",
                         restSec = null,
-                        sets = workout.entriesWithoutExercise.map { it.form.summaryLine() },
+                        sets = loose.map { it.form },
+                        countNoun = "entry" to "entries",
+                        metaNote = "not part of any exercise",
                         running = false,
                         floor = null,
                         nowMs = nowMs,
@@ -971,21 +988,134 @@ private fun exerciseName(state: UiState, exercise: WorkoutExercise): String {
 @Composable
 private fun ReadyBanner(line: String, onDismiss: () -> Unit) {
     val colors = LocalGachiColors.current
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 15.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                line,
-                fontSize = 12.sp,
-                color = colors.goodText,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f).padding(vertical = 8.dp),
-            )
-            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 44.dp)) {
-                Text("Got it", fontSize = 12.sp)
+    /*
+     * ON THE RECESSED SURFACE, with a hairline under it. It used to be filled with
+     * `surfaceVariant`, which in the light theme is the colour of the plane it sits on — a
+     * banner separated from the screen by nothing at all.
+     */
+    Surface(color = colors.recessed, modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().padding(start = Spacing.Block, end = Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    line,
+                    fontSize = TextSize.Meta,
+                    color = colors.goodText,
+                    fontWeight = FontWeight.SemiBold,
+                    style = TabularFigures,
+                    modifier = Modifier.weight(1f).padding(vertical = Spacing.Line),
+                )
+                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Got it", fontSize = TextSize.Meta)
+                }
             }
+            HorizontalDivider(color = colors.border)
+        }
+    }
+}
+
+/**
+ * The title bar of a workout — OUR OWN, and not `TopAppBar`.
+ *
+ * ── Why the Material one had to go ──────────────────────────────────────────────
+ * `TopAppBar` is fixed at 64 dp and clips whatever does not fit. This bar carries a name and a
+ * line of facts under it, and on a 360 dp screen the second line was cut in half — the exact
+ * defect rule 8 names ("what does not fit is a defect, not a detail"). Nothing here has a fixed
+ * height: the name is one line with an ellipsis, the facts are a line of their own, and the
+ * panel is as tall as the two of them.
+ *
+ * What that costs, stated plainly: `scrollBehavior` and the component's own window insets are
+ * not inherited. The screen never used a scroll behaviour, so nothing is lost there; the insets
+ * are applied here by hand, and they have to stay — the status bar is drawn under this app.
+ */
+@Composable
+private fun WorkoutBar(
+    title: String,
+    meta: String,
+    onClose: () -> Unit,
+    /** "Finish", "Reopen" or "Start workout" — one slot, one at a time. */
+    stateLabel: String,
+    onState: () -> Unit,
+    /** Take back the last set of this workout. Null when there is none to take back. */
+    onUndoLast: (() -> Unit)?,
+) {
+    val colors = LocalGachiColors.current
+    var menu by remember { mutableStateOf(false) }
+
+    Surface(color = MaterialTheme.colorScheme.surface) {
+        Column {
+            Column(
+                Modifier
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(
+                        start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Inset,
+                    )
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Leave the workout",
+                            tint = colors.inkSecondary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    Text(
+                        title,
+                        fontSize = TextSize.Title,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = onState,
+                        shape = RoundedCornerShape(Radius.Small),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(stateLabel, fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (onUndoLast != null) {
+                        Box {
+                            IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "Actions for this workout",
+                                    tint = colors.inkSecondary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Undo last set") },
+                                    onClick = {
+                                        menu = false
+                                        onUndoLast()
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                /*
+                 * Aligned with the CONTENT of the screen below (16), not indented under the
+                 * title (48): this is the bar's second line, not a caption of the name.
+                 */
+                Text(
+                    meta,
+                    fontSize = TextSize.Meta,
+                    color = colors.inkSecondary,
+                    style = TabularFigures,
+                    modifier = Modifier.padding(start = Spacing.Inset, top = Spacing.Tight),
+                )
+            }
+            HorizontalDivider(color = colors.border)
         }
     }
 }
@@ -1008,7 +1138,17 @@ private fun ReadyBanner(line: String, onDismiss: () -> Unit) {
 private fun ExerciseCard(
     name: String,
     restSec: Int?,
-    sets: List<String>,
+    /**
+     * The sets, AS DATA. It used to be `List<String>` — one summary line per set, joined with
+     * commas at the bottom of the card — and a column cannot be recovered from a sentence: the
+     * load, what was done with it and the protocol have to be separable before anything can be
+     * lined up, collapsed or lifted into the meta. See [setTable].
+     */
+    sets: List<ActivityForm>,
+    /** Singular and plural of what this card counts. Sets, unless the card holds something else. */
+    countNoun: Pair<String, String> = "set" to "sets",
+    /** Anything else the meta line should carry after the count and the protocol. */
+    metaNote: String? = null,
     /** A protocol-led set of this exercise is being conducted right now. */
     running: Boolean,
     floor: RestFloor?,
@@ -1070,37 +1210,70 @@ private fun ExerciseCard(
                 shape = RoundedCornerShape(Radius.Card)
                 clip = false
             },
-    ) { press ->
+    ) { press, openMenu ->
+    val table = remember(sets, restSec) { setTable(sets, restSec) }
     GachiCard(
         Modifier.fillMaxWidth().then(press),
         background = if (lifted) MaterialTheme.colorScheme.surfaceVariant else null,
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            Modifier.fillMaxWidth().padding(
+                start = Spacing.Inset, end = Spacing.Tight,
+                top = Spacing.Tight, bottom = Spacing.Tight,
+            ),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
         ) {
             if (finished) {
                 Icon(
                     Icons.Filled.CheckCircle,
                     contentDescription = "Done",
                     tint = colors.good,
-                    modifier = Modifier.padding(end = 8.dp).size(18.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
             Text(
                 name,
-                fontSize = 14.sp,
+                fontSize = TextSize.Title,
                 fontWeight = FontWeight.SemiBold,
-                color = if (finished) colors.inkMuted else MaterialTheme.colorScheme.onSurface,
+                color = if (finished) colors.inkSecondary else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
             if (onRest != null && !finished) {
-                TextButton(onClick = onRest, modifier = Modifier.heightIn(min = 44.dp)) {
+                /*
+                 * AN OUTLINED BUTTON, not a text one. It was 12 sp of unadorned text and read as
+                 * a caption of the card rather than as the control it is — and it is the second
+                 * most pressed thing on this screen. The 48 dp is the platform's floor and not
+                 * the mock's 40: this is a control aimed at between sets, with one hand.
+                 */
+                OutlinedButton(
+                    onClick = onRest,
+                    shape = RoundedCornerShape(Radius.Small),
+                    contentPadding = PaddingValues(horizontal = Spacing.Inset),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
                     Text(
                         restSec?.takeIf { it >= MIN_STEP_SEC }
-                            ?.let { "rest ${formatClock(it)}" }
-                            ?: "set a rest",
-                        fontSize = 12.sp,
+                            ?.let { "Rest ${formatClock(it)}" }
+                            ?: "Set a rest",
+                        fontSize = TextSize.Meta,
+                        fontWeight = FontWeight.SemiBold,
+                        style = TabularFigures,
+                    )
+                }
+            }
+            /*
+             * The same menu the long press raises, with something on the card that says it is
+             * there. "Mark as done", moving the card and removing it were reachable by holding a
+             * finger down and by nothing else.
+             */
+            if (menu.isNotEmpty()) {
+                IconButton(onClick = openMenu, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "Actions for $name",
+                        tint = colors.inkMuted,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
@@ -1114,32 +1287,45 @@ private fun ExerciseCard(
 
         HorizontalDivider(color = colors.grid)
 
-        if (running) {
+        Column(Modifier.fillMaxWidth().padding(Spacing.Inset)) {
+            if (running) {
+                /*
+                 * The card of a set being conducted somewhere else. The words matter more than
+                 * usual here: the phone has been put down or the screen has been left, and this
+                 * line is the only thing saying that the protocol did not stop when the screen
+                 * did — and that this card, not the Programs tab, is the way back to it.
+                 */
+                Text(
+                    "Set running · tap to go back to it",
+                    fontSize = TextSize.Meta,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.accent,
+                    modifier = Modifier.padding(bottom = Spacing.Line),
+                )
+            }
+
             /*
-             * The card of a set being conducted somewhere else. The words matter more than
-             * usual here: the phone has been put down or the screen has been left, and this
-             * line is the only thing saying that the protocol did not stop when the screen
-             * did — and that this card, not the Programs tab, is the way back to it.
+             * THE COUNT OF SETS, first and always. The owner asked for it outright — "нет общего
+             * какого-то счётчика 'сделано 5 сетов', а мы хотели" — and warm-ups are in it,
+             * because they are sets; which of them were ramp-ups is what the badges say. The
+             * protocol stands here too when every set shares it, instead of once per set.
              */
             Text(
-                "Set running - tap to go back to it",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.accent,
-                modifier = Modifier.padding(start = 13.dp, end = 13.dp, top = 9.dp),
+                listOfNotNull(
+                    "${sets.size} ${if (sets.size == 1) countNoun.first else countNoun.second}",
+                    table.commonProtocol,
+                    metaNote,
+                ).joinToString(" · "),
+                fontSize = TextSize.Meta,
+                color = if (sets.isEmpty()) colors.inkMuted else colors.inkSecondary,
+                style = TabularFigures,
+                modifier = Modifier.padding(bottom = Spacing.Line),
             )
+
+            if (table.rows.isNotEmpty()) SetTable(table.rows, Modifier.fillMaxWidth())
+
+            floor?.let { RestBar(it, nowMs, Modifier.padding(top = Spacing.Block)) }
         }
-
-        Text(
-            // one line per card rather than one row per set: this is read at a glance
-            // between sets, and the question it answers is "where am I up to"
-            if (sets.isEmpty()) "no sets yet" else sets.joinToString(", "),
-            fontSize = 12.sp,
-            color = if (sets.isEmpty()) colors.inkMuted else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
-        )
-
-        floor?.let { RestBar(it, nowMs) }
     }
     }
 }
@@ -1161,28 +1347,76 @@ private fun ExerciseCard(
  * rest ready for 1:20.9 has not been ready for 1:21.
  */
 @Composable
-private fun RestBar(floor: RestFloor, nowMs: Long) {
+private fun RestBar(floor: RestFloor, nowMs: Long, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
     val progress = floor.progressAt(nowMs)
     val overdueSec = (progress.overdueMs / 1000).toInt()
+    val ordered = (floor.orderedMs / 1000).toInt()
 
-    Column(Modifier.fillMaxWidth().padding(start = 13.dp, end = 13.dp, bottom = 9.dp)) {
-        Text(
-            when {
-                !progress.ready -> "rest ${formatClock(ceilSeconds(progress.remainingMs))} left"
-                overdueSec <= 0 -> "ready"
-                else -> "ready, +${formatClock(overdueSec)}"
-            },
-            fontSize = 11.sp,
-            // stated in words as well as colour, like every other verdict in this app
-            color = if (progress.ready) colors.goodText else colors.inkSecondary,
-            fontWeight = if (progress.ready) FontWeight.Medium else FontWeight.Normal,
-        )
-        LinearProgressIndicator(
-            progress = { progress.fraction },
-            modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
-            color = if (progress.ready) colors.good else colors.accent,
-        )
+    Column(modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                if (progress.ready) "Ready" else "Rest left",
+                fontSize = TextSize.Meta,
+                // stated in words as well as colour, like every other verdict in this app
+                color = if (progress.ready) colors.goodText else colors.inkSecondary,
+                fontWeight = if (progress.ready) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            /*
+             * THE ONE LARGE NUMBER OF THE CARD, and only while it is counting. A rest still
+             * running is read across a room; a rest that has matured is a fact and not a
+             * countdown, so the overrun beside "Ready" is set at body size — 22 sp there would
+             * shout the least urgent thing on the screen.
+             */
+            if (!progress.ready) {
+                Text(
+                    formatClock(ceilSeconds(progress.remainingMs)),
+                    fontSize = TextSize.Figure,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = TabularFigures,
+                    modifier = Modifier.padding(start = Spacing.Line),
+                )
+            } else if (overdueSec > 0) {
+                Text(
+                    "+${formatClock(overdueSec)}",
+                    fontSize = TextSize.Body,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.goodText,
+                    style = TabularFigures,
+                    modifier = Modifier.padding(start = Spacing.Line),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            // one format for one quantity, everywhere: m:ss on the button, m:ss here
+            Text(
+                if (progress.ready) "rest was ${formatClock(ordered)}" else "of ${formatClock(ordered)}",
+                fontSize = TextSize.Meta,
+                color = colors.inkMuted,
+                style = TabularFigures,
+            )
+        }
+        /*
+         * Drawn rather than taken from LinearProgressIndicator, whose track reads
+         * `surfaceContainerHighest` and whose stop indicator and gap are Material's own
+         * decisions about a component this is not. Four points, our own recess, our own radius.
+         */
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = Spacing.Line)
+                .height(4.dp)
+                .clip(RoundedCornerShape(Radius.Small))
+                .background(colors.recessed)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(progress.fraction.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(Radius.Small))
+                    .background(if (progress.ready) colors.good else colors.accent)
+            )
+        }
     }
 }
 
