@@ -65,11 +65,12 @@ import xyz.oleolegka.gachimuchi.domain.ProgramGroup
 import xyz.oleolegka.gachimuchi.domain.ScheduleKind
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.exerciseUsage
-import xyz.oleolegka.gachimuchi.domain.firstBlock
 import xyz.oleolegka.gachimuchi.domain.knownCategories
 import xyz.oleolegka.gachimuchi.domain.matchesExerciseQuery
 import xyz.oleolegka.gachimuchi.domain.parseProtocolSeconds
 import xyz.oleolegka.gachimuchi.domain.pickerOrder
+import xyz.oleolegka.gachimuchi.domain.scheduleCaption
+import xyz.oleolegka.gachimuchi.domain.scheduleKindOf
 import xyz.oleolegka.gachimuchi.domain.scheduleSummary
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.celebrate.rememberPicture
@@ -356,7 +357,8 @@ private fun PickExisting(
     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
         items(items, key = { it.id }) { exercise ->
             val form = runCatching { ExerciseForm.fromCode(exercise.form) }.getOrNull()
-            val protocolBlock = exercise.protocolProgramId?.let { state.programsById[it] }?.firstBlock()
+            val scheduleLine =
+                scheduleCaption(exercise.protocolProgramId?.let { state.programsById[it] })
             val used = usage[exercise.id]
             Row(
                 modifier = Modifier
@@ -399,9 +401,7 @@ private fun PickExisting(
                              * identical lines would put the same failure back one step later, with
                              * the user picking whichever of the two came first.
                              */
-                            if (protocolBlock != null) {
-                                append(" - ${protocolBlock.workSec}:${protocolBlock.restSec}")
-                            }
+                            if (scheduleLine != null) append(" - $scheduleLine")
                             if (used == null) {
                                 append(" - not logged yet")
                             } else {
@@ -887,17 +887,40 @@ private fun blankSchedule(exerciseName: String): WorkoutProgram {
 }
 
 /**
- * The library programs an exercise can be led by: those with a first block that is a real
- * work:rest pair.
+ * The library programs the STRICT branch can be led by: the ones that ARE a strict schedule.
  *
- * A block of zero seconds is not a protocol — `HoldSet`'s validator refuses one by throwing,
- * which on the logging screen surfaces as a crash on the Add button rather than as a message
- * — so such a program is not offered rather than offered and then refused. Everything else is
- * fair game, INCLUDING programs with several groups and a warm-up: that richness is the whole
- * point of picking one instead of typing two numbers.
+ * ── The test is the classifier, and that is the whole point ─────────────────────
+ * This list sits under a card the user has just tapped that promises "every timing fixed in
+ * advance, nothing asked before a run but the weight". Whether that promise is kept is
+ * decided later by [scheduleKindOf] reading the shape of the program, so the only programs
+ * that may appear here are the ones that classifier calls [ScheduleKind.STRICT]. Anything
+ * else is an exercise created as one branch and conducted as another — which
+ * `domain/HoldSchedule.kt` names as the worst failure it can have.
+ *
+ * Two kinds of row leave the list because of it, and both were offers of something the app
+ * would not then do:
+ *
+ * - a program with NOTHING TO COUNT (no groups, a group with no blocks, blocks of zero work).
+ *   The library editor stores such a program, [flatten] turns it into an empty list of steps,
+ *   and an exercise pointed at one classifies as [ScheduleKind.FREE] — so the strict card
+ *   would have produced a free hold, permanently (§18.9), from a row whose own caption said
+ *   "empty - 0 efforts";
+ * - a program shaped like a plain PAIR — one group, one block, no repeats. It classifies as
+ *   [ScheduleKind.SIMPLE_PAIR], which is the branch that asks how many holds and how many sets
+ *   before every run. That is the pair branch's own job, reached by typing the two numbers,
+ *   and offering it here made the card above the list a lie.
+ *
+ * Richness is still fair game, INCLUDING several groups and a warm-up: that is the whole point
+ * of picking one instead of typing two numbers.
+ *
+ * ── What is no longer required, and why it never should have been ───────────────
+ * The old test was "the first block is a real work:rest pair", rest included. A strict
+ * schedule whose first effort is followed by no pause at all — a maximum hang with the rest
+ * carried on the group — is a perfectly ordinary hangboard protocol, and it was silently
+ * absent from this list. The reason given was that `HoldSet`'s validator throws on a
+ * non-positive protocol, but it never sees one: [xyz.oleolegka.gachimuchi.domain.ExerciseRef.
+ * protocol] answers null unless BOTH numbers are positive, and a null protocol writes both
+ * fields as null, which is the pair the validator asks for.
  */
 internal fun protocolCandidates(programs: List<WorkoutProgram>): List<WorkoutProgram> =
-    programs.filter { program ->
-        val block = program.firstBlock()
-        block != null && block.workSec > 0 && block.restSec > 0
-    }
+    programs.filter { scheduleKindOf(it) == ScheduleKind.STRICT }

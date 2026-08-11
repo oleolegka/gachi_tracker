@@ -2,6 +2,7 @@ package xyz.oleolegka.gachimuchi.domain
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -129,5 +130,47 @@ class HoldScheduleTest {
     fun `the summary names the pair, the effort count and the length`() {
         val program = starterPrograms().first() // 7:3 x 6, four sets, 180 s between
         assertEquals("7:3 - 24 efforts, ${formatClock(program.totalSec())}", program.scheduleSummary())
+    }
+
+    // --- the caption the three list rows share -------------------------------------------
+
+    /**
+     * The one that used to be wrong in three places at once: a strict schedule captioned with
+     * its first block's pair, which for "10 s then 7 s, six of each, four times" printed
+     * "10:3" and said nothing about the other forty-seven efforts.
+     */
+    @Test
+    fun `a strict schedule is captioned by what it holds, not by its first block`() {
+        val program = starterPrograms().first() // 7:3 x 6, four sets
+        assertEquals("strict - 24 efforts", scheduleCaption(program))
+    }
+
+    @Test
+    fun `a simple pair is still captioned as the pair it is`() {
+        assertEquals("7:3", scheduleCaption(pair()))
+    }
+
+    @Test
+    fun `a free hold has no caption at all, and neither has one that counts nothing`() {
+        assertNull(scheduleCaption(null))
+        assertNull(scheduleCaption(pair(work = 0, rest = 3)))
+    }
+
+    /** One effort is one effort, not "1 efforts" — the row is read by a person. */
+    @Test
+    fun `a strict schedule of a single effort says effort in the singular`() {
+        val single = WorkoutProgram(
+            name = "Max hang",
+            groups = listOf(
+                ProgramGroup(
+                    name = "Hang",
+                    blocks = listOf(ProgramBlock("Hang", 30, 0)),
+                    repeats = 1,
+                ),
+                ProgramGroup(name = "Empty", blocks = emptyList()),
+            ),
+        )
+        assertEquals(ScheduleKind.STRICT, scheduleKindOf(single))
+        assertEquals("strict - 1 effort", scheduleCaption(single))
     }
 }

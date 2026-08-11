@@ -250,7 +250,14 @@ private fun RunHead(outcome: RunOutcome, chosen: ExerciseRef?, sets: List<Comple
 @Composable
 private fun RunFacts(outcome: RunOutcome, sets: List<CompletedSet>, nowWallMs: Long) {
     val colors = LocalGachiColors.current
-    val rest = sets.firstOrNull { it.restAfterSec != null }?.restAfterSec
+    /*
+     * Every DISTINCT pause the program counted, not the first one found. With a schedule
+     * whose set is cut into rows of different lengths (see
+     * [xyz.oleolegka.gachimuchi.domain.completedSets]) the first pause is the few seconds
+     * INSIDE a set, and stating that one alone as "the rest between sets" named the smallest
+     * gap in the run after the longest.
+     */
+    val rests = sets.filter { it.reps > 0 }.mapNotNull { it.restAfterSec }.distinct()
     val facts = buildList {
         // a run answered later must say so rather than pretending it just happened
         if (!outcome.isFresh(nowWallMs)) {
@@ -259,8 +266,13 @@ private fun RunFacts(outcome: RunOutcome, sets: List<CompletedSet>, nowWallMs: L
         if (outcome.interrupted) {
             add("Stopped part-way - only what it got through is offered")
         }
-        if (rest != null) {
-            add("Rest between sets ${formatClock(rest)}, counted by the program")
+        when (rests.size) {
+            0 -> Unit
+            1 -> add("Rest between sets ${formatClock(rests.single())}, counted by the program")
+            else -> add(
+                "Rests between sets ${rests.joinToString(", ") { formatClock(it) }}, " +
+                    "counted by the program"
+            )
         }
     }
     if (facts.isEmpty()) return
@@ -299,10 +311,25 @@ private fun BlockHeading(text: String) {
 @Composable
 private fun SetsBlock(sets: List<CompletedSet>, onSetsChange: (List<CompletedSet>) -> Unit) {
     val colors = LocalGachiColors.current
+    /*
+     * Whether the rows disagree about how long an effort was. A schedule whose efforts are all
+     * the same length — every simple pair, every repeater protocol — reads exactly as it always
+     * did, "Set 1" to "Set 4". One that mixes them was CUT into a row per length
+     * ([xyz.oleolegka.gachimuchi.domain.completedSets], which explains why), and without the
+     * length on the row that cut is invisible: eight rows for four sets of the schedule, with
+     * nothing on screen saying what makes them eight. Saying it here, before the write, is what
+     * keeps the split from being discovered in the journal a week later.
+     */
+    val mixedLengths = sets.map { it.workSec }.distinct().size > 1
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Line)) {
         BlockHeading("Efforts held in each set")
         Text(
-            "The timer counted these; turn a set down if you came off early.",
+            if (mixedLengths) {
+                "The timer counted these. This schedule holds efforts of different lengths, " +
+                    "and each length is written as its own set — one row cannot say two."
+            } else {
+                "The timer counted these; turn a set down if you came off early."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = colors.inkSecondary,
         )
@@ -315,6 +342,7 @@ private fun SetsBlock(sets: List<CompletedSet>, onSetsChange: (List<CompletedSet
                 HorizontalDivider(color = colors.grid)
                 SetRow(
                     set = set,
+                    showLength = mixedLengths,
                     onRepsChange = { reps ->
                         onSetsChange(
                             sets.map {
@@ -377,6 +405,13 @@ private fun ColumnLabel(text: String, modifier: Modifier = Modifier) {
 @Composable
 private fun SetRow(
     set: CompletedSet,
+    /**
+     * Whether this row has to say how long its efforts were, because the row beside it says
+     * something different — see [SetsBlock]. Off for the ordinary run of one length, where the
+     * length is stated once in the summary line above and repeating it on every row would be
+     * the same word four times over.
+     */
+    showLength: Boolean,
     onRepsChange: (Int) -> Unit,
     onIncompleteChange: (Boolean) -> Unit,
 ) {
@@ -387,7 +422,7 @@ private fun SetRow(
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Text(
-            "Set ${set.setNumber}",
+            if (showLength) "Set ${set.setNumber} - ${set.workSec} s" else "Set ${set.setNumber}",
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
         )

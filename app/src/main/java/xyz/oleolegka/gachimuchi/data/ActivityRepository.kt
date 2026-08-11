@@ -26,6 +26,7 @@ import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.journalView
 import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.PREPARE_DEFAULT_SEC
+import xyz.oleolegka.gachimuchi.domain.SCHEDULE_CATEGORY
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
 import xyz.oleolegka.gachimuchi.domain.ProgramGroup
@@ -988,12 +989,38 @@ class ActivityRepository(private val db: AppDatabase) {
      * protocol at all — same positivity/pairing rule [ExerciseRef.protocol] applies, and no
      * program is invented for an exercise with no protocol.
      *
-     * "Found" matches on SHAPE AND NUMBERS ONLY, not on name or category: a hand-authored
-     * program that happens to have exactly one group, one block, `repeats == 1` on both, and
-     * this work/rest is a legitimate match to reuse, the same way this app already accepts
-     * value-based coincidences elsewhere. No hidden "auto-generated" flag is written — that
-     * would make a perfectly good program a second-class citizen of a library the owner wants
-     * to stay fully-featured.
+     * ── "Found" is a schedule with the same numbers, NOT any program with them ──
+     * Matching on shape and numbers alone was a trap, and the trap sprang on the owner's own
+     * library rather than on anything this method wrote. A program typed into the editor by
+     * hand — one group, one block, no repeats, 7 s and 3 s — is indistinguishable by shape
+     * from what the block below writes, so creating an exercise with those two numbers ADOPTED
+     * it: the hand-written program silently became that exercise's protocol, jumped out of its
+     * own category into the schedules section, and froze forever (§18.9 — a referenced program
+     * cannot have its content edited or be deleted, and a catalog row is never deleted, so
+     * there is no way back). The user asked for an exercise and lost a program.
+     *
+     * The line drawn instead is ORIGIN, not shape: a program is reusable here only if it is
+     * ALREADY some exercise's protocol. That is a fact the schema already holds
+     * (`exercises.protocol_program_id`, the same one [ProgramRepository.isReferenced] asks
+     * about) — NO new column and no migration — and it says exactly the right thing:
+     *
+     * - the programs this method wrote are referenced the moment their exercise is inserted,
+     *   so the twins case §18.15 calls normal still works: "hangs 20 mm" and "hangs 15 mm" at
+     *   7:3 go on sharing one schedule, and re-running this for an exercise that already
+     *   exists still resolves to the same program and therefore the same identity key;
+     * - a program nobody has pointed at is, by definition, not a schedule yet — it is a timer
+     *   the owner wrote — and it is now left alone.
+     *
+     * A program the owner deliberately POINTED an exercise at (the strict branch of the create
+     * form) is referenced too, so a later exercise with matching numbers could still land on
+     * it. That is the residue, and it is small on purpose: such a program is already frozen and
+     * already a schedule, so nothing new is lost, and the strict branch only offers programs
+     * that are strict (`ui/screens/ExercisePicker.kt`'s `protocolCandidates`), which the
+     * one-block-no-repeats shape this method matches never is.
+     *
+     * Still no hidden "auto-generated" flag: a column would have to be migrated in, written by
+     * one path, and believed by the other — and it would answer a narrower question than
+     * "is anything using this", which is the question that actually matters here.
      */
     private suspend fun resolveOrCreateProtocolProgram(
         exerciseName: String,
@@ -1003,7 +1030,14 @@ class ActivityRepository(private val db: AppDatabase) {
         if (workSec == null || restSec == null || workSec <= 0 || restSec <= 0) return null
         val workInt = workSec.toInt()
         val restInt = restSec.toInt()
-        programRepo.allPrograms().firstOrNull { it.isMinimalProtocol(workInt, restInt) }?.let { return it }
+        programRepo.allPrograms()
+            .firstOrNull {
+                it.isMinimalProtocol(workInt, restInt) &&
+                    // already somebody's schedule — see this method's KDoc for why origin and
+                    // not shape is what decides
+                    db.exercises().existsWithProtocolProgram(it.id)
+            }
+            ?.let { return it }
         val id = programRepo.save(
             WorkoutProgram(
                 /*
@@ -1016,7 +1050,19 @@ class ActivityRepository(private val db: AppDatabase) {
                  */
                 name = "$exerciseName schedule",
                 prepareSec = PREPARE_DEFAULT_SEC,
-                category = "Protocols",
+                /*
+                 * The heading follows the name, and for the same reason: "Protocols" was the
+                 * third word for one thing, and it is the word the app itself stopped using
+                 * (§18.15 — the owner's word is "schedule"). Invisible in the library, where
+                 * the schedules section covers categories whole (domain/Program.kt's
+                 * `programSections`), and visible in exactly two places: the category chip in
+                 * the program editor, and the `category` field of an exported program file.
+                 *
+                 * NEW ROWS ONLY. The categories already stored keep saying "Protocols" — the
+                 * owner's rule is that what exists is not touched, a rewrite would be a data
+                 * migration to buy a caption, and nothing is keyed on a category anyway.
+                 */
+                category = SCHEDULE_CATEGORY,
                 groups = listOf(
                     ProgramGroup(
                         name = exerciseName,
