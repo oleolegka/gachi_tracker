@@ -34,6 +34,14 @@ data class GachiColors(
     val inkSecondary: Color,
     val inkMuted: Color,
     val accent: Color,
+    /**
+     * Fill of a calendar day that is today or still to come — see [calendarGone] for the
+     * other half of the pair and `ui/theme/Color.kt` for why there are two named tones
+     * rather than one tint composited over the surface.
+     */
+    val calendarAhead: Color,
+    /** Fill of a calendar day already gone. Always a step darker than [calendarAhead]. */
+    val calendarGone: Color,
     val sequential: List<Color>,
     val heatmap: List<Color>,
     val categorical: List<Color>,
@@ -65,6 +73,7 @@ private val LightGachiColors = GachiColors(
     plane = PlaneLight, recessed = SurfaceRecessedLight, border = BorderLight,
     grid = GridLight, axis = AxisLight,
     inkSecondary = InkSecondaryLight, inkMuted = InkMuted, accent = AccentLight,
+    calendarAhead = CalendarAheadLight, calendarGone = CalendarGoneLight,
     sequential = Sequential, heatmap = HeatmapLight, categorical = CategoricalLight,
     good = StatusGood, goodText = GoodTextLight,
     warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
@@ -74,6 +83,7 @@ private val DarkGachiColors = GachiColors(
     plane = PlaneDark, recessed = SurfaceRecessedDark, border = BorderDark,
     grid = GridDark, axis = AxisDark,
     inkSecondary = InkSecondaryDark, inkMuted = InkMuted, accent = AccentDark,
+    calendarAhead = CalendarAheadDark, calendarGone = CalendarGoneDark,
     sequential = Sequential, heatmap = HeatmapDark, categorical = CategoricalDark,
     good = StatusGood, goodText = GoodTextDark,
     warning = StatusWarning, serious = StatusSerious, critical = StatusCritical,
