@@ -785,6 +785,24 @@ class WorkoutLogScreenTest : ScreenTest() {
     }
 
     /**
+     * Coming back to change the rest must not hand a card a plan it was never given. The box is
+     * empty for a card that never planned anything, and confirming leaves it that way.
+     */
+    @Test
+    fun `changing the rest of an unplanned card leaves it unplanned`() {
+        val journal = Journal()
+        show(journal, supersetWorkout(journal))
+
+        compose.onNodeWithText("Rest 2:30").performClick()
+        settle()
+
+        compose.onNodeWithText("Sets planned").assertExists()
+        compose.onNodeWithText("Save").performClick()
+        assertEquals(listOf(Triple(1L, 150, null)), added)
+        assertEquals(listOf<Int?>(null), addedPlans)
+    }
+
+    /**
      * A plan is not a requirement. The owner logs sessions where how many sets there will be is
      * decided on the bar, so an empty box confirms and the card counts without a target.
      */

@@ -39,9 +39,14 @@ class WorkoutTest {
         restSec: Int,
         ts: String = "2026-08-07T09:01:00",
         side: HoldSide? = null,
+        plannedSets: Int? = null,
     ) = row(
         TYPE_WORKOUT_EXERCISE_ADDED,
-        payloadJson.encodeToString(WorkoutExerciseAdded(workoutId, exerciseId, restSec, side = side?.code)),
+        payloadJson.encodeToString(
+            WorkoutExerciseAdded(
+                workoutId, exerciseId, restSec, side = side?.code, plannedSets = plannedSets,
+            )
+        ),
         ts,
         workoutId,
     )
@@ -504,6 +509,43 @@ class WorkoutTest {
         val workout = buildWorkout(events, start.id)!!
         assertEquals(listOf(bench.id, squat.id), workout.exercises.map { it.exerciseId })
         assertEquals(240, workout.exercises.first().restSec)
+    }
+
+    /**
+     * The planned set count (§18.17) follows the same "last row wins" rule the rest does, for the
+     * same reason: restating a card is how a choice is changed in an append-only journal. A card
+     * nobody planned carries null, which is what the card reads as "no target" rather than zero.
+     */
+    @Test
+    fun `the planned set count is folded like the rest, last statement winning`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 150, plannedSets = 5),
+            added(start.id, squat.id, restSec = 210),
+            added(start.id, bench.id, restSec = 150, plannedSets = 3, ts = "${today}T09:40:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertEquals(3, workout.exercises.first { it.exerciseId == bench.id }.plannedSets)
+        assertNull(
+            "an exercise nobody planned has no plan, not a plan of zero",
+            workout.exercises.first { it.exerciseId == squat.id }.plannedSets,
+        )
+    }
+
+    /** A restatement that says nothing about a plan clears one — it is the current statement. */
+    @Test
+    fun `restating a card without a plan takes the plan away`() {
+        val start = started(today)
+        val events = listOf(
+            start,
+            added(start.id, bench.id, restSec = 150, plannedSets = 5),
+            added(start.id, bench.id, restSec = 240, ts = "${today}T09:40:00"),
+        )
+
+        val workout = buildWorkout(events, start.id)!!
+        assertNull(workout.exercises.single().plannedSets)
     }
 
     // --- two cards of an exercise trained one limb at a time --------------------------

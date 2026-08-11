@@ -852,8 +852,12 @@ fun WorkoutLogScreen(
             // order of the rest (the catalog column, then what was actually rested)
             initialSec = already?.restSec?.takeIf { it >= MIN_STEP_SEC }
                 ?: restHintSec(settings, state.events, ref),
-            // what this card already plans, if anything; a fresh card opens on the default
-            initialSets = already?.plannedSets,
+            /*
+             * A FRESH card opens on the default; a card already in the workout opens on what it
+             * actually plans, which for one that never planned anything is an empty box. Coming
+             * back to change a rest must not hand a card a plan it was never given.
+             */
+            initialSets = already?.plannedSets ?: DEFAULT_PLANNED_SETS.takeIf { askingRestIsNew },
             confirmLabel = if (already == null) "Add to workout" else "Save",
             onConfirm = { sec, plannedSets ->
                 /*
@@ -1587,7 +1591,14 @@ private const val MAX_PLANNED_SETS = 30
 private fun RestDialog(
     exerciseName: String,
     initialSec: Int,
-    /** The plan this card already carries, or null when it has none yet. */
+    /**
+     * What the plan box opens on, or null for an empty box.
+     *
+     * NULL IS NOT "the default": a card already in the workout that never had a plan opens
+     * blank, so that changing its rest cannot quietly give it one it was never asked for. The
+     * default belongs to the caller, which is the only place that knows whether this is a fresh
+     * card or a second look at one.
+     */
     initialSets: Int?,
     confirmLabel: String,
     onConfirm: (restSec: Int, plannedSets: Int?) -> Unit,
@@ -1599,7 +1610,7 @@ private fun RestDialog(
     var draft by remember(exerciseName, initialSec) { mutableStateOf(formatDurationSec(initialSec)) }
     val seconds = parseDurationText(draft)?.takeIf { it in MIN_STEP_SEC..MAX_REST_INPUT_SEC }
     var setsDraft by remember(exerciseName, initialSets) {
-        mutableStateOf((initialSets ?: DEFAULT_PLANNED_SETS).toString())
+        mutableStateOf(initialSets?.toString().orEmpty())
     }
     /*
      * BLANK IS A LEGITIMATE ANSWER, and it means "no plan" rather than an error: the owner logs
