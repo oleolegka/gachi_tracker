@@ -20,6 +20,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSystemClock
 import xyz.oleolegka.gachimuchi.data.db.AppDatabase
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseLink
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.ProgramBlock
@@ -28,9 +29,11 @@ import xyz.oleolegka.gachimuchi.domain.ProgramStart
 import xyz.oleolegka.gachimuchi.domain.RunOrigin
 import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.buildWorkout
+import xyz.oleolegka.gachimuchi.domain.holdRecord
 import xyz.oleolegka.gachimuchi.domain.holdSetOf
 import xyz.oleolegka.gachimuchi.domain.holdSetsFromRun
 import xyz.oleolegka.gachimuchi.domain.multiSetProgram
+import xyz.oleolegka.gachimuchi.domain.readActivities
 import xyz.oleolegka.gachimuchi.domain.WorkoutProgram
 import xyz.oleolegka.gachimuchi.domain.flatten
 import xyz.oleolegka.gachimuchi.domain.totalSec
@@ -732,6 +735,67 @@ class RunLoggingChainTest {
             listOf(HoldSide.LEFT, HoldSide.RIGHT),
             written.mapNotNull { it.sideOf }.sortedBy { it.code },
         )
+    }
+
+    /**
+     * §18.20 all the way into the journal: a hang the Skip button jumped is not a hang, and
+     * the row that gets written has to say so.
+     *
+     * The controller test proves the mark reaches the offer; this one is about the other end,
+     * because the offer is not the record. It is confirmed with one tap, and whatever number
+     * it arrives holding is what ends up in the only account of what was trained — and what
+     * the personal records are computed from.
+     */
+    @Test
+    fun `a hang skipped under the conductor never reaches the journal`() = runTest {
+        val exercise = hangs()
+        val program = multiSetProgram(exercise, reps = 3, sets = 1, restBetweenSetsSec = 30, prepareSec = 0)!!
+
+        val timer = newController()
+        timer.start(program, exercise.id, RunOrigin.EXERCISE)
+        // the first hang is jumped rather than held; the rest of the set runs itself out
+        timer.skip()
+        elapse(timer, program.totalSec() + 1)
+
+        val outcome = timer.outcome.value!!
+        assertEquals(listOf(2), outcome.sets.map { it.reps })
+
+        holdSetsFromRun(exercise, outcome.opDate, outcome.sets).forEach { repo.record(it) }
+        val written = buildSession(repo.allEvents(), outcome.opDate)
+            .groups.single().sets.map { it.form as HoldSet }
+        assertEquals("one row, and it counts two hangs rather than three", listOf(2), written.map { it.reps })
+    }
+
+    /**
+     * The other half of the same failure: an added weight that is negative. A band taking
+     * fifteen kilograms off a hang is ordinary fingerboard work, and the run path used to write it as
+     * though nothing had been hung at all — lighter on paper than the same hang with nothing on
+     * the bar, and indistinguishable from it in every record afterwards.
+     *
+     * Checked to the end rather than at the dialog, because that is where it stopped being true
+     * before: through the ViewModel, into the journal, and out again through the record.
+     */
+    @Test
+    fun `an assisted run keeps its minus all the way into the journal and the record`() = runTest {
+        val exercise = hangs()
+        val timer = newController()
+        val viewModel = MainViewModel(repo, programs, timer)
+        val program = multiSetProgram(exercise, reps = 2, sets = 1, restBetweenSetsSec = 30, prepareSec = 0)!!
+
+        timer.start(program, exercise.id, RunOrigin.EXERCISE)
+        elapse(timer, program.totalSec() + 1)
+
+        val outcome = timer.outcome.value!!
+        viewModel.logRunSets(exercise, outcome.sets, addedKg = -15.0)
+        settle()
+
+        val written = buildSession(repo.allEvents(), outcome.opDate)
+            .groups.single().sets.map { it.form as HoldSet }
+        assertEquals(listOf(-15.0), written.map { it.addedKg })
+
+        // and the record reads it as fifteen kilograms of ASSISTANCE, not as a bare hang
+        val record = holdRecord(readActivities(repo.allEvents()), ExerciseLink.ofId(exercise.id)).single()
+        assertEquals(-15.0, record.value, 1e-9)
     }
 
     @Test
