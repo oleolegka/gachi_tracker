@@ -29,6 +29,7 @@ import xyz.oleolegka.gachimuchi.domain.applyStep
 import xyz.oleolegka.gachimuchi.domain.formatNumber
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * A number field with +/- buttons on both sides — the workhorse of the logging screen.
@@ -151,7 +152,7 @@ private fun NumberField(
         ),
         singleLine = true,
         placeholder = placeholder?.let { { Text(it, textAlign = TextAlign.Center) } },
-        textStyle = TextStyle(fontSize = 18.sp, textAlign = TextAlign.Center),
+        textStyle = TextStyle(fontSize = TextSize.Title, textAlign = TextAlign.Center),
         keyboardOptions = KeyboardOptions(
             keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
             imeAction = ImeAction.Done,
@@ -175,7 +176,7 @@ internal fun StepButton(label: String, modifier: Modifier = Modifier, onClick: (
         contentPadding = PaddingValues(0.dp),
         shape = MaterialTheme.shapes.small,
     ) {
-        Text(label, fontSize = 13.sp, maxLines = 1)
+        Text(label, fontSize = TextSize.Meta, maxLines = 1)
     }
 }
 

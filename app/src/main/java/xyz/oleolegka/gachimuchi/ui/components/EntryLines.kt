@@ -100,7 +100,7 @@ fun EntryBlock(
         ) {
             Text(
                 name,
-                fontSize = 14.sp,
+                fontSize = TextSize.Title,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
@@ -108,7 +108,7 @@ fun EntryBlock(
             // the rest CHOSEN for this exercise in this workout, which is a different fact
             // from the pause the timestamps happen to show (see WorkoutExerciseAdded)
             restSec?.takeIf { it > 0 }?.let {
-                Text("rest ${fmtDuration(it)}", fontSize = 11.sp, color = colors.inkMuted)
+                Text("rest ${fmtDuration(it)}", fontSize = TextSize.Caption, color = colors.inkMuted)
             }
         }
         HorizontalDivider(color = colors.grid)
@@ -116,7 +116,7 @@ fun EntryBlock(
         if (entries.isEmpty()) {
             Text(
                 emptyNote,
-                fontSize = 12.sp,
+                fontSize = TextSize.Meta,
                 color = colors.inkMuted,
                 modifier = Modifier.padding(horizontal = Spacing.Inset, vertical = Spacing.Line),
             )
@@ -189,7 +189,7 @@ private fun EntryLine(
                 )
                 Text(
                     summary,
-                    fontSize = 13.sp,
+                    fontSize = TextSize.Meta,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
@@ -206,7 +206,7 @@ private fun EntryLine(
             gapSec?.let {
                 Text(
                     "after ${fmtDuration(it)}",
-                    fontSize = 11.sp,
+                    fontSize = TextSize.Caption,
                     color = colors.inkMuted,
                     modifier = Modifier.padding(start = NumberColumn, top = Spacing.Tight),
                 )
@@ -214,7 +214,7 @@ private fun EntryLine(
             record?.let {
                 Text(
                     "Record: ${it.text}",
-                    fontSize = 11.sp,
+                    fontSize = TextSize.Caption,
                     color = colors.good,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(start = NumberColumn, top = Spacing.Tight),

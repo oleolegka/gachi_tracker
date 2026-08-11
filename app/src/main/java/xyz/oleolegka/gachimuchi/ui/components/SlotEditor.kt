@@ -47,17 +47,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import java.time.LocalDate
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
+import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
+import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.REPEAT_DAILY
 import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.REPEAT_RULES
 import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
-import xyz.oleolegka.gachimuchi.domain.PlannedExercise
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.SlotProblem
-import xyz.oleolegka.gachimuchi.domain.MAX_REST_INPUT_SEC
-import xyz.oleolegka.gachimuchi.domain.MIN_STEP_SEC
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
 import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatTime
@@ -83,7 +84,7 @@ import xyz.oleolegka.gachimuchi.ui.screens.ExercisePickerSheet
 import xyz.oleolegka.gachimuchi.ui.screens.NewExercise
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
 import xyz.oleolegka.gachimuchi.ui.theme.Spacing
-import java.time.LocalDate
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * Planning a session: the editor behind the calendar's "Plan a session" button and behind
@@ -340,7 +341,7 @@ fun SlotEditorDialog(
 
                 Text(
                     repeatLabel(draft.repeatRule, draft.anchorDate),
-                    fontSize = 12.sp,
+                    fontSize = TextSize.Meta,
                     color = colors.inkSecondary,
                 )
 
@@ -353,7 +354,7 @@ fun SlotEditorDialog(
                         } else {
                             "Next: ${fmtWeekdayDay(next)}" + candidate.atTime?.let { " at $it" }.orEmpty()
                         },
-                        fontSize = 12.sp,
+                        fontSize = TextSize.Meta,
                         color = colors.inkMuted,
                     )
                 }
@@ -370,7 +371,7 @@ fun SlotEditorDialog(
                 )
 
                 if (problem != null) {
-                    Text(problemText(problem), fontSize = 12.sp, color = colors.inkMuted)
+                    Text(problemText(problem), fontSize = TextSize.Meta, color = colors.inkMuted)
                 }
 
                 if (initial != null) {
@@ -460,7 +461,7 @@ private fun PlannedExercisesSection(
         ) {
             Text(
                 if (exercises.isEmpty()) "Exercises - none planned" else "Exercises (${exercises.size})",
-                fontSize = 13.sp,
+                fontSize = TextSize.Meta,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.inkSecondary,
                 modifier = Modifier.weight(1f),
@@ -476,7 +477,7 @@ private fun PlannedExercisesSection(
             Text(
                 "Optional. A session with nothing listed is a plan just the same - this is " +
                     "only here for when you already know what you are going to do.",
-                fontSize = 12.sp,
+                fontSize = TextSize.Meta,
                 color = colors.inkMuted,
                 modifier = Modifier.padding(top = Spacing.Tight, bottom = Spacing.Tight),
             )
@@ -535,13 +536,13 @@ private fun PlannedExerciseRow(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${position + 1}.",
-                fontSize = 13.sp,
+                fontSize = TextSize.Meta,
                 color = colors.inkMuted,
                 modifier = Modifier.padding(end = Spacing.Tight),
             )
             Text(
                 name,
-                fontSize = 13.5.sp,
+                fontSize = TextSize.Body,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
@@ -605,7 +606,7 @@ private fun DayField(label: String, day: LocalDate, onChange: (LocalDate) -> Uni
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontSize = 12.sp, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
+        Text(label, fontSize = TextSize.Caption, color = colors.inkMuted, modifier = Modifier.padding(end = Spacing.Tight))
         IconButton(onClick = { onChange(day.minusDays(1)) }) {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
@@ -615,7 +616,7 @@ private fun DayField(label: String, day: LocalDate, onChange: (LocalDate) -> Uni
         }
         Text(
             fmtWeekdayDay(day),
-            fontSize = 13.5.sp,
+            fontSize = TextSize.Body,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurface,

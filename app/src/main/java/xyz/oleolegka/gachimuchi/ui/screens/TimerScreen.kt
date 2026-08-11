@@ -10,18 +10,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import xyz.oleolegka.gachimuchi.domain.NUDGE_SEC
 import xyz.oleolegka.gachimuchi.domain.REST_PRESETS_SEC
 import xyz.oleolegka.gachimuchi.domain.RunPhase
@@ -50,12 +55,16 @@ import xyz.oleolegka.gachimuchi.domain.totalRemainingMs
 import xyz.oleolegka.gachimuchi.domain.totalSec
 import xyz.oleolegka.gachimuchi.domain.workStepCount
 import xyz.oleolegka.gachimuchi.ui.components.EmptyState
+import xyz.oleolegka.gachimuchi.ui.components.ItemAction
+import xyz.oleolegka.gachimuchi.ui.components.ItemActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.components.isEffort
 import xyz.oleolegka.gachimuchi.ui.components.rememberProgramTransfer
 import xyz.oleolegka.gachimuchi.ui.components.rememberTickingNow
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
+import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 
 /**
  * The programs tab: the LIBRARY of programs — what is kept, how it is filed, how it goes in
@@ -130,12 +139,14 @@ fun TimerScreen(
     var hiddenTrayOpen by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        // 16 is the screen's own side margin on the scale, and it is what the redraw's
+        // arithmetic assumes when it says a card on a 360 dp phone is 328 wide
+        modifier = modifier.fillMaxWidth().padding(horizontal = Spacing.Block),
         // the same 8/24 the other tabs use. Without it this list began flush against the
         // top of the window, which is why the app-name bar clipped the first card HERE
         // first, and ended flush against the navigation bar at the bottom
-        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(top = Spacing.Line, bottom = Spacing.Cards),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Line),
     ) {
         if (!state.enabled) {
             item {
@@ -160,16 +171,19 @@ fun TimerScreen(
         state.run?.let { item { RunPanel(state, actions) } }
 
         item {
-            Column(Modifier.padding(top = 8.dp)) {
+            Column(
+                Modifier.padding(top = Spacing.Line),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
                 Text("Your programs", style = MaterialTheme.typography.titleMedium)
-                // says what the tab is FOR, because the answer is not "start training here"
+                // says what the tab is FOR, because the answer is not "start training here".
+                // One sentence: three lines of small print over every opening of the tab is
+                // the thing SYSTEM.md rule 5 is about.
                 Text(
-                    "Kept here, filed under your own headings, and sent to or read from a " +
-                        "file. A session is started from the exercise it belongs to, in the " +
-                        "workout you are doing.",
-                    style = MaterialTheme.typography.labelSmall,
+                    "Kept and filed here. A session starts from the exercise, in the workout " +
+                        "you are doing.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = colors.inkMuted,
-                    modifier = Modifier.padding(top = 2.dp),
                 )
             }
         }
@@ -228,10 +242,10 @@ fun TimerScreen(
                 if (section.schedules) {
                     item(key = "schedules-note") {
                         Text(
-                            "Made for one exercise and fixed once it was used: the times in " +
-                                "these cannot be changed, only the name. Your own programs " +
-                                "are above.",
-                            style = MaterialTheme.typography.labelSmall,
+                            "Made for one exercise and fixed once it was used. Only the name " +
+                                "can be changed, and it cannot be deleted while that exercise " +
+                                "is built on it.",
+                            style = MaterialTheme.typography.bodySmall,
                             color = colors.inkMuted,
                         )
                     }
@@ -288,7 +302,9 @@ fun TimerScreen(
         }
 
         item {
-            OutlinedButton(
+            // the frequent one of the three, so it is the one that looks like a button.
+            // All three were identical OutlinedButtons: "Export all" is pressed once a year.
+            Button(
                 onClick = { onEditProgram(null) },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             ) { Text("New program") }
@@ -297,7 +313,7 @@ fun TimerScreen(
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
             ) {
                 OutlinedButton(
                     onClick = transfer.import,
@@ -350,7 +366,7 @@ internal fun RunPanel(state: TimerUiState, actions: TimerActions) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     formatClock(ceilSeconds(remainingMs)),
-                    fontSize = 56.sp,
+                    fontSize = TextSize.Display,
                     fontWeight = FontWeight.SemiBold,
                     color = if (step.kind.isEffort()) colors.accent else MaterialTheme.colorScheme.onSurface,
                 )
@@ -435,7 +451,14 @@ internal fun RunPanel(state: TimerUiState, actions: TimerActions) {
     }
 }
 
-/** A collapsible heading. The count is on it so a closed section still says how big it is. */
+/**
+ * A collapsible heading. The count is on it so a closed section still says how big it is.
+ *
+ * The count is a COUNT in both states. It used to read "5 hidden - show" when closed, and that
+ * collided with the tray of hidden programs further down this same screen — one word for two
+ * different things — while the chevron already says which state the section is in (SYSTEM.md,
+ * owner's comment 4: one state, one wording).
+ */
 @Composable
 private fun SectionHeader(
     title: String,
@@ -449,14 +472,26 @@ private fun SectionHeader(
             .fillMaxWidth()
             .clickable(onClick = onToggle)
             .heightIn(min = 48.dp)
-            .padding(top = 8.dp),
+            .padding(top = Spacing.Line),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, style = MaterialTheme.typography.titleSmall)
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (collapsed) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (collapsed) "Show $title" else "Hide $title",
+                tint = colors.inkMuted,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(title, style = MaterialTheme.typography.titleSmall)
+        }
         Text(
-            if (collapsed) "$count hidden - show" else "$count",
-            style = MaterialTheme.typography.labelSmall,
+            "$count",
+            style = MaterialTheme.typography.bodySmall,
             color = colors.inkMuted,
         )
     }
@@ -464,15 +499,26 @@ private fun SectionHeader(
 }
 
 /**
- * One row of the library.
+ * One row of the library: a name, a line of meta, ONE button, and a menu behind three dots.
  *
- * [scheduleFor] non-empty means this program is some exercise's schedule (decisions §18.15):
- * the row then says WHOSE it is and that its times are fixed, and it carries no delete button
- * at all. The first two belong on the row and not only in the editor, because the freeze was
- * only ever discoverable by opening the program and finding the fields turned into text — by
- * which point the owner had already gone looking for a program he had not written. The third
- * is the working agreement's own rule: a forbidden action loses the control that STARTS it,
- * not the one that finishes it.
+ * ── Why the five actions are not five buttons ───────────────────────────────────
+ * They were, in one `Row`, with "Run" on a `weight(1f)`. Edit, Export, Hide and Delete want
+ * something like 245-270 dp of the 312 a 360 dp phone leaves inside the card, so "Run" — the
+ * only thing on the card anybody comes here to press — was handed 26 to 51 dp, below a Material
+ * button's own 58 dp minimum, with its label clipped. It is now the full width of the card, and
+ * the other four are in the menu, where they have room for the words that say what they do
+ * ("Export to a file" rather than "Export"). SYSTEM.md rules 1 and 8.
+ *
+ * ── The schedules (decisions §18.15) ────────────────────────────────────────────
+ * [scheduleFor] non-empty means this program is some exercise's schedule: the row says WHOSE it
+ * is, and its menu carries no deletion at all. The name belongs on the row and not only in the
+ * editor, because the freeze was otherwise discoverable only by opening the program and finding
+ * its fields turned into text — by which point the owner had already gone looking for a program
+ * he never wrote. The missing delete is the working agreement's own rule: a forbidden action
+ * loses the control that STARTS it, not the one that finishes it.
+ *
+ * That the times are fixed is said ONCE, in the note under the section heading, rather than on
+ * every row and again at the foot of every card (rule 5: an explanation is not a paragraph).
  */
 @Composable
 private fun ProgramCard(
@@ -487,59 +533,114 @@ private fun ProgramCard(
     onToggleHidden: () -> Unit,
 ) {
     val colors = LocalGachiColors.current
-    Card(Modifier.fillMaxWidth().clickable(onClick = onEdit)) {
-        Column(Modifier.padding(12.dp)) {
-            Text(program.name, style = MaterialTheme.typography.titleMedium)
-            if (scheduleFor.isNotEmpty()) {
-                Text(
-                    "Schedule for ${scheduleFor.joinToString(", ")} - the times are fixed",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkSecondary,
-                )
-            }
-            Text(
-                buildString {
-                    append("${program.workStepCount()} efforts   ")
-                    append("${formatClock(program.totalSec())} total")
-                    // stated on the card, because it is what decides whether finishing this
-                    // program offers to write the sets down - but not when the line above has
-                    // just named the same exercise, which is the usual case for a schedule
-                    exerciseName?.takeIf { it !in scheduleFor }?.let { append("   logs as $it") }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
+    /*
+     * Everything that is not "run this" lives in the menu, and the menu is the one every other
+     * card in this app already uses (ui/components/ItemActions.kt): the same long press, the
+     * same three dots in front of it, the same divider and critical colour under a destructive
+     * entry. "Open" rather than "Edit" because a frozen schedule is opened and read, not edited,
+     * and one word that is true of both beats two of which one lies.
+     */
+    val menu = buildList {
+        add(ItemAction("Open", onClick = onEdit))
+        add(ItemAction("Export to a file", onClick = onExport))
+        add(
+            ItemAction(
+                if (program.hidden) "Show in this list" else "Hide from this list",
+                onClick = onToggleHidden,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+        )
+        /*
+         * No delete on a schedule, rather than a refusal after it is pressed: the exercise is
+         * keyed to this program's uid and nothing cascades, so deleting it would leave that
+         * exercise pointing at a row that is gone. The repository refuses too
+         * (ProgramRepository.delete) — this is the door, that is the lock.
+         */
+        if (scheduleFor.isEmpty()) {
+            add(ItemAction("Delete the program", destructive = true, onClick = onDelete))
+        }
+    }
+
+    ItemActions(
+        title = program.name,
+        actions = menu,
+        onTap = onEdit,
+        modifier = Modifier.fillMaxWidth(),
+    ) { press, openMenu ->
+        Card(Modifier.fillMaxWidth().then(press)) {
+            Column(
+                Modifier.padding(Spacing.Inset),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Line),
             ) {
-                Button(onClick = onRun, enabled = enabled, modifier = Modifier.weight(1f)) {
-                    Text("Run")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        Text(program.name, style = MaterialTheme.typography.titleMedium)
+                        if (scheduleFor.isNotEmpty()) {
+                            // WHOSE it is: the one thing about a schedule that the note under
+                            // the section heading cannot say, because it differs per row
+                            Text(
+                                "Schedule for ${scheduleFor.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.inkSecondary,
+                            )
+                        }
+                        Text(
+                            buildString {
+                                append("${program.workStepCount()} efforts")
+                                append(" $META_SEPARATOR ${formatClock(program.totalSec())}")
+                                // stated on the card, because it is what decides whether
+                                // finishing this program offers to write the sets down - but
+                                // not when the line above has just named the same exercise,
+                                // which is the usual case for a schedule
+                                exerciseName?.takeIf { it !in scheduleFor }?.let {
+                                    append(" $META_SEPARATOR logs as $it")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkMuted,
+                        )
+                    }
+                    IconButton(onClick = openMenu, modifier = Modifier.size(48.dp)) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = "Actions for ${program.name}",
+                            tint = colors.inkMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
-                TextButton(onClick = onEdit) { Text("Edit") }
-                TextButton(onClick = onExport) { Text("Export") }
-                TextButton(onClick = onToggleHidden) { Text(if (program.hidden) "Show" else "Hide") }
                 /*
-                 * No delete button on a schedule, rather than a refusal after it is pressed:
-                 * the exercise is keyed to this program's uid and nothing cascades, so deleting
-                 * it would leave that exercise pointing at a row that is gone. The repository
-                 * refuses too (ProgramRepository.delete) — this is the door, that is the lock.
+                 * THE ONE ACTION OF THIS CARD, across the whole of it.
+                 *
+                 * It used to share a row with four text buttons and a `weight(1f)`, which meant
+                 * it was handed whatever they left over: Edit, Export, Hide and Delete want some
+                 * 245-270 dp of the 312 a 360 dp screen has, so "Run" got between 26 and 51 —
+                 * less than a Material button's own 58 dp minimum, with its label clipped. The
+                 * main action of a card cannot be the narrowest thing on it (SYSTEM.md rule 8,
+                 * and rule 1: one action, one button).
+                 *
+                 * Disabled, it says WHY on itself. The "The timer is off" card is at the top of
+                 * the list and is long out of sight by the time a dead button is pressed.
                  */
-                if (scheduleFor.isEmpty()) {
-                    TextButton(onClick = onDelete) { Text("Delete") }
+                Button(
+                    onClick = onRun,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text(if (enabled) "Run" else "Run - the timer is off")
                 }
-            }
-            if (scheduleFor.isNotEmpty()) {
-                Text(
-                    "No delete: the exercise is built on this schedule. Hide it instead.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkMuted,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
             }
         }
     }
 }
+
+/** One separator for a meta line, so "a · b · c" never becomes "a   b   c" on the next card. */
+private const val META_SEPARATOR = "·"
 
 /**
  * The switches. Written as plain rows rather than a preference library: there are eight

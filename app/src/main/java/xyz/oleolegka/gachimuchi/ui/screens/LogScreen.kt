@@ -1,7 +1,9 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Button
@@ -41,6 +43,7 @@ import xyz.oleolegka.gachimuchi.ui.components.StepperField
 import xyz.oleolegka.gachimuchi.ui.components.TimeField
 import xyz.oleolegka.gachimuchi.ui.label
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /*
  * ── The six entry forms: one form per activity shape (§3) ───────────────────────
@@ -103,7 +106,37 @@ private fun WarmupChip(selected: Boolean, onToggle: () -> Unit) {
         selected = selected,
         onClick = onToggle,
         label = { Text("Warm-up") },
-        modifier = Modifier.heightIn(min = 40.dp),
+        modifier = Modifier.heightIn(min = CHIP_HEIGHT),
+    )
+}
+
+/**
+ * A chip is a target for a finger, so it is 48 dp tall rather than the 40 it was and the 40 the
+ * redraw's mock-up draws: a page in a browser is measured with a mouse.
+ */
+private val CHIP_HEIGHT = 48.dp
+
+/**
+ * The chip row of an entry form, and the reason this file has one at all: **it wraps.**
+ *
+ * The strength form carries three of them — "Own body weight", "Warm-up", "Not completed" — in
+ * a plain `Row`, and on a 360 dp phone they want some 344-367 dp of the 336 there are. What
+ * falls off the right-hand edge is the last one, "Not completed", which is the chip that decides
+ * whether the set counts towards a record. On a 411 dp phone all three fit with room to spare,
+ * so the defect is invisible on the wide phone and total on the narrow one — SYSTEM.md rule 8,
+ * a screen is checked at 360.
+ *
+ * Wrapping costs a second row of height when it happens. That is the honest price: a control
+ * nobody can see is worth more than 48 dp.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChipRow(content: @Composable FlowRowScope.() -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Line),
+        content = content,
     )
 }
 
@@ -124,7 +157,7 @@ private fun IncompleteChip(selected: Boolean, onToggle: () -> Unit) {
         selected = selected,
         onClick = onToggle,
         label = { Text("Not completed") },
-        modifier = Modifier.heightIn(min = 40.dp),
+        modifier = Modifier.heightIn(min = CHIP_HEIGHT),
     )
 }
 
@@ -161,40 +194,50 @@ private fun sideMissingOf(oneSided: Boolean, fixedSide: HoldSide?, side: HoldSid
     oneSided && fixedSide == null && side == null
 
 /**
- * The side chip row and the line explaining a disabled button — shared by every entry form
- * that can carry a [LoadedSet.side]. See [HoldEntry]'s own KDoc for [fixedSide]: non-null, the
- * card that raised this form already answered the question and this draws nothing at all.
+ * The side chips, drawn INSIDE the form's one chip row — shared by every entry form that can
+ * carry a [LoadedSet.side]. See [HoldEntry]'s own KDoc for [fixedSide]: non-null, the card that
+ * raised this form already answered the question and this draws nothing at all.
+ *
+ * They used to be a `Row` of their own above or below the warm-up chips, which put two chip rows
+ * on a form that has room for one and made the order of the two differ between the two forms
+ * that use them. One row, wrapping, in one order.
  */
 @Composable
-private fun SideChooser(
+private fun SideChips(
     oneSided: Boolean,
     fixedSide: HoldSide?,
     side: HoldSide?,
     onSideChange: (HoldSide?) -> Unit,
-    sideMissing: Boolean,
 ) {
     if (!oneSided || fixedSide != null) return
-    val colors = LocalGachiColors.current
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        HoldSide.entries.forEach { option ->
-            FilterChip(
-                selected = side == option,
-                // tapping the chosen one again clears it rather than doing nothing, so a
-                // mis-tap is undone the same way it was made
-                onClick = { onSideChange(if (side == option) null else option) },
-                label = { Text(option.label()) },
-                modifier = Modifier.heightIn(min = 40.dp),
-            )
-        }
-    }
-    if (sideMissing) {
-        Text(
-            "Say which side. This one is trained a limb at a time, and each side keeps " +
-                "its own record - a set that names neither belongs to neither.",
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.inkSecondary,
+    HoldSide.entries.forEach { option ->
+        FilterChip(
+            selected = side == option,
+            // tapping the chosen one again clears it rather than doing nothing, so a
+            // mis-tap is undone the same way it was made
+            onClick = { onSideChange(if (side == option) null else option) },
+            label = { Text(option.label()) },
+            modifier = Modifier.heightIn(min = CHIP_HEIGHT),
         )
     }
+}
+
+/**
+ * Why the primary button is dead, said next to the button rather than up among the chips.
+ *
+ * One phrase. It was two sentences and twenty-five words sitting under the chip row, which is
+ * both a paragraph where a phrase would do (SYSTEM.md rule 5) and an explanation nowhere near
+ * the control it explains.
+ */
+@Composable
+private fun SideMissingNote(sideMissing: Boolean) {
+    if (!sideMissing) return
+    val colors = LocalGachiColors.current
+    Text(
+        "Say which side - each side keeps its own record.",
+        style = MaterialTheme.typography.bodySmall,
+        color = colors.inkSecondary,
+    )
 }
 
 /**
@@ -245,8 +288,12 @@ internal fun StrengthEntry(
         incomplete == last.incomplete && side == last.sideOf
     val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
+    // the label names the field and nothing else: "Added weight, kg (empty means body weight
+    // only)" is forty-four characters of caption over a value box some 136 dp wide on a 360 dp
+    // phone. What it was explaining is said below, beside the chip it is about, and only while
+    // that chip is on.
     StepperField(
-        label = if (ownWeight) "Added weight, kg (empty means body weight only)" else "Weight, kg",
+        label = if (ownWeight) "Added weight, kg" else "Weight, kg",
         value = weight,
         onValueChange = { weight = it },
         steps = listOf(2.5, 5.0),
@@ -261,17 +308,25 @@ internal fun StrengthEntry(
     // "In the past, this weight was not carried through" — the input the owner asked this
     // whole feature to feed into: whether to push the weight up next time. See [IncompleteChip].
     LastTimeIncompleteNote(last?.incomplete == true)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    ChipRow {
+        SideChips(exercise.oneSided, fixedSide, side, onSideChange = { side = it })
         FilterChip(
             selected = ownWeight,
             onClick = { ownWeight = !ownWeight },
             label = { Text("Own body weight") },
-            modifier = Modifier.heightIn(min = 40.dp),
+            modifier = Modifier.heightIn(min = CHIP_HEIGHT),
         )
         WarmupChip(warmup) { warmup = !warmup }
         IncompleteChip(incomplete) { incomplete = !incomplete }
     }
-    SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
+    if (ownWeight) {
+        Text(
+            "Empty weight means body weight only.",
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalGachiColors.current.inkSecondary,
+        )
+    }
+    SideMissingNote(sideMissing)
     SubmitButton(
         repeat = untouched,
         enabled = !sideMissing && repsValue != null && repsValue > 0,
@@ -375,11 +430,12 @@ internal fun HoldEntry(
     // "Last time this was not held for the full protocol" — the owner's own example ("провисел
     // не 7 секунд, а 5") is exactly what this line is for. See [IncompleteChip].
     LastTimeIncompleteNote(last?.incomplete == true)
-    SideChooser(exercise.oneSided, fixedSide, side, onSideChange = { side = it }, sideMissing)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    ChipRow {
+        SideChips(exercise.oneSided, fixedSide, side, onSideChange = { side = it })
         WarmupChip(warmup) { warmup = !warmup }
         IncompleteChip(incomplete) { incomplete = !incomplete }
     }
+    SideMissingNote(sideMissing)
     SubmitButton(
         repeat = untouched,
         enabled = !sideMissing &&

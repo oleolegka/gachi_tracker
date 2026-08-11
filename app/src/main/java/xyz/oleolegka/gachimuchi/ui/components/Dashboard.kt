@@ -72,7 +72,7 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
  * The tracking is what makes 11 sp uppercase readable rather than a grey brick.
  */
 val EyebrowStyle = TextStyle(
-    fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
+    fontSize = TextSize.Caption, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
 )
 
 
@@ -152,15 +152,15 @@ fun HeroCard(
             Row(Modifier.padding(top = Spacing.Line), verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = 52.sp,
+                    fontSize = TextSize.Display,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = (-1.5).sp,
-                    lineHeight = 52.sp,
+                    lineHeight = TextSize.Display,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     " $unit",
-                    fontSize = 22.sp,
+                    fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.inkSecondary,
                     modifier = Modifier.padding(bottom = Spacing.Tight),
@@ -168,7 +168,7 @@ fun HeroCard(
             }
             Text(
                 subtitle,
-                fontSize = 14.sp,
+                fontSize = TextSize.Body,
                 color = colors.inkSecondary,
                 lineHeight = 19.sp,
                 modifier = Modifier.padding(top = Spacing.Line),
@@ -176,7 +176,7 @@ fun HeroCard(
             if (meta != null) {
                 Text(
                     meta,
-                    fontSize = 12.sp,
+                    fontSize = TextSize.Meta,
                     color = colors.inkMuted,
                     lineHeight = 17.sp,
                     modifier = Modifier.padding(top = Spacing.Tight),
@@ -189,7 +189,7 @@ fun HeroCard(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 ) {
                     CheckGlyph(colors.goodText, 13.dp)
-                    Text(highlight, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.goodText)
+                    Text(highlight, fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold, color = colors.goodText)
                 }
             }
         }
@@ -297,7 +297,7 @@ fun DoorTile(
         ) {
             Text(
                 name,
-                fontSize = 15.sp,
+                fontSize = TextSize.Body,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
@@ -315,7 +315,7 @@ fun DoorTile(
              * record) rather than about the form-and-recency line below.
              */
             if (recordDate != null) RecordBadge(recordDate)
-            Text(caption, fontSize = 11.sp, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(caption, fontSize = TextSize.Caption, color = colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Column(
             Modifier.padding(
@@ -328,7 +328,7 @@ fun DoorTile(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = 18.sp,
+                    fontSize = TextSize.Title,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -442,7 +442,7 @@ fun StatCard(
             ) {
                 Text(
                     label,
-                    fontSize = 11.sp,
+                    fontSize = TextSize.Caption,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.inkSecondary,
                     lineHeight = 14.sp,
@@ -453,7 +453,7 @@ fun StatCard(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     value,
-                    fontSize = 26.sp,
+                    fontSize = TextSize.Figure,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = (-0.5).sp,
                     lineHeight = 28.sp,
@@ -462,7 +462,7 @@ fun StatCard(
                 if (unit != null) {
                     Text(
                         " $unit",
-                        fontSize = 12.sp,
+                        fontSize = TextSize.Meta,
                         fontWeight = FontWeight.Medium,
                         color = colors.inkMuted,
                         modifier = Modifier.padding(bottom = 2.dp),
@@ -472,7 +472,7 @@ fun StatCard(
             if (delta != null) {
                 Text(
                     delta,
-                    fontSize = 11.sp,
+                    fontSize = TextSize.Caption,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.goodText,
                     modifier = Modifier.padding(top = Spacing.Tight),
@@ -536,7 +536,7 @@ fun <T> SegmentControl(
             ) {
                 Text(
                     label(option),
-                    fontSize = 13.sp,
+                    fontSize = TextSize.Meta,
                     fontWeight = if (isOn) FontWeight.SemiBold else FontWeight.Medium,
                     color = if (isOn) MaterialTheme.colorScheme.onSurface
                     else colors.inkSecondary,
@@ -580,7 +580,7 @@ fun SiblingChip(
     ) {
         Text(
             text,
-            fontSize = 11.sp,
+            fontSize = TextSize.Caption,
             fontWeight = FontWeight.SemiBold,
             color = if (selected) MaterialTheme.colorScheme.onSurface
             else colors.inkSecondary,
@@ -601,10 +601,10 @@ fun IdentityChip(label: String, value: String, modifier: Modifier = Modifier) {
             .padding(horizontal = Spacing.Line, vertical = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.inkMuted)
+        Text(label, fontSize = TextSize.Meta, fontWeight = FontWeight.Medium, color = colors.inkMuted)
         Text(
             value,
-            fontSize = 12.sp,
+            fontSize = TextSize.Meta,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -615,7 +615,7 @@ fun IdentityChip(label: String, value: String, modifier: Modifier = Modifier) {
 @Composable
 fun NoteText(text: String, modifier: Modifier = Modifier) {
     val colors = LocalGachiColors.current
-    Text(text, fontSize = 11.sp, color = colors.inkMuted, lineHeight = 16.sp, modifier = modifier)
+    Text(text, fontSize = TextSize.Caption, color = colors.inkMuted, lineHeight = 16.sp, modifier = modifier)
 }
 
 // --- empty state ---------------------------------------------------------------------------------------
@@ -652,14 +652,14 @@ fun EmptyState(
             }
             Text(
                 title,
-                fontSize = 14.sp,
+                fontSize = TextSize.Title,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
-                lineHeight = 19.sp,
+                lineHeight = TextSize.Title * 1.25f,
             )
             Text(
                 hint,
-                fontSize = 13.sp,
+                fontSize = TextSize.Body,
                 color = colors.inkSecondary,
                 lineHeight = 18.sp,
                 modifier = Modifier.padding(top = Spacing.Line),
@@ -680,7 +680,7 @@ fun DashedNote(text: String, modifier: Modifier = Modifier) {
             .padding(Spacing.Inset),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = 12.sp, color = colors.inkMuted)
+        Text(text, fontSize = TextSize.Meta, color = colors.inkMuted)
     }
 }
 
