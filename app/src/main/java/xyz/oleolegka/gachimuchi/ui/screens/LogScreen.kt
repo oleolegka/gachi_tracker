@@ -1,55 +1,24 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
-import xyz.oleolegka.gachimuchi.domain.ExerciseForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseRef
 import xyz.oleolegka.gachimuchi.domain.HoldSide
-import xyz.oleolegka.gachimuchi.domain.ProgramStart
-import xyz.oleolegka.gachimuchi.domain.Session
-import xyz.oleolegka.gachimuchi.domain.SessionGroup
-import xyz.oleolegka.gachimuchi.domain.SessionSet
 import xyz.oleolegka.gachimuchi.domain.bodyweightOf
-import xyz.oleolegka.gachimuchi.domain.buildSession
 import xyz.oleolegka.gachimuchi.domain.cardioOf
 import xyz.oleolegka.gachimuchi.domain.durationOf
 import xyz.oleolegka.gachimuchi.domain.formatDurationSec
@@ -70,440 +39,29 @@ import xyz.oleolegka.gachimuchi.domain.tickOf
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.components.StepperField
 import xyz.oleolegka.gachimuchi.ui.components.TimeField
-import xyz.oleolegka.gachimuchi.ui.components.TimerActions
-import xyz.oleolegka.gachimuchi.ui.components.TimerBar
-import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
-import xyz.oleolegka.gachimuchi.ui.fmtDay
-import xyz.oleolegka.gachimuchi.ui.fmtRest
 import xyz.oleolegka.gachimuchi.ui.label
-import xyz.oleolegka.gachimuchi.ui.summaryLine
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
-import java.time.LocalDate
-
-/**
- * Logging a workout — the screen the app exists for.
- *
- * ── The layout, and why ─────────────────────────────────────────────────────────
- * The session tape scrolls, and the ENTRY CARD IS PINNED TO THE BOTTOM. That is the
- * whole point: between sets the phone is held in one hand and everything that gets
- * tapped — the step buttons and the big Add button — has to sit inside the arc of a
- * thumb. A form at the top of a scrolling list fails that within two exercises.
- *
- * ── One tap for another set of the same ─────────────────────────────────────────
- * The card is PREFILLED from the last set of that exercise, taken from the journal (not
- * from screen state, so it survives closing the app). The common case — same weight,
- * same reps, one more time — is therefore a single tap on the primary button, which
- * renames itself to "Repeat set" when the values are untouched.
- *
- * ── One screen, no navigation ───────────────────────────────────────────────────
- * Choosing an exercise is a bottom sheet, not a route; the session stays visible behind
- * it. Nothing here pushes a back stack, so the back gesture means exactly one thing:
- * leave the workout.
- *
- * ── The day is given, not assumed ───────────────────────────────────────────────
- * [day] is the day being written under, and it is NOT necessarily today. It used to be:
- * the screen took "today" and stamped it onto every form it built. That broke the moment a
- * workout could be dated to a day already gone — the workout would show the set (a workout
- * claims its rows by id) while the calendar filed it under today (the calendar reads the
- * payload), and an append-only journal offers no way to correct it afterwards. The caller
- * resolves the day through `loggingDay` and hands it here; see ui/GachiApp.kt.
- *
- * ── What this screen is FOR now: an entry on its own ────────────────────────────
- * Recording INSIDE a workout is [WorkoutLogScreen] — a card per exercise, each with its own
- * rest counting under it, which is what §13.2 asked for and what the single "active exercise"
- * below could never do. This screen keeps the other case, the one that has no workout at all:
- * the stretching in front of the television, reached by "Add - single entry" on a day.
- *
- * The tape below is everything logged on [day] (domain/Session.kt), which for a single entry
- * is the right scope — there is no workout to narrow it to. Sets written from here are
- * DELIBERATELY not attached to whatever workout happens to be open; see the call site in
- * ui/GachiApp.kt.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LogScreen(
-    state: UiState,
-    day: LocalDate,
-    activeExerciseId: Long?,
-    timer: TimerUiState,
-    timerActions: TimerActions,
-    onEnableTimer: () -> Unit,
-    /**
-     * Starts the one-tap program — a [ProgramStart] rather than an [ExerciseRef], because
-     * this screen is the one place a protocol-led run can begin with no card to already carry
-     * the side (see [MainViewModel.startProgramForExercise][xyz.oleolegka.gachimuchi.ui.MainViewModel.startProgramForExercise]).
-     * The dialogs below build the [ProgramStart] before this is ever called, so it always
-     * arrives complete.
-     */
-    onStartExerciseProgram: (ProgramStart) -> Unit,
-    onSelectExercise: (Long?) -> Unit,
-    onCreateExercise: (NewExercise) -> Unit,
-    onAddSet: (ActivityForm) -> Unit,
-    onUndoSet: (Long) -> Unit,
-    onClose: () -> Unit,
-) {
-    val colors = LocalGachiColors.current
-    val iso = day.toString()
-    val session = remember(state.events, iso) { buildSession(state.events, iso) }
-    val active = state.refById(activeExerciseId)
-    var picking by remember { mutableStateOf(false) }
-
-    /*
-     * ── The two questions a one-tap program can owe before it starts ─────────────────
-     * Inside a workout both are answered by the card that was tapped: the SIDE is which of
-     * the exercise's two cards it is, the PLATE comes from [WeightDialog] once §13.5 decides
-     * one is worth asking. Here there is no card — only the entry panel's single active
-     * exercise — so the same two questions are asked in dialogs instead of being skipped, and
-     * [beginProgram] is the one place that decides which of them, if either, is still owed
-     * before [onStartExerciseProgram] is allowed to be called at all.
-     */
-    var choosingSideFor by remember { mutableStateOf<ExerciseRef?>(null) }
-    var weighingProgramFor by remember { mutableStateOf<ExerciseRef?>(null) }
-    var weighingProgramSide by remember { mutableStateOf<HoldSide?>(null) }
-
-    fun beginProgram(exercise: ExerciseRef, side: HoldSide?) {
-        if (lastAddedKg(state, exercise) == null) {
-            onStartExerciseProgram(ProgramStart(exercise, side, null))
-        } else {
-            weighingProgramFor = exercise
-            weighingProgramSide = side
-        }
-    }
-
-    /*
-     * A first run has nothing to log against, and every prompt on this screen would
-     * otherwise say "choose" — an instruction with nothing to choose from. When the catalog
-     * is empty the screen asks for an exercise to be CREATED instead, and the picker opens
-     * straight on its create form rather than on a search box over an empty list.
-     */
-    val catalogEmpty = state.exercises.isEmpty()
-
-    Scaffold(
-        modifier = Modifier.imePadding(),
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Workout", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "${fmtDay(day)} - ${session.setCount} entries, " +
-                                "${session.groups.size} exercises",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.inkSecondary,
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close the workout")
-                    }
-                },
-                actions = {
-                    // undo is a small, deliberately unglamorous target far from the big
-                    // Add button: a mis-tap here would cancel a set that was actually done
-                    TextButton(
-                        onClick = { session.lastEventId?.let(onUndoSet) },
-                        enabled = session.lastEventId != null,
-                    ) { Text("Undo last") }
-                },
-            )
-        },
-        bottomBar = {
-            /*
-             * The timer sits ABOVE the entry card, not over it. It is a glance-at thing
-             * and the card is the thing being used, so the timer gets one line and the
-             * card keeps every pixel it had — the whole reason the card is pinned down
-             * here is that its buttons must stay inside the arc of a thumb.
-             */
-            Column {
-                TimerBar(
-                    state = timer,
-                    actions = timerActions,
-                    exercise = active,
-                    onStartExerciseProgram = {
-                        active?.let { exercise ->
-                            // one-sided: the card that would have carried this answer does
-                            // not exist here, so it is asked for instead of defaulted away
-                            if (exercise.oneSided) {
-                                choosingSideFor = exercise
-                            } else {
-                                beginProgram(exercise, side = null)
-                            }
-                        }
-                    },
-                    onEnable = onEnableTimer,
-                )
-                EntryPanel(
-                    state = state,
-                    exercise = active,
-                    opDate = iso,
-                    catalogEmpty = catalogEmpty,
-                    onPick = { picking = true },
-                    onAddSet = onAddSet,
-                )
-            }
-        },
-    ) { padding ->
-        SessionFeed(
-            session = session,
-            activeExerciseId = activeExerciseId,
-            catalogEmpty = catalogEmpty,
-            onSelectExercise = onSelectExercise,
-            onPick = { picking = true },
-            modifier = Modifier.padding(padding),
-        )
-    }
-
-    if (picking) {
-        ExercisePickerSheet(
-            state = state,
-            today = day,
-            startInCreate = catalogEmpty,
-            onPick = onSelectExercise,
-            onCreate = onCreateExercise,
-            onDismiss = { picking = false },
-        )
-    }
-
-    choosingSideFor?.let { exercise ->
-        SideDialog(
-            exerciseName = exercise.name,
-            onConfirm = { side ->
-                choosingSideFor = null
-                beginProgram(exercise, side)
-            },
-            onDismiss = { choosingSideFor = null },
-        )
-    }
-
-    weighingProgramFor?.let { exercise ->
-        WeightDialog(
-            exerciseName = exercise.name,
-            initialKg = lastAddedKg(state, exercise),
-            onConfirm = { kg ->
-                onStartExerciseProgram(ProgramStart(exercise, weighingProgramSide, kg))
-                weighingProgramFor = null
-                weighingProgramSide = null
-            },
-            onDismiss = { weighingProgramFor = null; weighingProgramSide = null },
-        )
-    }
-}
-
-/**
- * The tape of what has been done today: exercises in the order they first appeared, sets
- * inside them in the order they were recorded. Tapping a block points the entry card back
- * at that exercise — coming back to something already started costs ONE tap, without the
- * picker.
- */
-@Composable
-private fun SessionFeed(
-    session: Session,
-    activeExerciseId: Long?,
-    catalogEmpty: Boolean,
-    onSelectExercise: (Long) -> Unit,
-    onPick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = LocalGachiColors.current
-    LazyColumn(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (session.isEmpty) {
-            item {
-                Column(Modifier.padding(top = 24.dp)) {
-                    Text(
-                        if (catalogEmpty) "Nothing to log against yet." else "Nothing logged today yet.",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        if (catalogEmpty) {
-                            // said in full, because the word does a lot of work here and the
-                            // screen is being read by someone who has never seen it before
-                            "An exercise is the thing sets are recorded against - \"Bench " +
-                                "press\", \"Boulder gym\", \"Hangs 20 mm\". Create one and the " +
-                                "card below turns into the fields that suit it: weight and " +
-                                "reps, a distance, or a single check-in."
-                        } else {
-                            "Pick an exercise below and record the first set. Everything you " +
-                                "add shows up here, newest at the bottom."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.inkMuted,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    TextButton(onClick = onPick, modifier = Modifier.padding(top = 8.dp)) {
-                        Text(if (catalogEmpty) "Create your first exercise" else "Choose an exercise")
-                    }
-                }
-            }
-        }
-
-        items(session.groups, key = { it.groupKey }) { group ->
-            SessionGroupCard(
-                group = group,
-                active = group.exerciseId != null && group.exerciseId == activeExerciseId,
-                onClick = { group.exerciseId?.let(onSelectExercise) },
-            )
-        }
-
-        item { Spacer(Modifier.height(8.dp)) }
-    }
-}
-
-@Composable
-private fun SessionGroupCard(group: SessionGroup, active: Boolean, onClick: () -> Unit) {
-    val colors = LocalGachiColors.current
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = group.exerciseId != null, onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = if (active) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
-        ),
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 32.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(group.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "${group.sets.size} sets",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkMuted,
-                )
-            }
-            group.sets.forEachIndexed { index, set -> SetRow(index + 1, set) }
-        }
-    }
-}
-
-@Composable
-private fun SetRow(number: Int, set: SessionSet) {
-    val colors = LocalGachiColors.current
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "$number",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
-                modifier = Modifier.width(20.dp),
-            )
-            Text(set.form.summaryLine(), style = MaterialTheme.typography.bodyMedium)
-            set.restBeforeSec?.let {
-                Text(
-                    "   rest ${fmtRest(it)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkMuted,
-                )
-            }
-        }
-        // a record is stated in words, never by colour alone
-        set.record?.let {
-            Text(
-                "Record: ${it.text}",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.good,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(start = 20.dp),
-            )
-        }
-    }
-}
-
-/**
- * The pinned entry card. Which fields it shows is decided by the FORM OF THE EXERCISE
- * (§3), and an exercise has exactly one form, so nothing here is ever asked twice.
- */
-@Composable
-private fun EntryPanel(
-    state: UiState,
-    exercise: ExerciseRef?,
-    opDate: String,
-    catalogEmpty: Boolean,
-    onPick: () -> Unit,
-    onAddSet: (ActivityForm) -> Unit,
-) {
-    val colors = LocalGachiColors.current
-    Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
-        Column(
-            /*
-             * This panel IS the Scaffold's bottomBar, not a sheet drawn over the screen, and
-             * Scaffold gives the bottom bar slot no window insets of its own (it only turns
-             * whatever this composes to into the content's bottom padding) -- so the system
-             * navigation bar has to be read here, once. See WorkoutLogScreen's own bottom bar
-             * for the same reasoning, and why this stays correct on gesture navigation too:
-             * navigationBarsPadding reads the real inset instead of a guessed constant.
-             */
-            modifier = Modifier.fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            HorizontalDivider(color = colors.grid)
-            Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onPick),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        exercise?.name
-                            ?: if (catalogEmpty) "No exercises yet" else "No exercise chosen",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        exercise?.let { contextLine(it) }
-                            ?: if (catalogEmpty) "add the first one to start logging" else "tap to choose",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkSecondary,
-                    )
-                }
-                if (exercise != null) {
-                    TextButton(onClick = onPick) { Text("Change") }
-                }
-            }
-
-            if (exercise == null) {
-                Button(
-                    onClick = onPick,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-                ) { Text(if (catalogEmpty) "Create your first exercise" else "Choose an exercise") }
-            } else {
-                when (exercise.form) {
-                    ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet)
-                    ExerciseForm.HOLD -> HoldEntry(state, exercise, opDate, onAddSet)
-                    ExerciseForm.CARDIO -> CardioEntry(state, exercise, opDate, onAddSet)
-                    ExerciseForm.DURATION -> DurationEntry(state, exercise, opDate, onAddSet)
-                    ExerciseForm.TICK -> TickEntry(exercise, opDate, onAddSet)
-                    ExerciseForm.BODYWEIGHT -> BodyweightEntry(state, opDate, onAddSet)
-                }
-            }
-        }
-    }
-}
-
-/** The read-only context of an exercise: for holds, the §12-A identity spelled out. */
-private fun contextLine(exercise: ExerciseRef): String = buildString {
-    append(exercise.form.title.lowercase())
-    if (exercise.form == ExerciseForm.HOLD) {
-        exercise.protocol?.let { append(" - ${formatNumber(it.first)}:${formatNumber(it.second)} protocol") }
-    }
-}
 
 /*
- * ── The six entry forms below are shared, and that is why they are `internal` ────
- * One form per activity shape (§3), each one a set of fields plus the primary button, each
- * prefilled from the journal. WorkoutLogScreen raises the same six inside its quick-entry
- * sheet, and it has to be the SAME six: which fields an exercise asks for, what counts as a
- * repeat, and which values a set is built with are decisions that must not be able to differ
- * between two screens both called "record a set". A second copy would drift on the first day
- * one of them gained a field.
+ * ── The six entry forms: one form per activity shape (§3) ───────────────────────
+ * Each is a set of fields plus the primary button, prefilled from the journal, and they are
+ * `internal` because [WorkoutLogScreen]'s quick entry sheet is what raises them.
  *
- * They stay in this file rather than moving to a component of their own because this is
- * where they are read in context, and moving them is a diff that touches every one of them
- * while proving nothing.
+ * ── There used to be a screen in this file, and its absence is the point ─────────
+ * `LogScreen` drew a whole day as a tape with ONE pinned entry card pointed at an "active
+ * exercise", and it was the way in for a single entry — an exercise recorded with no workout
+ * around it. Two ways to record meant two orders of questions, and they drifted exactly as far
+ * apart as nothing stopped them: the workout asked for the rest between sets and the single
+ * entry never did; the workout raised a card you tapped when you had actually done something
+ * and the single entry pushed a prefilled "Repeat set" at you the moment an exercise was
+ * chosen; a protocol-led exercise started from a card in one and from a button on a timer bar
+ * in the other, with the side asked in a dialog because there was no card to have answered it.
+ *
+ * The fix was not to teach this screen the other one's questions — that is the arrangement
+ * that had already failed twice. A single entry IS an exercise of a workout with the workout
+ * taken away, so there is now one screen ([WorkoutLogScreen]) over two containers, the second
+ * of which is built by `looseWorkout` in domain/Workout.kt. What is left here is the part that
+ * was always shared and never diverged: the fields themselves.
  */
 
 /**
@@ -637,47 +195,6 @@ private fun SideChooser(
             color = colors.inkSecondary,
         )
     }
-}
-
-/**
- * Which hand the one-tap program belongs to, asked before it starts.
- *
- * Every other place a protocol-led run can begin already has a CARD that answers this: the
- * two per-side cards a one-sided exercise gets inside a workout (see [WorkoutLogScreen]).
- * This screen has no card, only the entry panel's single active exercise, so the question is
- * put in a dialog that blocks the run rather than one that gets skipped — an unanswered side
- * used to mean a set that dropped out of both hands' records (see
- * [xyz.oleolegka.gachimuchi.domain.ProgramStart]).
- *
- * Draws [SideChooser] itself rather than a second chip row: the manual entry card just below
- * asks this exact question the exact same way, and a program run is not allowed to ask it
- * differently.
- */
-@Composable
-private fun SideDialog(exerciseName: String, onConfirm: (HoldSide) -> Unit, onDismiss: () -> Unit) {
-    var side by remember(exerciseName) { mutableStateOf<HoldSide?>(null) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Which side?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(exerciseName, style = MaterialTheme.typography.titleSmall)
-                SideChooser(
-                    oneSided = true,
-                    fixedSide = null,
-                    side = side,
-                    onSideChange = { side = it },
-                    sideMissing = side == null,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { side?.let(onConfirm) }, enabled = side != null) {
-                Text("Start the set")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 /**

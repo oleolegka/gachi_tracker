@@ -308,6 +308,25 @@ fun WorkoutLogScreen(
     workoutId: Long?,
     /** The draft this screen shows when [workoutId] is null — see [draftWorkout]. */
     draftWorkout: Workout? = null,
+    /**
+     * Whether there is NO workout around these cards at all — the "single entry" way in, where
+     * the container is the day's unclaimed entries (domain/Workout.kt, `looseWorkout`).
+     *
+     * ── Why a flag and not a second screen ──────────────────────────────────────────
+     * There was a second screen, and that is precisely what went wrong: recording on its own and
+     * recording inside a workout asked different questions in a different order, because nothing
+     * made them ask the same ones. A single entry is an exercise of a workout with the workout
+     * taken away, so it is the same cards, the same admission (pick, then the rest between
+     * sets), the same quick entry sheet and the same tap-starts-the-protocol rule. This flag
+     * turns off the three things that need a workout to exist, and nothing else:
+     *
+     *  - the state button, which would say "start"/"finish" about a thing there is none of;
+     *  - dragging, because an order is a row in the journal (`TYPE_WORKOUT_ORDER_SET`) and the
+     *    row names a workout — a drag with nowhere to be written would land nowhere and leave
+     *    the person who made it to guess why;
+     *  - the wording of the empty state and the title.
+     */
+    standalone: Boolean = false,
     settings: TimerSettings,
     /** Every rest the app is counting, of which at most one belongs to each card. */
     floors: List<RestFloor>,
@@ -481,8 +500,9 @@ fun WorkoutLogScreen(
             Column {
             WorkoutBar(
                 // the name snapshot taken when "start" was pressed, never the plan's name as it
-                // reads today — a plan is editable and a fact is not
-                title = workout.name ?: "Workout",
+                // reads today — a plan is editable and a fact is not. With no workout around,
+                // the name of the thing is what the menu that opened it called it.
+                title = if (standalone) "Single entry" else workout.name ?: "Workout",
                 meta = listOfNotNull(
                     date?.let { fmtWeekdayDay(it) },
                     summaryOf(workout),
@@ -498,6 +518,8 @@ fun WorkoutLogScreen(
                  * is a status and not a lock, so the way back is right where the way there was.
                  */
                 stateLabel = when {
+                    // nothing to start and nothing to finish: see [standalone]
+                    standalone -> null
                     draftMode -> "Start workout"
                     workout.finished -> "Reopen"
                     else -> "Finish"
@@ -577,7 +599,11 @@ fun WorkoutLogScreen(
                      * left says what is empty, which is all an empty state owes anybody.
                      */
                     Text(
-                        "No exercises in this workout yet.",
+                        if (standalone) {
+                            "Nothing logged on its own here yet."
+                        } else {
+                            "No exercises in this workout yet."
+                        },
                         fontSize = TextSize.Body,
                         color = colors.inkSecondary,
                         modifier = Modifier.padding(top = Spacing.Block),
@@ -660,12 +686,13 @@ fun WorkoutLogScreen(
                         }
                     },
                     onRemove = { removingKey = key },
+                    removeLabel = if (standalone) "Remove from this day" else "Remove from this workout",
                     /*
                      * Nothing to drag when there is one card, and a lift with nowhere to go
                      * would be a gesture that appears to work and cannot. The menu keeps
                      * working either way — see [ItemDrag].
                      */
-                    drag = if (shown.size < 2) {
+                    drag = if (shown.size < 2 || standalone) {
                         null
                     } else {
                         ItemDrag(
@@ -683,8 +710,14 @@ fun WorkoutLogScreen(
                      * carries the version that works without either — and it is also the version
                      * somebody uses when one card has to go up one place and aiming is a bother.
                      */
-                    onMoveUp = if (index == 0) null else ({ moveExercise(index, index - 1) }),
-                    onMoveDown = if (index == shown.lastIndex) null else ({ moveExercise(index, index + 1) }),
+                    // the menu twin of the drag, and it goes quiet for the same reason the drag
+                    // does when there is no workout to write an order row against
+                    onMoveUp = if (index == 0 || standalone) null else ({ moveExercise(index, index - 1) }),
+                    onMoveDown = if (index == shown.lastIndex || standalone) {
+                        null
+                    } else {
+                        ({ moveExercise(index, index + 1) })
+                    },
                     finished = exercise.finished,
                     // a card of a draft cannot be finished — the workout it would belong to
                     // does not exist yet, and offering the button would ask a question the
@@ -778,7 +811,12 @@ fun WorkoutLogScreen(
             // order of the rest (the catalog column, then what was actually rested)
             initialSec = already?.restSec?.takeIf { it >= MIN_STEP_SEC }
                 ?: restHintSec(settings, state.events, ref),
-            confirmLabel = if (already == null) "Add to workout" else "Save",
+            // the same question either way; only the name of the place it lands differs
+            confirmLabel = when {
+                already != null -> "Save"
+                standalone -> "Add"
+                else -> "Add to workout"
+            },
             onConfirm = { sec ->
                 /*
                  * A one-sided exercise picked fresh gets BOTH its cards, at this same rest, in
@@ -822,7 +860,11 @@ fun WorkoutLogScreen(
         workout.exercises.firstOrNull { it.cardKey == key }?.let { exercise ->
             val setCount = exercise.sets.size
             ConfirmRemoveDialog(
-                title = "Remove this exercise from the workout?",
+                title = if (standalone) {
+                    "Remove this exercise from the day?"
+                } else {
+                    "Remove this exercise from the workout?"
+                },
                 subject = exerciseName(state, exercise),
                 explanation = (
                     if (setCount == 0) {
@@ -1035,8 +1077,11 @@ private fun WorkoutBar(
     title: String,
     meta: String,
     onClose: () -> Unit,
-    /** "Finish", "Reopen" or "Start workout" — one slot, one at a time. */
-    stateLabel: String,
+    /**
+     * "Finish", "Reopen" or "Start workout" — one slot, one at a time, and null for the one
+     * container that has none of the three to offer (see [WorkoutLogScreen]'s `standalone`).
+     */
+    stateLabel: String?,
     onState: () -> Unit,
     /** Take back the last set of this workout. Null when there is none to take back. */
     onUndoLast: (() -> Unit)?,
@@ -1074,12 +1119,14 @@ private fun WorkoutBar(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(
-                        onClick = onState,
-                        shape = RoundedCornerShape(Radius.Small),
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text(stateLabel, fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold)
+                    stateLabel?.let { label ->
+                        TextButton(
+                            onClick = onState,
+                            shape = RoundedCornerShape(Radius.Small),
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
+                            Text(label, fontSize = TextSize.Meta, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     if (onUndoLast != null) {
                         Box {
@@ -1157,6 +1204,12 @@ private fun ExerciseCard(
     onRest: (() -> Unit)?,
     /** Long press, released without moving: take this exercise out of the workout. */
     onRemove: (() -> Unit)?,
+    /**
+     * What the removal is a removal FROM, said in the menu. A card outside any workout is
+     * coming off the day, and a menu item naming a workout there would name a thing the person
+     * reading it is not looking at.
+     */
+    removeLabel: String = "Remove from this workout",
     /** Long press, moved: carry the card. Null when there is nowhere to carry it to. */
     drag: ItemDrag? = null,
     lifted: Boolean = false,
@@ -1192,7 +1245,7 @@ private fun ExerciseCard(
         onMoveUp?.let { add(ItemAction("Move up") { it() }) }
         onMoveDown?.let { add(ItemAction("Move down") { it() }) }
         // destructive last, and away from the top of the menu where the finger already is
-        onRemove?.let { add(ItemAction("Remove from this workout", destructive = true) { it() }) }
+        onRemove?.let { add(ItemAction(removeLabel, destructive = true) { it() }) }
     }
     ItemActions(
         title = name,

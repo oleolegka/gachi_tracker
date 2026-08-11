@@ -505,6 +505,82 @@ fun draftWorkout(opDate: String, name: String?, cards: List<DraftCard>, linkOf: 
     )
 
 /**
+ * A day's entries that belong to NO workout, shaped as a [Workout] — the container behind the
+ * "single entry" way in.
+ *
+ * ── Why this exists at all ──────────────────────────────────────────────────────
+ * Recording on its own and recording inside a workout were two screens, and the two drifted:
+ * one asked for the rest between sets and the other never did, one raised a card and the other
+ * pushed a prefilled form at you the moment an exercise was chosen. A single entry is an
+ * exercise of a workout with no workout around it, so the honest fix is not to teach the second
+ * screen the first one's questions — it is to have ONE screen and hand it a container either
+ * way. This builds the container for the case where there is nothing in the journal to build
+ * one from.
+ *
+ * [staged] are exercises admitted on that screen and not yet recorded against — the same
+ * [DraftCard] a workout draft stages, for the same reason: an exercise is added BEFORE the
+ * first set of it, and with no workout row there is nothing to write an "added" event against.
+ * A staged card whose exercise already has entries of the day contributes only its rest.
+ *
+ * [id]/[uid]/[ts] are sentinels, exactly as in [draftWorkout]: nothing here is a row, and no
+ * action the screen is handed reads them.
+ */
+fun looseWorkout(
+    events: List<JournalEvent>,
+    opDate: String,
+    staged: List<DraftCard>,
+    linkOf: (Long) -> ExerciseLink,
+): Workout {
+    /*
+     * Keyed by [workoutCardKey] and folded in journal order, the same two rules [buildWorkout]
+     * follows — an entry naming its exercise by identity and one naming it by number land in
+     * one card, and the two hands of a one-sided exercise land in two.
+     */
+    val blocks = LinkedHashMap<String, WorkoutExercise>()
+    val unkeyed = ArrayList<ActivityEvent>()
+    for (activity in setsOutsideWorkouts(events, opDate)) {
+        val link = activity.form.exerciseLink()
+        if (link == null) {
+            // a weigh-in carries no exercise_id by design — shown, never dropped
+            unkeyed += activity
+            continue
+        }
+        val side = (activity.form as? LoadedSet)?.sideOf
+        val key = workoutCardKey(link.key, side)
+        val held = blocks[key]
+        blocks[key] = held?.copy(exercise = held.exercise.mergedWith(link), sets = held.sets + activity)
+            ?: WorkoutExercise(link, restSec = null, sets = listOf(activity), side = side)
+    }
+    /*
+     * Staged cards are applied AFTER the fold, so one that names an exercise already recorded
+     * today lands on that card and gives it the rest that was chosen for it, rather than
+     * opening a second card for the same thing. One that names nothing recorded appends — the
+     * "added afterwards goes to the end" rule a real workout gets from its order event.
+     */
+    for (card in staged) {
+        val link = linkOf(card.exerciseId)
+        val key = workoutCardKey(link.key, card.side)
+        val held = blocks[key]
+        blocks[key] = held?.copy(restSec = card.restSec)
+            ?: WorkoutExercise(link, card.restSec, emptyList(), side = card.side)
+    }
+    return Workout(
+        id = 0L,
+        uid = "",
+        ts = "",
+        opDate = opDate,
+        slot = null,
+        name = null,
+        // sorted by when it happened, then by journal order for a same-second tie — the rule
+        // [buildWorkout] and [buildSession] both settle the tape of a card by
+        exercises = blocks.values.map { block ->
+            block.copy(sets = block.sets.sortedWith(compareBy({ it.happenedAt }, { it.id })))
+        },
+        entriesWithoutExercise = unkeyed,
+    )
+}
+
+/**
  * What a journal row says about the workout it was recorded during, or null for a row
  * recorded outside any.
  *
