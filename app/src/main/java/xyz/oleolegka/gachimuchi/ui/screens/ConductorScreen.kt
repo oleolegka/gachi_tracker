@@ -14,10 +14,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import xyz.oleolegka.gachimuchi.ui.components.TimerActions
 import xyz.oleolegka.gachimuchi.ui.components.TimerUiState
 import xyz.oleolegka.gachimuchi.ui.theme.LocalGachiColors
+import xyz.oleolegka.gachimuchi.ui.theme.Spacing
 
 /**
  * The conductor: a protocol-led set, running, with the screen to itself.
@@ -89,7 +89,8 @@ fun ConductorScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxWidth().padding(horizontal = 15.dp)) {
+        // 15 is not on the scale and never was; the screens either side of this one sit on 16
+        Column(Modifier.padding(padding).fillMaxWidth().padding(horizontal = Spacing.Block)) {
             /*
              * The same panel the Programs tab draws, and not a second one built to look like
              * it. A protocol read from three metres away while hanging off a fingerboard is

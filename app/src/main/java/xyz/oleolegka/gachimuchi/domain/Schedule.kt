@@ -663,16 +663,28 @@ fun SlotDraft.problem(): SlotProblem? = when {
     else -> null
 }
 
-/** The message under the editor's fields for [problem] (or for [isBackdated], for the editor). */
+/**
+ * Why the editor will not save, in the fewest words that still say what to do.
+ *
+ * These are read in a pinned bar directly above a disabled Save button, and they are read by
+ * somebody who has just been stopped — so each one is a state and an instruction, and
+ * nothing else. The long forms these replaced explained the MODEL as well ("a day already
+ * gone keeps whatever it already shows"), which is an answer to a question the person
+ * standing in front of the dialog did not ask (SYSTEM.md, rule 5).
+ *
+ * DATE_IN_PAST keeps its second clause on purpose. Everything else in the old wording was
+ * explanation, but "log what actually happened instead" is the only place the app tells
+ * somebody trying to backfill yesterday where to go instead, and dropping it would leave
+ * them at a dead end.
+ */
 fun problemText(problem: SlotProblem): String = when (problem) {
-    SlotProblem.NAME_EMPTY -> "Give the session a name, for example Gym or Fingerboard."
-    SlotProblem.TIME_UNREADABLE -> "Finish the time: type the digits and 1700 becomes 17:00. " +
-        "An empty field means some time that day."
+    SlotProblem.NAME_EMPTY -> "Give the session a name - Gym, Fingerboard."
+    SlotProblem.TIME_UNREADABLE -> "Finish the time: 1700 becomes 17:00. " +
+        "Empty means some time that day."
     SlotProblem.RULE_UNKNOWN -> "Pick how often it repeats."
     SlotProblem.DATE_UNREADABLE -> "Pick the day it belongs to."
-    SlotProblem.DATE_IN_PAST -> "Plans can only be made for today or later — a day already " +
-        "gone keeps whatever it already shows. Move the date forward, or log what actually " +
-        "happened instead."
+    SlotProblem.DATE_IN_PAST -> "Plans start today. Move the date forward, or log what " +
+        "actually happened instead."
 }
 
 /**

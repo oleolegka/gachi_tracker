@@ -226,7 +226,9 @@ class SlotEditorTest : ScreenTest() {
 
         inBody("18:00").performClick()
         settle()
-        inBody("Clear").performClick()
+        // the clear is an icon INSIDE the field now: a text button beside it changed the
+        // field's width the moment a first digit arrived
+        compose.onNodeWithContentDescription("Clear the time").performClick()
         settle()
 
         listOf("1", "7", "0", "5").forEach { type("Time (optional)", it) }
@@ -274,7 +276,7 @@ class SlotEditorTest : ScreenTest() {
         editor()
 
         compose.onNodeWithText("Add to the plan").assertIsNotEnabled()
-        inBody("Give the session a name, for example Gym or Fingerboard.").assertExists()
+        inBody("Give the session a name - Gym, Fingerboard.").assertExists()
     }
 
     @Test
@@ -309,10 +311,7 @@ class SlotEditorTest : ScreenTest() {
 
         settle()
         addExerciseButton().assertExists()
-        inBody(
-            "Optional. A session with nothing listed is a plan just the same - this is " +
-                "only here for when you already know what you are going to do."
-        ).assertExists()
+        inBody("Optional - a session with nothing listed is a plan just the same.").assertExists()
 
         inBody("Exercises - none planned").performClick()
 
@@ -353,7 +352,11 @@ class SlotEditorTest : ScreenTest() {
         )
 
         inBody("Squat").assertExists()
-        bodyIcon("Take \"Squat\" out of the plan").performClick()
+        // taking a line out is a menu entry now, not a critical-coloured cross flush against
+        // the "move down" arrow (SYSTEM.md, rule 3)
+        bodyIcon("More for \"Squat\"").performClick()
+        settle()
+        compose.onNodeWithText("Take out of the plan").performClick()
         settle()
 
         inBody("Exercises (1)").assertExists()
@@ -372,15 +375,26 @@ class SlotEditorTest : ScreenTest() {
     // them: xyz.oleolegka.gachimuchi.ui.components.TimeField, shared with the rest dialog
     // inside a live workout.
 
+    /**
+     * The VALUE is on every row; the field is on at most one.
+     *
+     * Four rows each carrying a chip, a caption, an mm:ss field and four bump buttons came to
+     * about 210 dp apiece — 840 dp of composition for a plan of four, inside a dialog body
+     * about 360 dp tall. So the number is shown on a chip that opens the field, and nothing
+     * is hidden: a rest that has been chosen reads off the row without a tap.
+     */
     @Test
-    fun `a rest already chosen is shown as mm colon ss, not on a chip`() {
+    fun `a rest already chosen reads off the row with no field open`() {
         editor(
             initial = slot(7, "Gym", "18:00", day.toString())
-                .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
+                .copy(exercises = listOf(PlannedExercise(1, restSec = 150), PlannedExercise(2, null)))
         )
 
-        inBody("2:30").assertExists()
-        inBody("Usual").assertExists()
+        inBody("Rest 2:30").assertExists()
+        inBody("Rest: usual").assertExists()
+        // and no field for either of them until one is asked for
+        compose.onNode(hasSetTextAction() and hasContentDescription("Rest, mm:ss"))
+            .assertDoesNotExist()
     }
 
     /** THE regression: five minutes is past every preset chip this row used to offer. */
@@ -391,6 +405,8 @@ class SlotEditorTest : ScreenTest() {
                 .copy(exercises = listOf(PlannedExercise(1, restSec = null)))
         )
 
+        inBody("Rest: usual").performClick()
+        settle()
         typeTime("Rest, mm:ss", "500")
         inBody("5:00").assertExists()
 
@@ -406,10 +422,12 @@ class SlotEditorTest : ScreenTest() {
                 .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
         )
 
+        inBody("Rest 2:30").performClick()
+        settle()
         inBody("Usual").performClick()
         settle()
 
-        inBody("2:30").assertDoesNotExist()
+        inBody("Rest 2:30").assertDoesNotExist()
         compose.onNodeWithText("Save").performClick()
         settle()
         assertEquals(listOf<Int?>(null), saved?.exercises?.map { it.restSec })
@@ -422,6 +440,8 @@ class SlotEditorTest : ScreenTest() {
                 .copy(exercises = listOf(PlannedExercise(1, restSec = 150)))
         )
 
+        inBody("Rest 2:30").performClick()
+        settle()
         compose.onNodeWithText("+30s").performClick()
         settle()
 
@@ -625,11 +645,21 @@ class SlotEditorTest : ScreenTest() {
         compose.onNodeWithText("Delete this session").assertDoesNotExist()
     }
 
+    /**
+     * Deleting the session lives in the header's menu, and the point of the move is what is
+     * NOT on screen: it used to be a text button at the bottom of the scrolling body, which
+     * is to say directly above "Save" — two words of the same weight, one storing the plan
+     * and the other wiping the series (SYSTEM.md, rule 3).
+     */
     @Test
-    fun `an existing session offers to be deleted, and the offer is wired up`() {
+    fun `an existing session offers to be deleted, from the header menu`() {
         editor(initial = slot(7, "Gym", "18:00", day.toString()))
 
-        inBody("Delete this session").performClick()
+        compose.onNodeWithText("Delete this session").assertDoesNotExist()
+
+        bodyIcon("More for this session").performClick()
+        settle()
+        compose.onNodeWithText("Delete this session").performClick()
 
         settle()
 
