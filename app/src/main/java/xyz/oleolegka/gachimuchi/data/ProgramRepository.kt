@@ -182,7 +182,35 @@ class ProgramRepository(private val db: AppDatabase) {
         id
     }
 
-    suspend fun delete(id: Long) = db.programs().deleteProgram(id)
+    /**
+     * Removes a program, unless it is some exercise's schedule. Returns whether it went.
+     *
+     * ── Why a referenced program cannot be deleted at all ────────────────────────
+     * [save] already refuses to move the CONTENT of a program an exercise is keyed to, on the
+     * owner's rule that a protocol which changes is a new exercise. Deleting the whole row was
+     * the hole left beside that door: the `exercises` row keeps `protocol_program_id` — nothing
+     * cascades, there is no foreign key — so the exercise came out the other side with a
+     * dangling reference, reading as "no protocol", while its `identity_key` still carried the
+     * uid of a program that no longer existed. That is the same identity break the freeze
+     * exists to prevent, only unrecoverable rather than silent.
+     *
+     * The exercise's own removal does NOT free it either, and that is deliberate rather than
+     * overlooked: [xyz.oleolegka.gachimuchi.data.ActivityRepository.deleteExercise] writes an
+     * EVENT and leaves the catalog row in place forever, so a schedule stays referenced for as
+     * long as the phone lives. Getting one out of sight is [setHidden]'s job, which is the
+     * control the library offers in place of the delete button.
+     *
+     * Enforcement here as well as on the screen — see
+     * [xyz.oleolegka.gachimuchi.ui.screens.TimerScreen], which draws no delete button for a
+     * schedule — for the reason [save] gives at greater length: a caller reaching this method
+     * some other way must not be able to walk around the rule. In a transaction so the answer
+     * cannot go stale between the question and the DELETE.
+     */
+    suspend fun delete(id: Long): Boolean = db.withTransaction {
+        if (isReferenced(id)) return@withTransaction false
+        db.programs().deleteProgram(id)
+        true
+    }
 
     /**
      * Whether some exercise's protocol currently IS this program — the live fact [save] freezes

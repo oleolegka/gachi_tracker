@@ -467,10 +467,12 @@ private fun SectionHeader(
  * One row of the library.
  *
  * [scheduleFor] non-empty means this program is some exercise's schedule (decisions §18.15):
- * the row then says WHOSE it is and that its times are fixed. Both belong on the row and not
- * only in the editor, because the freeze was only ever discoverable by opening the program and
- * finding the fields turned into text — by which point the owner had already gone looking for
- * a program he had not written.
+ * the row then says WHOSE it is and that its times are fixed, and it carries no delete button
+ * at all. The first two belong on the row and not only in the editor, because the freeze was
+ * only ever discoverable by opening the program and finding the fields turned into text — by
+ * which point the owner had already gone looking for a program he had not written. The third
+ * is the working agreement's own rule: a forbidden action loses the control that STARTS it,
+ * not the one that finishes it.
  */
 @Composable
 private fun ProgramCard(
@@ -517,7 +519,23 @@ private fun ProgramCard(
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onExport) { Text("Export") }
                 TextButton(onClick = onToggleHidden) { Text(if (program.hidden) "Show" else "Hide") }
-                TextButton(onClick = onDelete) { Text("Delete") }
+                /*
+                 * No delete button on a schedule, rather than a refusal after it is pressed:
+                 * the exercise is keyed to this program's uid and nothing cascades, so deleting
+                 * it would leave that exercise pointing at a row that is gone. The repository
+                 * refuses too (ProgramRepository.delete) — this is the door, that is the lock.
+                 */
+                if (scheduleFor.isEmpty()) {
+                    TextButton(onClick = onDelete) { Text("Delete") }
+                }
+            }
+            if (scheduleFor.isNotEmpty()) {
+                Text(
+                    "No delete: the exercise is built on this schedule. Hide it instead.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
     }

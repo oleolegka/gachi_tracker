@@ -243,6 +243,40 @@ class TimerScreenTest : ScreenTest() {
             .assertIsDisplayed()
     }
 
+    /**
+     * The forbidden action loses the control that STARTS it: an exercise is keyed to its
+     * schedule's uid and nothing cascades, so there must be no delete button to press. The
+     * repository refuses as well (`ProgramFreezeTest`), but a refusal after a press is not a
+     * prohibition — the working agreement's own rule.
+     */
+    @Test
+    fun `a schedule row offers no delete button, and says why`() {
+        timer(
+            on = true,
+            programs = listOf(scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+        )
+
+        compose.onNodeWithText("Delete").assertDoesNotExist()
+        compose.onNodeWithText("No delete: the exercise is built on this schedule. Hide it instead.")
+            .assertIsDisplayed()
+        // and the way out of the list is still offered
+        compose.onNodeWithText("Hide").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the owner's own program keeps its delete button`() {
+        timer(
+            on = true,
+            programs = listOf(repeaters, scheduleOfHangs),
+            scheduleOwners = mapOf(7L to listOf("Hangs 20 mm")),
+        )
+
+        // exactly one Delete on the screen: the one on the program nobody is keyed to
+        compose.onNodeWithText("Delete").performClick()
+        assertEquals(repeaters.id, deleted)
+    }
+
     @Test
     fun `a library with no schedules in it looks exactly as it did`() {
         timer(on = true, programs = listOf(repeaters))

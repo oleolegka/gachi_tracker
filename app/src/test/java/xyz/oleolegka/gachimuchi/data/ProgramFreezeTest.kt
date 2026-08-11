@@ -151,6 +151,49 @@ class ProgramFreezeTest {
         assertEquals("Fingers", programRepo.programById(programId)!!.category)
     }
 
+    // --- deleting: the hole beside the freeze --------------------------------------------
+
+    @Test
+    fun `a program that is an exercise's schedule is not deleted`() = runTest {
+        val exerciseId = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+        val programId = activityRepo.exercise(exerciseId)!!.protocolProgramId!!
+
+        assertFalse("the refusal is the answer, not an exception", programRepo.delete(programId))
+
+        // nothing cascades from `programs` to `exercises`, so a delete here would have left the
+        // exercise pointing at a row that is gone while its identity_key still named its uid
+        assertEquals(programId, activityRepo.exercise(exerciseId)!!.protocolProgramId)
+        val after = programRepo.programById(programId)
+        assertEquals(7, after!!.groups.single().blocks.single().workSec)
+        val ref = activityRepo.toRef(activityRepo.exercise(exerciseId)!!)
+        assertEquals(7.0, ref.workSec!!, 1e-9)
+    }
+
+    @Test
+    fun `a program nobody's schedule it is goes as it always did`() = runTest {
+        val id = programRepo.save(minimal(30, 30))
+
+        assertTrue(programRepo.delete(id))
+        assertEquals(null, programRepo.programById(id))
+    }
+
+    /**
+     * Deleting the EXERCISE does not free its schedule either, and that is worth pinning down
+     * rather than discovering later: `deleteExercise` writes an event and leaves the catalog
+     * row where it is, so the reference survives and the schedule stays undeletable for good.
+     * Hiding it is the way out — see the library's own row.
+     */
+    @Test
+    fun `deleting the exercise does not release its schedule`() = runTest {
+        val exerciseId = activityRepo.ensureExercise("Hangs", ExerciseForm.HOLD, workSec = 7.0, restSec = 3.0)
+        val programId = activityRepo.exercise(exerciseId)!!.protocolProgramId!!
+
+        activityRepo.deleteExercise(activityRepo.exercise(exerciseId)!!)
+
+        assertTrue(programRepo.isReferenced(programId))
+        assertFalse(programRepo.delete(programId))
+    }
+
     // --- hiding: presentation only, the protocol keeps working ---------------------------
 
     @Test
