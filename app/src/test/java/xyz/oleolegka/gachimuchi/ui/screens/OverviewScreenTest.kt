@@ -135,8 +135,10 @@ class OverviewScreenTest : ScreenTest() {
             )
         }
 
-        // the whole phrase, separator included - not "0 entries" in a quieter colour
-        compose.onNodeWithText("entries", substring = true).assertDoesNotExist()
+        // the whole phrase, separator included - not "0 entries" in a quieter colour.
+        // Asked of "0 entries" and not of "entries": the chart legend below the hero says
+        // "figure: last entries", and that word is not the one this test is about.
+        compose.onNodeWithText("0 entries", substring = true).assertDoesNotExist()
         compose.onNodeWithText("1 more than the week before").assertExists()
         // and the session itself is still counted, which is the reason the line looked odd
         compose.onNodeWithText("days with training").assertExists()
