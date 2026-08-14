@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -33,6 +34,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -80,16 +83,19 @@ import xyz.oleolegka.gachimuchi.domain.REPEAT_WEEKLY
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.domain.SlotProblem
+import xyz.oleolegka.gachimuchi.domain.asPlanned
 import xyz.oleolegka.gachimuchi.domain.deletionWarning
 import xyz.oleolegka.gachimuchi.domain.formatDurationSec
 import xyz.oleolegka.gachimuchi.domain.formatTime
 import xyz.oleolegka.gachimuchi.domain.formatTimeDigits
 import xyz.oleolegka.gachimuchi.domain.isBackdated
+import xyz.oleolegka.gachimuchi.domain.lastWorkoutNamed
 import xyz.oleolegka.gachimuchi.domain.newSlotDraft
 import xyz.oleolegka.gachimuchi.domain.nextOccurrence
 import xyz.oleolegka.gachimuchi.domain.parseDurationText
 import xyz.oleolegka.gachimuchi.domain.parseMinuteOfDay
 import xyz.oleolegka.gachimuchi.domain.parseSlotTime
+import xyz.oleolegka.gachimuchi.domain.pastWorkoutNames
 import xyz.oleolegka.gachimuchi.domain.problem
 import xyz.oleolegka.gachimuchi.domain.problemText
 import xyz.oleolegka.gachimuchi.domain.repeatLabel
@@ -118,8 +124,16 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
  *
  * ── Defaults, so the common case is two taps ────────────────────────────────────
  * It opens as a one-off on the day that was selected, with no time — the cheapest thing a
- * plan can be. A name is the only thing that must be typed, and the names already in the
- * plan are offered as chips, so the second "Gym" is a tap.
+ * plan can be. A name is the only thing that must be typed, and it does not have to be typed
+ * either: the field carries a dropdown of names already used, so the second "Gym" is a tap.
+ *
+ * ── The name is a way to fill the session in, not just a label ──────────────────
+ * That dropdown is the same control Today's "Start a workout" has ([NameDialog]) and it is here
+ * for the same reason: a name a WORKOUT has carried before resolves into a composition, so
+ * picking "Push day" plans what Push day actually was last time ([lastWorkoutNamed],
+ * [asPlanned]). Planning is where that is worth most and was the one screen that could not ask
+ * for it — reported by the owner, 2026-08-14. See `pickName` below for the two rules it keeps:
+ * nothing already picked is overwritten, and a name typed by hand fills nothing.
  *
  * ── The date field is where a weekly plan gets its weekday ──────────────────────
  * The model has no "repeat on Tue and Thu": the anchor date carries the weekday and the
@@ -172,6 +186,11 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
 fun SlotEditorDialog(
     initial: Slot?,
     day: LocalDate,
+    /**
+     * Names this PLAN already uses, most recent first. They go under the past workout names in
+     * the one dropdown on the name field — see `offeredNames`, and the header for why the two
+     * lists are ordered the way they are rather than merged blind.
+     */
     suggestions: List<String>,
     today: LocalDate,
     /** The catalog and the journal behind it: what the exercise picker searches through. */
@@ -217,6 +236,56 @@ fun SlotEditorDialog(
     fun setTime(text: String) {
         draft = draft.copy(timeText = text)
         timeField = TextFieldValue(text, TextRange(text.length))
+    }
+
+    /*
+     * The names on offer, and the reason this dialog now has a dropdown instead of a strip of
+     * chips — reported by the owner, 2026-08-14: "когда добавляешь из календаря, там просто нет
+     * опции дропдауна при написании имени".
+     *
+     * Today's "Start a workout" has offered past workout names for a while ([NameDialog]), and
+     * the point of it is not the saved typing: a name that a workout has carried before RESOLVES
+     * INTO A COMPOSITION ([lastWorkoutNamed] + [asPlanned]), so "Push day" fills the session with
+     * what Push day was last time. Planning is the place that wants that most and was the one
+     * place that could not ask for it.
+     *
+     * PAST WORKOUTS COME FIRST, then names this plan already uses. The order is the difference
+     * between the two: a workout name pulls a composition in, a plan-only name is a shortcut into
+     * the field and nothing more. Both are in one list because one field takes one control, and
+     * because a name is frequently both.
+     */
+    val offeredNames = remember(state.events, suggestions) {
+        (pastWorkoutNames(state.events) + suggestions).distinct()
+    }
+    var namesOpen by remember { mutableStateOf(false) }
+    /** What the last pick did to the composition, said under the field rather than left to guess. */
+    var pickNote by remember(initial, day) { mutableStateOf<String?>(null) }
+
+    /*
+     * NOTHING ALREADY PICKED IS EVER OVERWRITTEN. Filling an empty plan is a shortcut; replacing
+     * a composition somebody has just built by hand, because they then went back and touched the
+     * name field, is losing their work — and the plan editor has no undo to lose it into.
+     *
+     * Typing the same name by hand does NOT fill: this fires on a deliberate pick from the list.
+     * That is a real difference from Today, where the name is resolved at the moment the workout
+     * begins and how it was typed makes no difference — here the composition becomes part of the
+     * plan being edited, visible on screen, so it happens when it is asked for.
+     */
+    fun pickName(name: String) {
+        draft = draft.copy(name = name)
+        val past = lastWorkoutNamed(state.events, name)?.let(::asPlanned).orEmpty()
+        pickNote = when {
+            past.isEmpty() -> null
+            draft.exercises.isNotEmpty() ->
+                "The last \"$name\" had ${past.size} exercises - the ones already picked here were left alone."
+            else -> {
+                draft = draft.copy(exercises = past)
+                // opened, because a list that filled itself behind a collapsed line is a change
+                // nobody was shown
+                exercisesOpen = true
+                "Filled from the last \"$name\": ${past.size} exercises."
+            }
+        }
     }
 
     if (clockOpen) {
@@ -329,41 +398,57 @@ fun SlotEditorDialog(
                             .padding(horizontal = Spacing.Cards, vertical = Spacing.Block),
                         verticalArrangement = Arrangement.spacedBy(Spacing.Block),
                     ) {
-                        OutlinedTextField(
-                            value = draft.name,
-                            onValueChange = { draft = draft.copy(name = it) },
-                            label = { Text("Session name") },
-                            placeholder = { Text("Gym") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        )
-
-                        // the names already in the plan: a second "Gym" should not be typed
-                        // again. This one stays a strip, because the number of names is not
-                        // known in advance — unlike the six quick times below it
-                        if (suggestions.isNotEmpty()) {
-                            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                                Text(
-                                    "Already in the plan",
-                                    fontSize = TextSize.Caption,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = colors.inkSecondary,
-                                )
-                                Row(
-                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Line),
-                                ) {
-                                    suggestions.forEach { name ->
-                                        SiblingChip(
-                                            text = name,
-                                            selected = draft.name.trim().equals(name, ignoreCase = true),
-                                            accent = colors.accent,
-                                            onClick = { draft = draft.copy(name = name) },
-                                        )
+                        /*
+                         * The same control the "Start a workout" dialog carries on Today: the
+                         * field, and a dropdown of names on the end of it. It replaced a strip of
+                         * chips headed "Already in the plan" — two controls for one answer, and
+                         * the chips could only ever offer the plan's own names.
+                         */
+                        Box {
+                            OutlinedTextField(
+                                value = draft.name,
+                                onValueChange = { draft = draft.copy(name = it) },
+                                label = { Text("Session name") },
+                                placeholder = { Text("Gym") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                                trailingIcon = if (offeredNames.isEmpty()) {
+                                    null
+                                } else {
+                                    {
+                                        IconButton(onClick = { namesOpen = true }) {
+                                            Icon(
+                                                Icons.Filled.ArrowDropDown,
+                                                contentDescription = "Plan like a past session",
+                                                tint = colors.inkSecondary,
+                                            )
+                                        }
                                     }
+                                },
+                            )
+                            DropdownMenu(
+                                expanded = namesOpen,
+                                onDismissRequest = { namesOpen = false },
+                            ) {
+                                offeredNames.forEach { name ->
+                                    DropdownMenuItem(
+                                        text = { Text(name) },
+                                        onClick = {
+                                            namesOpen = false
+                                            pickName(name)
+                                        },
+                                    )
                                 }
                             }
+                        }
+
+                        pickNote?.let { note ->
+                            Text(
+                                note,
+                                fontSize = TextSize.Caption,
+                                color = colors.inkSecondary,
+                            )
                         }
 
                         OutlinedTextField(

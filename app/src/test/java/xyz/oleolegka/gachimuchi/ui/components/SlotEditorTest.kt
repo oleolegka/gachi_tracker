@@ -23,11 +23,14 @@ import org.junit.Test
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
 import xyz.oleolegka.gachimuchi.domain.PlannedExercise
+import xyz.oleolegka.gachimuchi.domain.REPEAT_NONE
 import xyz.oleolegka.gachimuchi.domain.Slot
 import xyz.oleolegka.gachimuchi.domain.SlotDraft
 import xyz.oleolegka.gachimuchi.ui.ScreenTest
+import xyz.oleolegka.gachimuchi.ui.Journal
 import xyz.oleolegka.gachimuchi.ui.UiState
 import xyz.oleolegka.gachimuchi.ui.exerciseEntity
+import xyz.oleolegka.gachimuchi.ui.exerciseRef
 import xyz.oleolegka.gachimuchi.ui.protocolProgram
 import xyz.oleolegka.gachimuchi.ui.protocolProgramIdFor
 import xyz.oleolegka.gachimuchi.ui.slot
@@ -69,7 +72,11 @@ class SlotEditorTest : ScreenTest() {
     private var deleted = 0
     private var dismissed = 0
 
-    private fun editor(initial: Slot? = null, suggestions: List<String> = emptyList()) {
+    private fun editor(
+        initial: Slot? = null,
+        suggestions: List<String> = emptyList(),
+        state: UiState = this.state,
+    ) {
         screen {
             SlotEditorDialog(
                 initial = initial,
@@ -664,5 +671,113 @@ class SlotEditorTest : ScreenTest() {
         settle()
 
         assertEquals(1, deleted)
+    }
+
+    // --- planning like a past workout --------------------------------------------------------
+
+    /**
+     * A journal holding one finished workout called "Push day", made of a bench press and a
+     * squat — the thing a plan under that name should be able to be filled from.
+     */
+    private fun withPushDay(): UiState {
+        val journal = Journal()
+        val past = "2026-08-01"
+        val id = journal.startWorkout(past, at = "18:00", name = "Push day")
+        journal.strengthSet(exerciseRef(1, "Bench press"), past, at = "18:10", workoutId = id)
+        journal.strengthSet(exerciseRef(2, "Squat"), past, at = "18:30", workoutId = id)
+        journal.finishWorkout(id, past, at = "19:00")
+        return UiState(events = journal.events, exercises = catalog, loading = false)
+    }
+
+    private fun openNames() {
+        compose.onNodeWithContentDescription("Plan like a past session").performClick()
+        settle()
+    }
+
+    /**
+     * THE REPORTED GAP, from the owner on 2026-08-14: "когда добавляешь из календаря, там просто
+     * нет опции дропдауна при написании имени".
+     *
+     * The dropdown is not the point on its own — what it buys is the composition. Today's "Start
+     * a workout" has resolved a past name into the exercises of the last workout under it since
+     * §13.9; planning could not ask the same question, so a weekly "Push day" had to be rebuilt
+     * by hand every time it was planned.
+     */
+    @Test
+    fun `picking a past workout name fills the session with what that workout was`() {
+        editor(state = withPushDay())
+
+        openNames()
+        compose.onNodeWithText("Push day").performClick()
+        settle()
+
+        // said out loud, because a list that filled itself behind a collapsed line is a change
+        // nobody was shown
+        compose.onNodeWithText("Filled from the last \"Push day\": 2 exercises.").assertIsDisplayed()
+        compose.onNodeWithText("Bench press").assertIsDisplayed()
+        compose.onNodeWithText("Squat").assertIsDisplayed()
+
+        compose.onNodeWithText("Add to the plan").performClick()
+        assertEquals(listOf(1L, 2L), saved?.exercises?.map { it.exerciseId })
+        assertEquals("Push day", saved?.name)
+    }
+
+    /**
+     * Nothing already picked is overwritten. The plan editor has no undo, so a shortcut that
+     * could replace a composition built by hand — because somebody went back and touched the
+     * name field — is a shortcut that loses work.
+     */
+    @Test
+    fun `a session that already has exercises keeps them when a past name is picked`() {
+        editor(
+            initial = Slot(
+                id = 7,
+                name = "Legs",
+                atTime = "18:00",
+                repeatRule = REPEAT_NONE,
+                anchorDate = day.toString(),
+                exercises = listOf(PlannedExercise(2, 90)),
+            ),
+            state = withPushDay(),
+        )
+
+        openNames()
+        compose.onNodeWithText("Push day").performClick()
+        settle()
+
+        compose.onNodeWithText(
+            "The last \"Push day\" had 2 exercises - the ones already picked here were left alone."
+        ).assertIsDisplayed()
+        compose.onNodeWithText("Bench press").assertDoesNotExist()
+
+        compose.onNodeWithText("Save").performClick()
+        assertEquals(listOf(2L), saved?.exercises?.map { it.exerciseId })
+    }
+
+    /**
+     * The plan's own names are in the same list, under the workout names — one field takes one
+     * control. A name that no workout ever carried resolves to nothing and simply fills the
+     * field, which is all the chips it replaced ever did.
+     */
+    @Test
+    fun `a name used only by the plan is offered too, and pulls nothing in`() {
+        editor(suggestions = listOf("Stretching"), state = withPushDay())
+
+        openNames()
+        compose.onNodeWithText("Stretching").performClick()
+        settle()
+
+        compose.onNodeWithText("Exercises - none planned").assertIsDisplayed()
+        compose.onNodeWithText("Add to the plan").performClick()
+        assertEquals("Stretching", saved?.name)
+        assertEquals(emptyList<Long>(), saved?.exercises?.map { it.exerciseId })
+    }
+
+    /** With no name ever used, there is nothing to drop down and no icon offering to. */
+    @Test
+    fun `an empty journal and an empty plan leave the field without a dropdown`() {
+        editor()
+
+        compose.onNodeWithContentDescription("Plan like a past session").assertDoesNotExist()
     }
 }
