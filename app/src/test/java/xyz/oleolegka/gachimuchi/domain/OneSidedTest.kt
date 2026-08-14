@@ -77,6 +77,65 @@ class OneSidedTest {
         assertNull(holdSetOf(ref, "2026-08-01", addedKg = -10.0).side)
     }
 
+    // --- a timed stretch has sides too -------------------------------------------------
+
+    /**
+     * [Duration] joined [Sided] on 2026-08-14, reported from a phone as the one category with no
+     * way to split left from right. The field is optional and new, so what matters is that it
+     * behaves exactly as the older two do — stored as the same plain word, refused when it is
+     * neither hand, and simply absent on everything written before it existed.
+     */
+    @Test
+    fun `a duration carries a side, and an old one carries none`() {
+        val written = Duration(
+            activity = "Side plank", durationSec = 45, side = HoldSide.RIGHT.code,
+            exerciseId = 7, opDate = "2026-08-01",
+        ).toPayload()
+        assertTrue(written.contains("\"side\":\"right\""))
+        assertEquals(HoldSide.RIGHT, (formFromEvent(TYPE_DURATION, written) as Duration).sideOf)
+
+        // every duration in every journal on every phone predates the field, and reads clean
+        val old = """{"activity":"Plank","duration_sec":60,"op_date":"2026-08-01",""" +
+            """"activity_key":"plank"}"""
+        assertNull((formFromEvent(TYPE_DURATION, old) as Duration).sideOf)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            Duration(activity = "Plank", durationSec = 60, side = "both", opDate = "2026-08-01")
+        }
+    }
+
+    @Test
+    fun `the duration builder writes the side the card picked`() {
+        val ref = ExerciseRef(id = 7, name = "Side plank", form = ExerciseForm.DURATION, oneSided = true)
+        assertEquals("left", durationOf(ref, "2026-08-01", durationSec = 45, side = HoldSide.LEFT).side)
+        // and, exactly as holdSetOf does, it does not throw when the card failed to say
+        assertNull(durationOf(ref, "2026-08-01", durationSec = 45).side)
+    }
+
+    /**
+     * The point of the field: the two sides land on two cards, which is what gives each its own
+     * rest, its own history and its own place on the screen. This is the mechanism that was
+     * already general — [Workout] never asked what FORM an entry was, only whether it named a
+     * side — so what is pinned here is that a duration now reaches it.
+     */
+    @Test
+    fun `two sides of a duration exercise are two cards, not one`() {
+        val stretch = { side: HoldSide? ->
+            Duration(
+                activity = "Side plank", durationSec = 45, side = side?.code,
+                exerciseId = 7, opDate = "2026-08-01",
+            )
+        }
+        val day = looseWorkout(
+            journal(stretch(HoldSide.LEFT), stretch(HoldSide.RIGHT)),
+            "2026-08-01",
+            emptyList(),
+        ) { ExerciseLink.ofId(it) }
+
+        assertEquals(2, day.exercises.size)
+        assertEquals(listOf(HoldSide.LEFT, HoldSide.RIGHT), day.exercises.map { it.side })
+    }
+
     // --- each hand competes with itself ------------------------------------------------
 
     @Test

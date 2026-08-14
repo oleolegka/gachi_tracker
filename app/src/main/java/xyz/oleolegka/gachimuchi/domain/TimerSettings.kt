@@ -215,9 +215,26 @@ fun ceilSeconds(ms: Long): Int = ((ms + 999) / 1000).toInt().coerceAtLeast(0)
  * The rightmost two digits are always seconds; whatever is left of them is minutes, unbounded
  * — a rest can run past a hundred minutes without the field running out of room the way a
  * fixed HH:MM one would.
+ *
+ * ── Only the SIGNIFICANT digits are the register ────────────────────────────────
+ * Leading zeros are dropped before anything else happens, which is two fixes in one line.
+ *
+ * Reported from a phone, 2026-08-14: a field showing "000:50". Zeros pile up in front of the
+ * value whenever a digit lands anywhere but at the end — a pasted value, or a caret left
+ * mid-text, which is the bug [xyz.oleolegka.gachimuchi.ui.components.TimeField] had. Nothing
+ * was ever stored WRONG ([parseDurationText] read "000:50" as fifty seconds all along); it was
+ * unreadable, and it made the field look broken to the person typing in it.
+ *
+ * The other half is emptying the field. A register that keeps its zeros cannot be backspaced
+ * out: "0:03" loses its 3, the remaining "00" formats straight back to "0:00", and the next
+ * backspace has nothing left to take — the field jams one keystroke short of empty. With the
+ * zeros gone the digits run out honestly and the field clears.
+ *
+ * Seconds keep their own leading zero, because "1:5" is not five seconds past a minute in any
+ * notation — that zero is part of the shape, not a digit anybody typed.
  */
 fun formatDurationDigits(text: String): String {
-    val digits = text.filter { it.isDigit() }
+    val digits = text.filter { it.isDigit() }.trimStart('0')
     if (digits.isEmpty()) return ""
     val secDigits = digits.takeLast(2).padStart(2, '0')
     val minDigits = digits.dropLast(2)

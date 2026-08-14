@@ -253,10 +253,16 @@ fun cardioOf(
     opDate = opDate,
 )
 
-fun durationOf(exercise: ExerciseRef, opDate: String, durationSec: Int): Duration =
+fun durationOf(
+    exercise: ExerciseRef,
+    opDate: String,
+    durationSec: Int,
+    /** Which side this was held with — same contract as [holdSetOf]'s, including not validating it. */
+    side: HoldSide? = null,
+): Duration =
     Duration(
-        activity = exercise.name, durationSec = durationSec, exerciseId = exercise.id,
-        exerciseUid = exercise.uid, opDate = opDate,
+        activity = exercise.name, durationSec = durationSec, side = side?.code,
+        exerciseId = exercise.id, exerciseUid = exercise.uid, opDate = opDate,
     )
 
 fun tickOf(exercise: ExerciseRef, opDate: String): Tick =

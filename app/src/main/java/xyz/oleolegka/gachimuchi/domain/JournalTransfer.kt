@@ -525,6 +525,9 @@ private fun eventRow(
     workoutLabel: (WorkoutRef?) -> String,
 ): List<String> {
     val loaded = form as? LoadedSet
+    // wider than [loaded] on purpose: a timed stretch has sides and carries no weight (see
+    // [Sided]), so the readable "side" column has to come off the narrower question
+    val sided = form as? Sided
     val strength = form as? StrengthSet
     val hold = form as? HoldSet
     val duration = form as? Duration
@@ -554,7 +557,7 @@ private fun eventRow(
         "workout" to workoutLabel(ev.workoutRef()),
         "exercise" to exerciseName,
         "form" to (FORM_TITLE_BY_TYPE[ev.type] ?: ""),
-        "side" to (loaded?.sideOf?.code ?: ""),
+        "side" to (sided?.sideOf?.code ?: ""),
         "weight_kg" to num(strength?.weightKg),
         "added_kg" to num(loaded?.addedKg),
         "own_weight" to bool(loaded?.ownWeight),

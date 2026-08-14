@@ -293,7 +293,7 @@ data class ExerciseEntity(
      *
      * ── Why the flag is here and the side is on the set ─────────────────────────
      * Which side a particular set used is a fact about that set
-     * ([xyz.oleolegka.gachimuchi.domain.LoadedSet.side]). Whether the exercise is done one
+     * ([xyz.oleolegka.gachimuchi.domain.Sided.side]). Whether the exercise is done one
      * limb at a time is a fact about the exercise, and it has to be answerable BEFORE any set
      * exists — the entry card has to know to ask which side, and the timer has to know to
      * announce the change of sides between sets. Neither can wait for a set to be logged.

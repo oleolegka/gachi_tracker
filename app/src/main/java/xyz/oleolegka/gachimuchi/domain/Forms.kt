@@ -231,7 +231,7 @@ enum class ExerciseForm(val code: Int, val eventType: String, val title: String)
  *
  * The codes are the strings stored in the payload; nothing else may be stored there. A value
  * that is neither is a corrupt row and is refused by both forms that carry it
- * ([LoadedSet.side]), which costs that row (the readers skip what will not parse — see
+ * ([Sided.side]), which costs that row (the readers skip what will not parse — see
  * [formFromEventOrNull]). That is deliberate: quietly accepting an unknown side would file it
  * with the sets that named no side at all, which is the one answer that is certainly wrong.
  */
@@ -300,7 +300,7 @@ private fun requireKey(name: String, raw: String): String =
     normPhrase(raw) ?: throw IllegalArgumentException("$name: name is empty after normalization ($raw)")
 
 /**
- * Validates [LoadedSet.side]: one of [HoldSide]'s codes, or null. Shared by every form that
+ * Validates [Sided.side]: one of [HoldSide]'s codes, or null. Shared by every form that
  * carries the field, so the two cannot drift into accepting different strings.
  */
 private fun requireSideOrNull(side: String?): String? {
@@ -336,6 +336,45 @@ sealed interface ActivityForm {
 }
 
 /**
+ * An entry that can say WHICH SIDE of the body it was done with — [StrengthSet], [HoldSet] and
+ * [Duration].
+ *
+ * ── Why this is not simply part of [LoadedSet] ──────────────────────────────────
+ * It was, until 2026-08-14, and that was an accident of history twice over: the side started on
+ * [HoldSet] because every one-sided exercise this app tracked began on a fingerboard, then moved
+ * up to [LoadedSet] when a pistol squat turned out to have sides too. Both times it landed on
+ * the interface that happened to be there — one that means "this entry carries a WEIGHT", which
+ * has nothing to do with having two of something.
+ *
+ * The bill came from a phone, 2026-08-14: "нет возможности сделать разделение нагрузки на
+ * право/лево для категории duration, хотя в strength это доступно". A timed stretch is held one
+ * leg at a time as ordinarily as a hang is held one arm at a time, and [Duration] carries no
+ * weight and never will, so under the old arrangement the answer had nowhere to live.
+ *
+ * Splitting the question out is what lets the machinery stay untouched: every reader that asks
+ * "which side is this" already went through one cast, and it now casts to this instead of to
+ * [LoadedSet] — two cards in a workout, a rest floor per card, a record per side, all unchanged
+ * (see [HoldSide] for what the split is FOR).
+ *
+ * [Cardio], [Tick] and [Bodyweight] stay out: a run and a weigh-in have no sides, and a check-in
+ * records that something happened at all, which is not a thing one limb does.
+ */
+sealed interface Sided : ActivityForm {
+    /**
+     * Which side of the body this entry was done with — one of [HoldSide]'s codes, or null for
+     * two-limbed work, or for an entry that failed to say. See [HoldSide] for why this exists.
+     *
+     * A String rather than the enum because the payload is the stored format and it stays
+     * readable by anything that does not know this app's Kotlin; [sideOf] is how the domain
+     * asks the question.
+     */
+    val side: String?
+
+    /** The side as the domain compares it; null both for "both sides" and for "not said". */
+    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
+}
+
+/**
  * Common interface of the two forms that carry a WEIGHT — [StrengthSet] and [HoldSet]. The five
  * members below are identical in name and type on both (see each field's own doc, on either
  * form, for what it means); this interface exists so that code which only cares "is this set
@@ -344,7 +383,7 @@ sealed interface ActivityForm {
  * model that touches this interface turns every one of those call sites into a compile error
  * instead of a branch nobody remembered to update.
  */
-sealed interface LoadedSet : ActivityForm {
+sealed interface LoadedSet : Sided {
     val addedKg: Double?
     val ownWeight: Boolean
     val bodyweightKg: Double?
@@ -359,24 +398,6 @@ sealed interface LoadedSet : ActivityForm {
      */
     val incomplete: Boolean
 
-    /**
-     * Which side of the body this set was done with — one of [HoldSide]'s codes, or null for
-     * two-limbed work, or for a set that failed to say. See [HoldSide] for why this exists.
-     *
-     * USED TO LIVE ON [HoldSet] ALONE, because every one-sided exercise this app tracked
-     * started life on a fingerboard. That was never a decision that a pistol squat or a
-     * one-arm row do not have a side — nobody had asked the question yet. The mechanism this
-     * leans on (two workout cards, a rest floor per card, a record per side) was already
-     * general; only the field was narrower than it needed to be.
-     *
-     * A String rather than the enum because the payload is the stored format and it stays
-     * readable by anything that does not know this app's Kotlin; [sideOf] is how the domain
-     * asks the question.
-     */
-    val side: String?
-
-    /** The side as the domain compares it; null both for "both sides" and for "not said". */
-    val sideOf: HoldSide? get() = HoldSide.fromCode(side)
 }
 
 /**
@@ -476,7 +497,7 @@ data class StrengthSet(
     @SerialName("incomplete") override val incomplete: Boolean = false,
     /**
      * Which side this set was done with, for an exercise trained one limb at a time — a
-     * pistol squat, a one-arm row, a single-leg deadlift. See [LoadedSet.side].
+     * pistol squat, a one-arm row, a single-leg deadlift. See [Sided.side].
      */
     @SerialName("side") override val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
@@ -556,7 +577,7 @@ data class HoldSet(
      */
     @SerialName("incomplete") override val incomplete: Boolean = false,
     /**
-     * Which hand (or foot) this set was done with — see [LoadedSet.side].
+     * Which hand (or foot) this set was done with — see [Sided.side].
      *
      * Null is the ordinary answer for two-handed work and the ordinary answer for every set
      * written before this field existed. On an exercise marked one-sided it is neither: it is
@@ -596,15 +617,27 @@ data class HoldSet(
 data class Duration(
     @SerialName("activity") val activity: String,
     @SerialName("duration_sec") val durationSec: Int,
+    /**
+     * Which side this was, on an exercise held one limb at a time — see [Sided], which this
+     * form joined on 2026-08-14 after a report that duration was the one category with no way
+     * to split left from right.
+     *
+     * Absent from every entry written before that date, and absent from every two-legged
+     * stretch after it, which is the same null and reads the same way everywhere: the entry
+     * does not name a side. Nothing had to migrate — an optional field that nobody wrote is
+     * indistinguishable from an optional field that did not exist.
+     */
+    @SerialName("side") override val side: String? = null,
     @SerialName("exercise_id") override val exerciseId: Long? = null,
     @SerialName("exercise_uid") override val exerciseUid: String? = null,
     @SerialName("op_date") override val opDate: String,
     @SerialName("activity_key") val activityKey: String = requireKey("activity", activity),
-) : ActivityForm {
+) : Sided {
     override val type: String get() = TYPE_DURATION
     override val key: String get() = activityKey
 
     init {
+        requireSideOrNull(side)
         requirePos("duration_sec", durationSec)
         requireIsoDate(opDate)
     }

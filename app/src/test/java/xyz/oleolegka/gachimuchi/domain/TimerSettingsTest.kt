@@ -248,6 +248,13 @@ class TimerSettingsTest {
         assertEquals("12:34", formatDurationDigits("1234"))
         // a pasted "1:30" reads the same as the digits alone: the colon carries no meaning
         assertEquals("1:30", formatDurationDigits("1:30"))
+        // the value from the phone, 2026-08-14: zeros piled up in front of a fifty-second rest.
+        // It always READ as fifty seconds; now it also looks like it
+        assertEquals("0:50", formatDurationDigits("000:50"))
+        // and the zeros are not a value of their own, so a field backspaced down to them empties
+        // instead of jamming on "0:00" for ever
+        assertEquals("", formatDurationDigits("00"))
+        assertEquals("", formatDurationDigits("0:00"))
     }
 
     @Test

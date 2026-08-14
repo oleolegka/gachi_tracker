@@ -33,6 +33,7 @@ import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.LoadedSet
 import xyz.oleolegka.gachimuchi.domain.OrderedCard
 import xyz.oleolegka.gachimuchi.domain.ProgramStart
+import xyz.oleolegka.gachimuchi.domain.Sided
 import xyz.oleolegka.gachimuchi.domain.asPlanned
 import xyz.oleolegka.gachimuchi.domain.lastWorkoutNamed
 import xyz.oleolegka.gachimuchi.domain.pastWorkoutNames
@@ -303,7 +304,7 @@ class MainViewModel(
              * [LoadedSet] ever carries a side; every other form floors by exercise id alone,
              * side always null, exactly as before this existed.
              */
-            val side = (form as? LoadedSet)?.sideOf
+            val side = (form as? Sided)?.sideOf
             if (live && timer.enabled.value && startsRest(form) && exerciseId != null) {
                 timer.floors.floors.value.firstOrNull { it.exerciseId == exerciseId && it.side == side?.code }
                     ?.actualRestSec(System.currentTimeMillis())

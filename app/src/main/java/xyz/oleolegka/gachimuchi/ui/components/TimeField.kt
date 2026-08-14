@@ -11,14 +11,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +65,28 @@ import xyz.oleolegka.gachimuchi.ui.theme.TextSize
  * value gets the full width and each button gets a quarter of it, which is well past the
  * 48dp a thumb needs.
  *
+ * ── The caret is pinned to the END, and that is the whole point ──────────────
+ * Reported from a phone, 2026-08-14: "когда сама пишу время, вводит символы в рандомное, а не
+ * желаемое, место", with a screenshot of a field reading "000:50".
+ *
+ * The field held a plain `String` and rewrote it on every keystroke, which leaves the caret
+ * wherever the platform last put it — a tap into the middle of "0:50", most often. The next
+ * digit then goes in at the tap rather than at the end, so the register fills from the WRONG
+ * side and zeros pile up in front. Two of those is exactly the "000:50" in the screenshot.
+ *
+ * So the value is held as a `TextFieldValue` and the caret goes to the end after every change.
+ * There is nothing arbitrary about that position: a register filled from the right has exactly
+ * one place where a keystroke means anything, and the end is it. Typing anywhere adds the ones
+ * of seconds and shifts everything left; backspace takes the last digit and shifts everything
+ * right. A caret parked mid-text can only make one of those two lie.
+ *
+ * This is NOT what the time-of-day field next door does ([SlotEditorDialog] keeps its caret
+ * where the digits are, via `caretAfterDigits`), and the difference is real rather than an
+ * oversight: that field types LEFT to right into a fixed HH:MM shape and never invents a digit,
+ * so "how many digits are in front of the caret" survives its rewrite. This one pads the
+ * seconds and can add a minute, so the same count means something different before and after —
+ * a caret rebuilt from it walks backwards ("1", "3", "0" lands on 3:01, not 1:30).
+ *
  * ── The ceiling is the caller's, not this field's ────────────────────────────
  * [parseDurationText] refuses nothing but a broken value (seconds past 59); how HIGH a typed
  * value is allowed to go is a question with a different answer for a rest (a day,
@@ -84,6 +112,12 @@ fun TimeField(
     val colors = LocalGachiColors.current
     val keyboard = LocalSoftwareKeyboardController.current
 
+    // the caret is this field's own business — see the header for why an offset cannot
+    // survive the rewrite this field does on every keystroke
+    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    // a bump, or any other caller writing from outside, has the last word and lands at the end
+    if (field.text != value) field = TextFieldValue(value, TextRange(value.length))
+
     fun bump(deltaSec: Int) {
         val now = parseDurationText(value) ?: 0
         onValueChange(formatDurationSec((now + deltaSec).coerceAtLeast(minSec)))
@@ -94,10 +128,14 @@ fun TimeField(
             Text(label, style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
         }
         OutlinedTextField(
-            value = value,
-            // reformatted on every keystroke, not read back from the field's own cursor:
-            // see the class KDoc for why a new digit is always the ones of seconds
-            onValueChange = { onValueChange(formatDurationDigits(it)) },
+            value = field,
+            // reformatted on every keystroke and the caret put back at the end: see the class
+            // KDoc for why the end is the only place it can be
+            onValueChange = { typed ->
+                val formatted = formatDurationDigits(typed.text)
+                field = TextFieldValue(formatted, TextRange(formatted.length))
+                onValueChange(formatted)
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 /*

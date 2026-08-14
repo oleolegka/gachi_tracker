@@ -128,6 +128,10 @@ fun EditExerciseScreen(
 
     val hold = exercise.form == ExerciseForm.HOLD.code
     val lifted = hold || exercise.form == ExerciseForm.STRENGTH.code
+    // which forms can be trained one limb at a time — the same three the journal can store a
+    // side on (xyz.oleolegka.gachimuchi.domain.Sided), and asked as its own question rather
+    // than off [lifted], which means something else entirely: "does this entry carry a weight"
+    val sided = lifted || exercise.form == ExerciseForm.DURATION.code
     val protocolBlock = program?.firstBlock()
 
     var name by remember(exercise.id) { mutableStateOf(exercise.name) }
@@ -352,7 +356,7 @@ fun EditExerciseScreen(
                 }
             }
 
-            if (lifted) {
+            if (sided) {
                 /*
                  * The one control here that is not a correction of a typo.
                  *
@@ -361,10 +365,12 @@ fun EditExerciseScreen(
                  * side only when the exercise claims to need one, and nothing could make it
                  * claim that. Found from the phone, 2026-08-08.
                  *
-                 * GATED ON [lifted], not on [hold]: a hangboard hang was never the only thing
-                 * trained one limb at a time — a pistol squat and a one-arm row are the same
-                 * asymmetry on a `StrengthSet` — and the mechanism underneath never cared
-                 * which form the exercise was. Only this control did, and that was the gap.
+                 * GATED ON [sided], not on [hold] and no longer on [lifted]: a hangboard hang
+                 * was never the only thing trained one limb at a time — a pistol squat is the
+                 * same asymmetry on a `StrengthSet`, a timed stretch is the same asymmetry on a
+                 * `Duration` — and the mechanism underneath never cared which form the exercise
+                 * was. Only this control did, and each time the gap was reported from a phone:
+                 * strength on 2026-08-08, duration on 2026-08-14.
                  *
                  * A SWITCH and not a filter chip: a chip says "narrow a list down by this",
                  * and this is a property of the exercise being turned on. The switch also
@@ -385,7 +391,15 @@ fun EditExerciseScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                             Text(
-                                "Each side keeps its own record.",
+                                // a duration has no record model in this app at all
+                                // (domain/Analytics.kt: recordsOf returns an empty list for it),
+                                // so the sentence that is true of the other two would be a
+                                // promise this screen cannot keep
+                                if (lifted) {
+                                    "Each side keeps its own record."
+                                } else {
+                                    "Each side is counted on its own."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.inkSecondary,
                             )

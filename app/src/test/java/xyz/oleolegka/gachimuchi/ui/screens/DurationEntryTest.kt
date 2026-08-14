@@ -1,5 +1,6 @@
 package xyz.oleolegka.gachimuchi.ui.screens
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onParent
@@ -16,6 +17,8 @@ import org.junit.Test
 import org.robolectric.annotation.Config
 import xyz.oleolegka.gachimuchi.domain.ActivityForm
 import xyz.oleolegka.gachimuchi.domain.ExerciseForm
+import xyz.oleolegka.gachimuchi.domain.ExerciseRef
+import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.JournalEvent
 import xyz.oleolegka.gachimuchi.domain.durationOf
 import xyz.oleolegka.gachimuchi.domain.toPayload
@@ -46,14 +49,39 @@ class DurationEntryTest : ScreenTest() {
     private fun field() = compose.onNode(hasSetTextAction() and hasContentDescription("Duration, mm:ss"))
 
     private val plank = exerciseRef(1, "Plank", ExerciseForm.DURATION)
+
+    /** A stretch held one leg at a time — the case the whole side question exists for. */
+    private val sidePlank = exerciseRef(2, "Side plank", ExerciseForm.DURATION).copy(oneSided = true)
     private val iso = "2026-08-07"
 
     private val logged = mutableListOf<ActivityForm>()
 
-    private fun show(events: List<JournalEvent> = emptyList()) {
+    private fun show(
+        events: List<JournalEvent> = emptyList(),
+        exercise: ExerciseRef = plank,
+        fixedSide: HoldSide? = null,
+    ) {
         val state = UiState(events = events, loading = false)
         screen {
-            DurationEntry(state = state, exercise = plank, opDate = iso, onAddSet = { logged += it })
+            /*
+             * A COLUMN, and not the bare composable, which is what this file used to raise.
+             *
+             * Every entry form is written for a ColumnScope - the card that hosts one on the
+             * real screen is a Column - and `setContent` is not one: its children all sit at the
+             * same origin and OVERLAP. Nothing looked wrong, because the assertions were on text
+             * and text still resolves; what broke was every TAP, since a click lands on whatever
+             * covers that point last. That is what the ignored bump test below has been
+             * describing since 2026-08-11 ("through this screen the click has no effect at all").
+             */
+            Column {
+                DurationEntry(
+                    state = state,
+                    exercise = exercise,
+                    opDate = iso,
+                    onAddSet = { logged += it },
+                    fixedSide = fixedSide,
+                )
+            }
         }
     }
 
@@ -103,31 +131,92 @@ class DurationEntryTest : ScreenTest() {
         compose.onNodeWithText("Repeat entry").assertIsDisplayed()
     }
 
+    // --- which side, on an exercise held one limb at a time ----------------------------------
+
     /**
-     * UNRESOLVED, AND SAID SO RATHER THAN QUIETLY DELETED.
+     * THE REPORTED BUG, from a phone on 2026-08-14: "нет возможности сделать разделение нагрузки
+     * на право/лево для категории duration, хотя в strength это доступно".
      *
-     * The bump works: `TimeFieldTest` drives the same component with its own state, clicks the
-     * same button and sees 0:45 become 0:55. Through this screen the click has no effect at
-     * all - not the field, not even the primary button's label, which would have flipped from
-     * "Repeat entry" to "Add entry" if the value had moved. Every way of addressing the button
-     * was tried (by text, by click action, through the unmerged tree) with the same result.
-     *
-     * So the component is proven and the wiring is not, and which of the two is at fault is
-     * unknown. It needs a look on the phone: press +10s under a duration exercise and see
-     * whether the number moves.
+     * The chips are half of it; the other half is that the entry cannot be written WITHOUT an
+     * answer, exactly as a hold cannot — a one-sided entry that names no side is the one answer
+     * that is certainly wrong, and it is refused at the door rather than reported afterwards.
      */
-    @Ignore("bump verified in TimeFieldTest; through this screen it does not register - see KDoc")
+    @Test
+    fun `a one-sided exercise asks which side, and will not record until it is told`() {
+        show(exercise = sidePlank)
+
+        field().performTextReplacement("45")
+        settle()
+
+        // NOT the sentence the other two forms use ("each side keeps its own record"): a
+        // duration has no records in this app, so that one would be a promise nothing keeps
+        compose.onNodeWithText("Say which side - each side is counted on its own.").assertIsDisplayed()
+        compose.onNodeWithText("Add entry").performClick()
+        assertEquals(emptyList<ActivityForm>(), logged)
+
+        compose.onNodeWithText("Left").performClick()
+        settle()
+        compose.onNodeWithText("Add entry").performClick()
+
+        assertEquals(
+            listOf(durationOf(sidePlank, iso, durationSec = 45, side = HoldSide.LEFT)),
+            logged,
+        )
+    }
+
+    /**
+     * Two-sided work is not asked at all, and the row where the chips would be does not exist
+     * either — this is the one entry form whose chip row holds nothing else, so an always-drawn
+     * one would be an empty band of spacing on every ordinary exercise.
+     */
+    @Test
+    fun `an ordinary exercise is not asked which side`() {
+        show()
+
+        compose.onNodeWithText("Left").assertDoesNotExist()
+        compose.onNodeWithText("Right").assertDoesNotExist()
+        compose.onNodeWithText("Say which side - each side is counted on its own.").assertDoesNotExist()
+    }
+
+    /**
+     * A card raised from the LEFT card of an already-split pair has answered the question
+     * already, so the form does not ask it again — and the answer still reaches the entry. The
+     * same contract [HoldEntry] has with its own `fixedSide`.
+     */
+    @Test
+    fun `a card that already names its side does not ask again, and still writes it`() {
+        show(exercise = sidePlank, fixedSide = HoldSide.RIGHT)
+
+        compose.onNodeWithText("Left").assertDoesNotExist()
+
+        field().performTextReplacement("100")
+        settle()
+        compose.onNodeWithText("Add entry").performClick()
+
+        assertEquals(
+            listOf(durationOf(sidePlank, iso, durationSec = 60, side = HoldSide.RIGHT)),
+            logged,
+        )
+    }
+
+    /**
+     * Ignored from 2026-08-11 to 2026-08-14 as "the component is proven and the wiring is not,
+     * and which of the two is at fault is unknown". Neither was: the TEST was, and it was the
+     * missing Column in [show] — the bump button sat under a sibling that was drawn over it, so
+     * the tap never reached it. Nothing in the app was ever broken, which is the useful half of
+     * the lesson: an ignored test is a claim about the app, and this one was a claim about the
+     * harness for three days.
+     */
     @Test
     fun `the bump adds ten seconds to whatever is already there`() {
         show(listOf(durationEvent(1L, durationSec = 45)))
 
-        compose.onNodeWithText("+10s", useUnmergedTree = true).onParent().performClick()
+        compose.onNodeWithText("+10s").performClick()
         settle()
 
+        field().assertTextContains("0:55")
         // the consequence, not the glyphs: a bumped value is no longer what was logged last,
         // so the primary button stops offering to repeat and offers to add
-        compose.onNodeWithText("Add entry").assertIsDisplayed()
-        // touched: no longer what was logged last, so this reads as a new entry
         compose.onNodeWithText("Add entry").assertIsDisplayed()
     }
 }

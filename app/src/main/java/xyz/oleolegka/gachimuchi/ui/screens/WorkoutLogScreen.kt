@@ -2005,7 +2005,7 @@ private fun QuickEntrySheet(
                 ExerciseForm.STRENGTH -> StrengthEntry(state, exercise, opDate, onAddSet, fixedSide)
                 ExerciseForm.HOLD -> HoldEntry(state, exercise, opDate, onAddSet, fixedSide)
                 ExerciseForm.CARDIO -> CardioEntry(state, exercise, opDate, onAddSet)
-                ExerciseForm.DURATION -> DurationEntry(state, exercise, opDate, onAddSet)
+                ExerciseForm.DURATION -> DurationEntry(state, exercise, opDate, onAddSet, fixedSide)
                 ExerciseForm.TICK -> TickEntry(exercise, opDate, onAddSet)
                 ExerciseForm.BODYWEIGHT -> BodyweightEntry(state, opDate, onAddSet)
             }

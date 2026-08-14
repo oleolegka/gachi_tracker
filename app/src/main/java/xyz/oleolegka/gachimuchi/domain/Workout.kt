@@ -600,7 +600,7 @@ fun looseWorkout(
             unkeyed += activity
             continue
         }
-        val side = (activity.form as? LoadedSet)?.sideOf
+        val side = (activity.form as? Sided)?.sideOf
         val key = workoutCardKey(link.key, side)
         val held = blocks[key]
         blocks[key] = held?.copy(exercise = held.exercise.mergedWith(link), sets = held.sets + activity)
@@ -1029,9 +1029,9 @@ fun buildWorkout(events: List<JournalEvent>, workoutId: Long): Workout? {
         if (link == null) {
             unkeyed += activity
         } else {
-            // only a LoadedSet ever carries a side (see LoadedSet.sideOf); every other form
+            // only a Sided form ever carries a side (see Sided.sideOf); every other form
             // joins the sideless block, which is the only block such an exercise can have
-            val side = (activity.form as? LoadedSet)?.sideOf
+            val side = (activity.form as? Sided)?.sideOf
             sets.getValue(remember(link, row.id, side)) += activity
         }
     }

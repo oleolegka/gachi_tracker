@@ -83,24 +83,27 @@ fun pickPicture(
 /**
  * Whether finishing this entry is worth a picture.
  *
- * A [StrengthSet], a [HoldSet] and a [Tick] all qualify: each is a card being marked done —
- * a rep count, a hang, or a plain check mark for something with no metric — and from the
- * gym floor the three look the same, a thing the user just finished. [Bodyweight] is the
- * one form that does not: it is a step on the scales, not a card finished, and it is
- * already the one entry the app is careful to keep out of rest, records and volume alike
- * (see domain/Records.kt, domain/Analytics.kt) — a picture on top of it would be the odd
- * one out, not a fix.
+ * Everything the user DOES qualifies: a rep count, a hang, a stretch, a run, or a plain check
+ * mark for something with no metric. From the gym floor they all look the same — a thing just
+ * finished — and that is the only question this asks.
  *
- * [Cardio] and [Duration] are left out too, unchanged from before this was written down: a
- * run or a stretch is filed as its own total rather than a set, and nobody has asked for a
- * picture on those yet. That is a narrower question than this one and is not decided here.
+ * [Bodyweight] is the one form that does not: it is a step on the scales, not a thing done,
+ * and it is already the one entry the app is careful to keep out of rest, records and volume
+ * alike (see domain/Records.kt, domain/Analytics.kt). A picture on top of a weigh-in would be
+ * the odd one out, not a fix — and it would land on the one number nobody wants cheered.
  *
- * This deliberately does not reuse [startsRest] (which also covers [Duration], §13.9): that
- * one answers "does a rest begin now" — a check-in has nothing to rest between — and the two
- * questions are free to part ways.
+ * ── [Duration] and [Cardio] used to be left out, and that was wrong ──────────────
+ * The argument was that a run or a stretch is filed as its own total rather than a set, and
+ * that nobody had asked. Reported from a phone, 2026-08-14: "при записи подхода на типе
+ * duration не выдаёт ободряющую картинку". The distinction was one the model makes and the
+ * person training does not — a stretch entered is a stretch done — so it is gone, and cardio
+ * goes with it, having no ground to stand on that duration did not.
+ *
+ * This deliberately does not reuse [startsRest] (§13.9): that one answers "does a rest begin
+ * now" — a check-in has nothing to rest between — and the two questions are free to part ways
+ * even while they happen to name the same forms.
  */
-fun celebratedByPicture(form: ActivityForm): Boolean =
-    form is StrengthSet || form is HoldSet || form is Tick
+fun celebratedByPicture(form: ActivityForm): Boolean = form !is Bodyweight
 
 /**
  * The request to show something, as the ViewModel hands it to the screen.

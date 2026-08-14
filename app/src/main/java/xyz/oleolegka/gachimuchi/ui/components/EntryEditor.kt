@@ -25,6 +25,7 @@ import xyz.oleolegka.gachimuchi.domain.Duration
 import xyz.oleolegka.gachimuchi.domain.HoldSet
 import xyz.oleolegka.gachimuchi.domain.HoldSide
 import xyz.oleolegka.gachimuchi.domain.LoadedSet
+import xyz.oleolegka.gachimuchi.domain.Sided
 import xyz.oleolegka.gachimuchi.domain.StrengthSet
 import xyz.oleolegka.gachimuchi.domain.Tick
 import xyz.oleolegka.gachimuchi.domain.formatNumber
@@ -94,7 +95,7 @@ fun EntryEditorDialog(
     var pace by remember(entry) { mutableStateOf(initialPace(entry)) }
     var warmup by remember(entry) { mutableStateOf(initialWarmup(entry)) }
     var incomplete by remember(entry) { mutableStateOf(initialIncomplete(entry)) }
-    var side by remember(entry) { mutableStateOf((entry as? LoadedSet)?.sideOf) }
+    var side by remember(entry) { mutableStateOf((entry as? Sided)?.sideOf) }
     var holdSeconds by remember(entry) { mutableStateOf(initialHoldSec(entry)) }
 
     /*
@@ -197,12 +198,20 @@ fun EntryEditorDialog(
                         )
                     }
 
-                    is Duration -> StepperField(
-                        label = "Minutes",
-                        value = minutes,
-                        onValueChange = { minutes = it },
-                        steps = listOf(1.0, 5.0),
-                    )
+                    is Duration -> {
+                        StepperField(
+                            label = "Minutes",
+                            value = minutes,
+                            onValueChange = { minutes = it },
+                            steps = listOf(1.0, 5.0),
+                        )
+                        // shown on the same condition as the two forms above: the catalog flag,
+                        // or an entry that already names a side. A stretch held one leg at a
+                        // time is corrected the same way a one-arm hang is
+                        if (oneSided || entry.sideOf != null) {
+                            SideChipsRow(side) { side = it }
+                        }
+                    }
 
                     is Bodyweight -> StepperField(
                         label = "Body weight, kg",
@@ -421,6 +430,7 @@ private fun amended(
 
         is Duration -> entry.copy(
             durationSec = parseNumber(minutes)?.let { (it * 60).toInt() } ?: entry.durationSec,
+            side = side?.code,
             opDate = day,
         )
 

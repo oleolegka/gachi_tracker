@@ -192,7 +192,7 @@ private fun LastTimeIncompleteNote(show: Boolean) {
 
 /**
  * Whether an entry card owes an answer for which side a set was — shared by every form that
- * carries [LoadedSet.side], so [StrengthEntry] and [HoldEntry] settle the question the same
+ * carries [Sided.side], so [StrengthEntry], [HoldEntry] and [DurationEntry] settle the question the same
  * way. Only a one-sided exercise owes an answer, and only when the card itself did not already
  * say which one — on any other exercise, or with a fixed side, there is nothing left to ask.
  */
@@ -201,7 +201,7 @@ private fun sideMissingOf(oneSided: Boolean, fixedSide: HoldSide?, side: HoldSid
 
 /**
  * The side chips, drawn INSIDE the form's one chip row — shared by every entry form that can
- * carry a [LoadedSet.side]. See [HoldEntry]'s own KDoc for [fixedSide]: non-null, the card that
+ * carry a [Sided.side]. See [HoldEntry]'s own KDoc for [fixedSide]: non-null, the card that
  * raised this form already answered the question and this draws nothing at all.
  *
  * They used to be a `Row` of their own above or below the warm-up chips, which put two chip rows
@@ -236,11 +236,25 @@ private fun SideChips(
  * the control it explains.
  */
 @Composable
-private fun SideMissingNote(sideMissing: Boolean) {
+private fun SideMissingNote(
+    sideMissing: Boolean,
+    /**
+     * Whether this form HAS records to keep per side. False for a duration, which has no record
+     * model at all in this app — [xyz.oleolegka.gachimuchi.domain.recordsOf] returns an empty
+     * list for it and the detail screen says so out loud. The reason to say something else
+     * rather than reuse the sentence: the note is the answer to "why can I not save this", and
+     * paying for the answer with a promise the app does not keep is worse than the question.
+     */
+    keepsRecords: Boolean = true,
+) {
     if (!sideMissing) return
     val colors = LocalGachiColors.current
     Text(
-        "Say which side - each side keeps its own record.",
+        if (keepsRecords) {
+            "Say which side - each side keeps its own record."
+        } else {
+            "Say which side - each side is counted on its own."
+        },
         style = MaterialTheme.typography.bodySmall,
         color = colors.inkSecondary,
     )
@@ -252,7 +266,7 @@ private fun SideMissingNote(sideMissing: Boolean) {
  * The side question is asked the same way [HoldEntry] asks it ([SideChooser], [sideMissingOf],
  * [fixedSide]): the mechanism (two workout cards, per-side rest, per-side records) never
  * depended on the exercise's form, only the field carrying the answer did — see
- * [xyz.oleolegka.gachimuchi.domain.LoadedSet.side].
+ * [xyz.oleolegka.gachimuchi.domain.Sided.side].
  */
 @Composable
 internal fun StrengthEntry(
@@ -504,8 +518,24 @@ internal fun CardioEntry(state: UiState, exercise: ExerciseRef, opDate: String, 
     }
 }
 
+/**
+ * A total time — and, on an exercise held one limb at a time, which side.
+ *
+ * The side question is asked exactly as [StrengthEntry] and [HoldEntry] ask it, through the same
+ * three pieces ([SideChips], [sideMissingOf], [fixedSide]). It could not be asked here at all
+ * until 2026-08-14, because the field carrying the answer sat on the interface for entries with
+ * a WEIGHT and a stretch has none — see [xyz.oleolegka.gachimuchi.domain.Sided] for the full
+ * story of that gap, which was reported from a phone as "нет возможности сделать разделение
+ * нагрузки на право/лево для категории duration".
+ */
 @Composable
-internal fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String, onAddSet: (ActivityForm) -> Unit) {
+internal fun DurationEntry(
+    state: UiState,
+    exercise: ExerciseRef,
+    opDate: String,
+    onAddSet: (ActivityForm) -> Unit,
+    fixedSide: HoldSide? = null,
+) {
     val last = remember(state.events, exercise.id) { lastDuration(state.events, exercise.link) }
     // mm:ss, free entry — it used to be a MINUTES field reaching a whole number of seconds
     // only through a decimal point ("0.5" for thirty seconds), the owner's own word for it
@@ -513,16 +543,32 @@ internal fun DurationEntry(state: UiState, exercise: ExerciseRef, opDate: String
     var duration by remember(exercise.id, last) {
         mutableStateOf(last?.durationSec?.let(::formatDurationSec) ?: "")
     }
+    // blank on arrival unless the card already said which side, on the same grounds
+    // [StrengthEntry] gives: one-sided work alternates, so last time's side is the wrong
+    // answer about as often as it is right, and the failure would be silent
+    var side by remember(exercise.id, last, fixedSide) { mutableStateOf(fixedSide) }
+
     val seconds = parseDurationText(duration)?.takeIf { it > 0 }
-    val untouched = last != null && seconds == last.durationSec
+    val untouched = last != null && seconds == last.durationSec && side == last.sideOf
+    val sideMissing = sideMissingOf(exercise.oneSided, fixedSide, side)
 
     TimeField(label = "Duration, mm:ss", value = duration, onValueChange = { duration = it }, bumpsSec = listOf(10))
+    // The row is conditional and not just its contents. This is the one entry form whose chip
+    // row holds NOTHING else (no warm-up, no "fell short" — a stretch has neither), so an
+    // always-drawn row would be an empty band of spacing under the field on every ordinary
+    // two-sided exercise.
+    if (exercise.oneSided && fixedSide == null) {
+        ChipRow {
+            SideChips(exercise.oneSided, fixedSide, side, onSideChange = { side = it })
+        }
+    }
+    SideMissingNote(sideMissing, keepsRecords = false)
     SubmitButton(
         repeat = untouched,
-        enabled = seconds != null && seconds > 0,
+        enabled = seconds != null && seconds > 0 && !sideMissing,
         label = if (untouched) "Repeat entry" else "Add entry",
     ) {
-        onAddSet(durationOf(exercise = exercise, opDate = opDate, durationSec = seconds!!))
+        onAddSet(durationOf(exercise = exercise, opDate = opDate, durationSec = seconds!!, side = side))
     }
 }
 

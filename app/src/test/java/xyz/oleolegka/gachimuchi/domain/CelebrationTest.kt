@@ -84,16 +84,28 @@ class CelebrationTest {
         assertEquals("only", pickPicture(pictures, isRecord = false, random = Random(1))!!.id)
     }
 
+    /**
+     * Every form the user DOES is celebrated, and the weigh-in is the only one that is not.
+     *
+     * Duration and cardio were outside this until 2026-08-14, on the argument that a stretch is
+     * filed as a total rather than a set — a distinction the model makes and the person training
+     * does not. It came back from a phone as a bug report, so both are named here explicitly
+     * rather than left to the shape of the check.
+     */
     @Test
-    fun `sets and check-ins are celebrated, a weigh-in is not`() {
+    fun `everything done is celebrated, a weigh-in is not`() {
         val strength = StrengthSet(exercise = "Squat", reps = 5, weightKg = 100.0, opDate = "2026-08-06")
         val hold = HoldSet(activity = "Hang", holdSec = 10.0, opDate = "2026-08-06")
         val weighIn = Bodyweight(weightKg = 80.0, opDate = "2026-08-06")
         val tick = Tick(activity = "Stretching", opDate = "2026-08-06")
+        val stretch = Duration(activity = "Stretching", durationSec = 300, opDate = "2026-08-06")
+        val run = Cardio(activity = "Run", distanceM = 5000.0, opDate = "2026-08-06")
 
         assertTrue(celebratedByPicture(strength))
         assertTrue(celebratedByPicture(hold))
-        assertTrue("a check-in is a card finished, same as a set", celebratedByPicture(tick))
-        assertFalse("stepping on the scales is not a card finished", celebratedByPicture(weighIn))
+        assertTrue("a check-in is a thing done, same as a set", celebratedByPicture(tick))
+        assertTrue("reported from the phone, 2026-08-14", celebratedByPicture(stretch))
+        assertTrue("cardio had no ground to stand on that duration did not", celebratedByPicture(run))
+        assertFalse("stepping on the scales is not a thing done", celebratedByPicture(weighIn))
     }
 }
