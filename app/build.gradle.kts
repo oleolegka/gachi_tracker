@@ -13,8 +13,8 @@ android {
         applicationId = "xyz.oleolegka.gachimuchi"
         minSdk = 29
         targetSdk = 37
-        versionCode = 12
-        versionName = "0.8.1"
+        versionCode = 13
+        versionName = "0.9.0"
     }
 
     /*
